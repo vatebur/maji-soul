@@ -1827,6 +1827,156 @@
         "crossHandTransitionObserved": false,
         "sameRoomContinuationAccepted": false
       }
+    },
+    {
+      "alias": "auto-win-trigger-observation-blocked",
+      "reportSha256": "11efe7d3fcbac2609cea2e38ca0c8f05118ea7aae8c184b7cf0daca82ecc88aa",
+      "reportStatus": "blocked",
+      "reasonCode": "AUTO_WIN_RECOVERY_NOT_READY",
+      "reasonSource": "initial-sync-auto-win-recovery",
+      "exactFailureCauseEstablished": false,
+      "acceptedChecks": [],
+      "configuredObservationDurationMs": 300000,
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 0,
+      "timing": null,
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 0,
+        "handEnds": 0,
+        "matchEnds": 0,
+        "reconnects": 0,
+        "handOrdinal": 2,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": false
+      },
+      "autoWin": {
+        "readbackState": "unknown",
+        "readbackVerified": false,
+        "clickedToEnable": null,
+        "actualTriggerConfirmed": false,
+        "clientWinRequests": {
+          "before": 0,
+          "after": 0
+        },
+        "authoritativeOwnWins": {
+          "before": 0,
+          "after": 0
+        },
+        "recoveries": [
+          {
+            "trigger": "initial-sync",
+            "status": "unverified",
+            "attempted": true,
+            "reasonCode": "AUTO_WIN_RECOVERY_NOT_READY",
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "operationStep": 0,
+            "generation": 3,
+            "readback": null
+          }
+        ],
+        "laterIndependentReadback": {
+          "sourceSha256": "23189460192f8d84700db83f1b04f0c6d8ed3909c931a9b3fd9164b3b11ee1dd",
+          "state": "enabled",
+          "canRepairInitialRecovery": false,
+          "canChangeBlockedReport": false,
+          "actualTriggerConfirmed": false
+        }
+      },
+      "capture": {
+        "eventCount": 7,
+        "eventsFileSha256": "3969777e58cb4e5f395b729bbebf410eb35f802789582aeb3bd5317d2c2725f7",
+        "manifestEventsSha256": "6c76ed0c602917e1389d5da85d2106252e3855cb2788f522023d4cc001deb47f",
+        "expectedFinalStateHash": "c83bfda7c9b8579bdbfa3ea6260a4028fd852ee96f6574aea13e82bb76153761",
+        "originHandOrdinal": 2,
+        "archiveHandOrdinal": 1,
+        "eventTypeCounts": {
+          "RoomVerified": 1,
+          "MatchStarted": 1,
+          "HandStarted": 1,
+          "TileDiscarded": 2,
+          "TileDrawn": 2
+        },
+        "initialHandStartSource": "majsoul-sync",
+        "liveHandBoundaryObserved": false,
+        "containsExecutableWindow": false,
+        "pureReducerMatchesExpected": true,
+        "ownDiscardFacts": 0
+      },
+      "identity": {
+        "sameMatchAsInboundDelayRun": true,
+        "sameHandAsInboundDelayRun": false,
+        "originalLedgerReused": true,
+        "ledgerHandOrdinal": 2,
+        "crossHandTransitionObserved": false,
+        "previousHandSettlementPresent": false,
+        "completeMatchHistoryObserved": false,
+        "sameRoomContinuationAccepted": false
+      },
+      "reviewSourceSha256": "a253a9f659f135eea5c43869b120031b2eb7430dd381fae4e39e8bda215219ef"
+    },
+    {
+      "alias": "auto-win-trigger-second-setup-excluded",
+      "reportSha256": null,
+      "reportStatus": null,
+      "reasonCode": "CLIENT_AUTH_TIMEOUT",
+      "acceptedChecks": [],
+      "programActionSends": null,
+      "authoritativeProgramConfirmations": null,
+      "programPaused": null,
+      "observationSettled": null,
+      "timing": null,
+      "capture": null,
+      "attempt": null,
+      "exclusion": {
+        "code": "CLIENT_AUTH_TIMEOUT",
+        "sourceSha256": "a253a9f659f135eea5c43869b120031b2eb7430dd381fae4e39e8bda215219ef",
+        "stage": "waiting-for-client-authentication-after-fresh-reload",
+        "timeoutMs": 30000,
+        "readySignalPresent": false,
+        "reportPresent": false,
+        "childStarted": false,
+        "prepareReached": false,
+        "dispatchReached": false,
+        "countAsAutoWinTriggerEvidence": false,
+        "countAsLifecycleEvidence": false,
+        "gateAccepted": false
+      },
+      "followupUi": {
+        "failedLoginRoute": 2,
+        "selectedLoginRoute": 3,
+        "returnedToLobby": true,
+        "rejoinErrorCode": 1100,
+        "roomReportedMissing": true,
+        "matchEndedObserved": false,
+        "sameRoomContinuationAccepted": false,
+        "screenshots": [
+          {
+            "alias": "client-route-connection-failed",
+            "sourceSha256": "433854cae9a047ed1d3d7f4b74b8102dbeee4cbba4fc76586452ed7e6499d949",
+            "bytes": 610844,
+            "fullScreenshotTracked": false
+          },
+          {
+            "alias": "room-rejoin-rejected",
+            "sourceSha256": "beda110622ba51bb573c848355acac9f3e4ea81bfff275f8c8b7a80f515ce792",
+            "bytes": 2398658,
+            "fullScreenshotTracked": false
+          }
+        ]
+      },
+      "newRoomSetupIsSeparateAcceptanceTarget": true
     }
   ],
   "countdownLayout": {
