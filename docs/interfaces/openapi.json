@@ -1,0 +1,5883 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AI 雀魂直播本机 API",
+    "version": "1.0.0-design",
+    "description": "待实现的 v1 HTTP 契约；不代表服务已运行。行为语义见 API.md，内部进程契约见 INTERNAL_INTERFACES.md。日期：2026-11-05。"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:{port}",
+      "variables": {
+        "port": {
+          "default": "17361",
+          "description": "可配置的本机监听端口"
+        }
+      }
+    }
+  ],
+  "security": [
+    {
+      "consoleCookie": []
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "HTTP 主进程存活，不代表游戏已就绪",
+        "tags": [
+          "system"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "examples": {
+                  "example": {
+                    "$ref": "#/components/examples/Health"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/auth/session": {
+      "post": {
+        "operationId": "createConsoleSession",
+        "summary": "交换一次性本机启动令牌",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                },
+                "examples": {
+                  "example": {
+                    "$ref": "#/components/examples/Auth"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Set-Cookie": {
+                "description": "maji_console=<opaque>; HttpOnly; SameSite=Strict; Path=/api",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthRequest"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "getConsoleSession",
+        "summary": "恢复控制台身份元信息",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "consoleCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                },
+                "examples": {
+                  "example": {
+                    "$ref": "#/components/examples/Auth"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteConsoleSession",
+        "summary": "注销本机控制台会话",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "consoleCookie": [],
+            "csrfToken": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "204": {
+            "description": "已注销并清除 Cookie"
+          }
+        }
+      }
+    },
+    "/api/console/snapshot": {
+      "get": {
+        "operationId": "getConsoleSnapshot",
+        "summary": "获取带续传游标的控制台快照",
+        "tags": [
+          "console"
+        ],
+        "security": [
+          {
+            "consoleCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsoleSnapshotResponse"
+                },
+                "examples": {
+                  "example": {
+                    "$ref": "#/components/examples/ConsoleIdle"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/commands/{commandId}": {
+      "get": {
+        "operationId": "getCommand",
+        "summary": "查询已接收命令的当前状态",
+        "tags": [
+          "commands"
+        ],
+        "security": [
+          {
+            "consoleCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                },
+                "examples": {
+                  "example": {
+                    "$ref": "#/components/examples/CommandWaiting"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "commandId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ]
+      }
+    },
+    "/api/control/start": {
+      "post": {
+        "operationId": "controlStart",
+        "summary": "验证环境并开始新的运行",
+        "tags": [
+          "control"
+        ],
+        "security": [
+          {
+            "consoleCookie": [],
+            "csrfToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收，等待命令定义的完成条件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "description": "commandId 幂等；首次过期命令拒绝。200/202 语义及 succeeded 条件见 API.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/control/pause": {
+      "post": {
+        "operationId": "controlPause",
+        "summary": "立即关闭程序动作闸门",
+        "tags": [
+          "control"
+        ],
+        "security": [
+          {
+            "consoleCookie": [],
+            "csrfToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收，等待命令定义的完成条件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "description": "commandId 幂等；首次过期命令拒绝。200/202 语义及 succeeded 条件见 API.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PauseRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/control/resume": {
+      "post": {
+        "operationId": "controlResume",
+        "summary": "同步和对账通过后恢复原运行",
+        "tags": [
+          "control"
+        ],
+        "security": [
+          {
+            "consoleCookie": [],
+            "csrfToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收，等待命令定义的完成条件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "description": "commandId 幂等；首次过期命令拒绝。200/202 语义及 succeeded 条件见 API.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/control/stop-after-match": {
+      "post": {
+        "operationId": "controlStopAfterMatch",
+        "summary": "锁存当前整场结束后停止的意图",
+        "tags": [
+          "control"
+        ],
+        "security": [
+          {
+            "consoleCookie": [],
+            "csrfToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收，等待命令定义的完成条件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "description": "commandId 幂等；首次过期命令拒绝。200/202 语义及 succeeded 条件见 API.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StopAfterMatchRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/control/next-mode": {
+      "post": {
+        "operationId": "controlNextMode",
+        "summary": "设置下一小局的模式",
+        "tags": [
+          "control"
+        ],
+        "security": [
+          {
+            "consoleCookie": [],
+            "csrfToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收，等待命令定义的完成条件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "description": "commandId 幂等；首次过期命令拒绝。200/202 语义及 succeeded 条件见 API.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NextModeRequest"
+              },
+              "examples": {
+                "example": {
+                  "$ref": "#/components/examples/NextMode"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/control/end": {
+      "post": {
+        "operationId": "controlEnd",
+        "summary": "结束已暂停或故障中的程序运行",
+        "tags": [
+          "control"
+        ],
+        "security": [
+          {
+            "consoleCookie": [],
+            "csrfToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收，等待命令定义的完成条件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "description": "commandId 幂等；首次过期命令拒绝。200/202 语义及 succeeded 条件见 API.md。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/config": {
+      "get": {
+        "operationId": "getConfig",
+        "summary": "读取配置和无秘密的只读摘要",
+        "tags": [
+          "config"
+        ],
+        "security": [
+          {
+            "consoleCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patchConfig",
+        "summary": "按 expectedRevision 原子修改配置白名单",
+        "tags": [
+          "config"
+        ],
+        "security": [
+          {
+            "consoleCookie": [],
+            "csrfToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收，等待命令定义的完成条件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "description": "配置、会话或幂等意图冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                },
+                "examples": {
+                  "example": {
+                    "$ref": "#/components/examples/ConfigConflict"
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigPatchRequest"
+              },
+              "examples": {
+                "example": {
+                  "$ref": "#/components/examples/ConfigPatch"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "summary": "查询本机已配置和已验证的能力",
+        "tags": [
+          "capabilities"
+        ],
+        "security": [
+          {
+            "consoleCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/decisions": {
+      "get": {
+        "operationId": "listDecisions",
+        "summary": "按稳定游标查询决策摘要",
+        "tags": [
+          "decisions"
+        ],
+        "security": [
+          {
+            "consoleCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "matchId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "handId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ]
+      }
+    },
+    "/api/decisions/{decisionId}": {
+      "get": {
+        "operationId": "getDecision",
+        "summary": "查询冻结快照、尝试、确认与解释",
+        "tags": [
+          "decisions"
+        ],
+        "security": [
+          {
+            "consoleCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "decisionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ]
+      }
+    },
+    "/api/speech/mute": {
+      "post": {
+        "operationId": "setSpeechMuted",
+        "summary": "设置静音；取消队列并停止当前音频",
+        "tags": [
+          "speech"
+        ],
+        "security": [
+          {
+            "consoleCookie": [],
+            "csrfToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收，等待命令定义的完成条件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MuteRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/speech/clear": {
+      "post": {
+        "operationId": "clearPendingSpeech",
+        "summary": "清理未播队列，保留正在播放的当前句",
+        "tags": [
+          "speech"
+        ],
+        "security": [
+          {
+            "consoleCookie": [],
+            "csrfToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收，等待命令定义的完成条件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClearSpeechRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/obs": {
+      "get": {
+        "operationId": "getObsPage",
+        "summary": "OBS 只读展示页面",
+        "tags": [
+          "obs"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "只读 HTML 页面，无控制令牌",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/obs/snapshot": {
+      "get": {
+        "operationId": "getObsSnapshot",
+        "summary": "获取最小白名单播出投影",
+        "tags": [
+          "obs"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObsSnapshotResponse"
+                },
+                "examples": {
+                  "example": {
+                    "$ref": "#/components/examples/ObsIdle"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/console/events": {
+      "get": {
+        "operationId": "streamConsoleEvents",
+        "summary": "订阅 console 展示事件流",
+        "tags": [
+          "console"
+        ],
+        "security": [
+          {
+            "consoleCookie": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "200": {
+            "description": "SSE；无有效游标时发送完整 reset，心跳不推进序号",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "首次订阅起点；Last-Event-ID 优先"
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "重连游标，绑定 channel 与 epoch"
+          }
+        ],
+        "x-event-payloads": {
+          "snapshot": {
+            "$ref": "#/components/schemas/ConsoleSnapshot"
+          },
+          "reset": {
+            "$ref": "#/components/schemas/ConsoleSnapshot"
+          },
+          "command": {
+            "$ref": "#/components/schemas/CommandStreamEvent"
+          }
+        }
+      }
+    },
+    "/api/obs/events": {
+      "get": {
+        "operationId": "streamObsEvents",
+        "summary": "订阅 obs 展示事件流",
+        "tags": [
+          "obs"
+        ],
+        "security": [],
+        "responses": {
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "200": {
+            "description": "SSE；无有效游标时发送完整 reset，心跳不推进序号",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "首次订阅起点；Last-Event-ID 优先"
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "重连游标，绑定 channel 与 epoch"
+          }
+        ],
+        "x-event-payloads": {
+          "snapshot": {
+            "$ref": "#/components/schemas/ObsSnapshot"
+          },
+          "reset": {
+            "$ref": "#/components/schemas/ObsSnapshot"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "consoleCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "maji_console"
+      },
+      "csrfToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-CSRF-Token"
+      }
+    },
+    "schemas": {
+      "Id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "Timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "Z$"
+      },
+      "Revision": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "DecisionMode": {
+        "type": "string",
+        "enum": [
+          "engine",
+          "llm"
+        ]
+      },
+      "Seat": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 3
+      },
+      "TileCode": {
+        "type": "string",
+        "enum": [
+          "1m",
+          "2m",
+          "3m",
+          "4m",
+          "5m",
+          "6m",
+          "7m",
+          "8m",
+          "9m",
+          "1p",
+          "2p",
+          "3p",
+          "4p",
+          "5p",
+          "6p",
+          "7p",
+          "8p",
+          "9p",
+          "1s",
+          "2s",
+          "3s",
+          "4s",
+          "5s",
+          "6s",
+          "7s",
+          "8s",
+          "9s",
+          "1z",
+          "2z",
+          "3z",
+          "4z",
+          "5z",
+          "6z",
+          "7z",
+          "5mr",
+          "5pr",
+          "5sr"
+        ]
+      },
+      "WindCode": {
+        "type": "string",
+        "enum": [
+          "1z",
+          "2z",
+          "3z",
+          "4z"
+        ]
+      },
+      "RunStatus": {
+        "type": "string",
+        "enum": [
+          "idle",
+          "initializing",
+          "running",
+          "paused",
+          "stopping",
+          "stopped",
+          "faulted"
+        ]
+      },
+      "AutoWinState": {
+        "type": "string",
+        "enum": [
+          "verified-on",
+          "verified-off",
+          "unknown"
+        ]
+      },
+      "Trust": {
+        "type": "string",
+        "enum": [
+          "trusted",
+          "syncing",
+          "untrusted"
+        ]
+      },
+      "Scope": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "matchId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "handId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "decisionId": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "DecisionScope": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "matchId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "handId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "decisionId": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "sessionId",
+          "matchId",
+          "handId",
+          "decisionId"
+        ],
+        "additionalProperties": false
+      },
+      "ScoreMap": {
+        "type": "object",
+        "properties": {
+          "0": {
+            "type": "integer"
+          },
+          "1": {
+            "type": "integer"
+          },
+          "2": {
+            "type": "integer"
+          },
+          "3": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "0",
+          "1",
+          "2",
+          "3"
+        ],
+        "additionalProperties": false
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "properties": {
+          "currentRevision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "currentControlEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "currentSessionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retryAfterMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "code": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "path",
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "ApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "INVALID_JSON",
+              "AUTH_REQUIRED",
+              "AUTH_EXPIRED",
+              "BOOTSTRAP_INVALID",
+              "ORIGIN_FORBIDDEN",
+              "CSRF_INVALID",
+              "NOT_FOUND",
+              "IDEMPOTENCY_CONFLICT",
+              "SESSION_MISMATCH",
+              "CONTROL_EPOCH_MISMATCH",
+              "CONFIG_REVISION_MISMATCH",
+              "INVALID_STATE",
+              "RECOVERY_REQUIRED",
+              "COMMAND_EXPIRED",
+              "CURSOR_EXPIRED",
+              "RECORD_EXPIRED",
+              "PAYLOAD_TOO_LARGE",
+              "VALIDATION_FAILED",
+              "UNSUPPORTED_CAPABILITY",
+              "RATE_LIMITED",
+              "STORAGE_UNAVAILABLE",
+              "SERVICE_UNAVAILABLE",
+              "INTERNAL_ERROR",
+              "SYNC_INCOMPLETE",
+              "STATE_UNTRUSTED",
+              "ACTION_UNCERTAIN",
+              "DEADLINE_EXCEEDED",
+              "PROVIDER_UNAVAILABLE",
+              "PLAYBACK_UNCERTAIN",
+              "CANCELLED"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "effect": {
+            "type": "string",
+            "enum": [
+              "none",
+              "applied",
+              "unknown"
+            ]
+          },
+          "retry": {
+            "type": "string",
+            "enum": [
+              "none",
+              "same-command",
+              "after-refresh",
+              "after-recovery"
+            ]
+          },
+          "details": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "effect",
+          "retry"
+        ],
+        "additionalProperties": false
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ApiError"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "alive"
+              },
+              "buildVersion": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            },
+            "required": [
+              "status",
+              "buildVersion"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "AuthRequest": {
+        "type": "object",
+        "properties": {
+          "bootstrapToken": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "bootstrapToken"
+        ],
+        "additionalProperties": false
+      },
+      "AuthResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "csrfToken": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "expiresAt": {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            },
+            "required": [
+              "csrfToken",
+              "expiresAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "StartRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "expectedConfigRevision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "expectedConfigRevision"
+        ],
+        "additionalProperties": false
+      },
+      "PauseRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "ResumeRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "expectedControlEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId",
+          "expectedControlEpoch"
+        ],
+        "additionalProperties": false
+      },
+      "StopAfterMatchRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "NextModeRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "expectedControlEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DecisionMode"
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId",
+          "expectedControlEpoch",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "EndRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "expectedControlEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId",
+          "expectedControlEpoch"
+        ],
+        "additionalProperties": false
+      },
+      "MuteRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "muted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId",
+          "muted"
+        ],
+        "additionalProperties": false
+      },
+      "ClearSpeechRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "RunControlResult": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "run-control"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "controlEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "stopAfterMatch": {
+            "type": "boolean"
+          },
+          "clientAutoWin": {
+            "$ref": "#/components/schemas/AutoWinState"
+          },
+          "clientMayAct": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "minItems": 0,
+            "maxItems": 30
+          }
+        },
+        "required": [
+          "kind",
+          "sessionId",
+          "status",
+          "controlEpoch",
+          "stopAfterMatch",
+          "clientAutoWin",
+          "clientMayAct",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "ModeResult": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "next-mode"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "activeMode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pendingMode": {
+            "$ref": "#/components/schemas/DecisionMode"
+          },
+          "currentHandId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective": {
+            "const": "next-hand"
+          }
+        },
+        "required": [
+          "kind",
+          "sessionId",
+          "activeMode",
+          "pendingMode",
+          "currentHandId",
+          "effective"
+        ],
+        "additionalProperties": false
+      },
+      "ConfigResult": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "config-updated"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "sessionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "group": {
+                  "type": "string",
+                  "enum": [
+                    "run",
+                    "persona",
+                    "moderation",
+                    "interaction",
+                    "speech",
+                    "models",
+                    "output",
+                    "retention"
+                  ]
+                },
+                "effective": {
+                  "type": "string",
+                  "enum": [
+                    "immediate",
+                    "next-generation",
+                    "next-synthesis",
+                    "next-session",
+                    "next-cleanup",
+                    "reconnecting"
+                  ]
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "minItems": 1,
+                  "maxItems": 50
+                }
+              },
+              "required": [
+                "group",
+                "effective",
+                "fields"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 0,
+            "maxItems": 30
+          }
+        },
+        "required": [
+          "kind",
+          "revision",
+          "sessionId",
+          "effects"
+        ],
+        "additionalProperties": false
+      },
+      "SpeechResult": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "speech-control"
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "queueEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "playbackEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "cancelledCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "playingSpeechId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "muted",
+          "queueEpoch",
+          "playbackEpoch",
+          "cancelledCount",
+          "playingSpeechId"
+        ],
+        "additionalProperties": false
+      },
+      "CommandResult": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RunControlResult"
+          },
+          {
+            "$ref": "#/components/schemas/ModeResult"
+          },
+          {
+            "$ref": "#/components/schemas/ConfigResult"
+          },
+          {
+            "$ref": "#/components/schemas/SpeechResult"
+          }
+        ]
+      },
+      "CommandView": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "name": {
+            "type": "string",
+            "enum": [
+              "control.start",
+              "control.pause",
+              "control.resume",
+              "control.stop-after-match",
+              "control.next-mode",
+              "control.end",
+              "config.patch",
+              "speech.mute",
+              "speech.clear"
+            ]
+          },
+          "sessionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "running",
+              "waiting-sync",
+              "uncertain",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "acceptedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "completedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "result": {
+            "$ref": "#/components/schemas/CommandResult"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ApiError"
+          }
+        },
+        "required": [
+          "commandId",
+          "name",
+          "sessionId",
+          "status",
+          "acceptedAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "succeeded"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "completedAt",
+                "result"
+              ],
+              "not": {
+                "required": [
+                  "error"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "failed",
+                    "cancelled"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "completedAt",
+                "error"
+              ],
+              "not": {
+                "required": [
+                  "result"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "accepted",
+                    "running",
+                    "waiting-sync",
+                    "uncertain"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "completedAt"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "result"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "CommandResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CommandView"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "ModerationRule": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "match": {
+                "const": "literal"
+              },
+              "pattern": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "action": {
+                "const": "drop"
+              }
+            },
+            "required": [
+              "id",
+              "match",
+              "pattern",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "match": {
+                "const": "literal"
+              },
+              "pattern": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "action": {
+                "const": "replace"
+              },
+              "replacement": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "id",
+              "match",
+              "pattern",
+              "action",
+              "replacement"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "RunConfig": {
+        "type": "object",
+        "properties": {
+          "defaultMode": {
+            "$ref": "#/components/schemas/DecisionMode"
+          },
+          "maxMatches": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "maxDurationMs": {
+            "type": "integer",
+            "minimum": 60000,
+            "maximum": 86400000
+          }
+        },
+        "required": [
+          "defaultMode",
+          "maxMatches",
+          "maxDurationMs"
+        ],
+        "additionalProperties": false
+      },
+      "RunConfigPatch": {
+        "type": "object",
+        "properties": {
+          "defaultMode": {
+            "$ref": "#/components/schemas/DecisionMode"
+          },
+          "maxMatches": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "maxDurationMs": {
+            "type": "integer",
+            "minimum": 60000,
+            "maximum": 86400000
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "PersonaConfig": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "style": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2000
+          },
+          "catchphrases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 0,
+            "maxItems": 20
+          },
+          "teasingIntensity": {
+            "type": "string",
+            "enum": [
+              "mild",
+              "normal",
+              "strong"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "style",
+          "catchphrases",
+          "teasingIntensity"
+        ],
+        "additionalProperties": false
+      },
+      "PersonaConfigPatch": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "style": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2000
+          },
+          "catchphrases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "minItems": 0,
+            "maxItems": 20
+          },
+          "teasingIntensity": {
+            "type": "string",
+            "enum": [
+              "mild",
+              "normal",
+              "strong"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "ModerationConfig": {
+        "type": "object",
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModerationRule"
+            },
+            "minItems": 0,
+            "maxItems": 500
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "additionalProperties": false
+      },
+      "ModerationConfigPatch": {
+        "type": "object",
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModerationRule"
+            },
+            "minItems": 0,
+            "maxItems": 500
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "InteractionConfig": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20,
+                "pattern": "^[1-9][0-9]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "globalIntervalMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 60000
+          },
+          "viewerCooldownMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600000
+          },
+          "replyMaxChars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "dryRun": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "roomId",
+          "globalIntervalMs",
+          "viewerCooldownMs",
+          "replyMaxChars",
+          "dryRun"
+        ],
+        "additionalProperties": false
+      },
+      "InteractionConfigPatch": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20,
+                "pattern": "^[1-9][0-9]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "globalIntervalMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 60000
+          },
+          "viewerCooldownMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600000
+          },
+          "replyMaxChars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "dryRun": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "SpeechConfig": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "voiceId": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "provider",
+          "voiceId"
+        ],
+        "additionalProperties": false
+      },
+      "SpeechConfigPatch": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "voiceId": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "ModelsConfig": {
+        "type": "object",
+        "properties": {
+          "decisionProfile": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "commentaryProfile": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "decisionProfile",
+          "commentaryProfile"
+        ],
+        "additionalProperties": false
+      },
+      "ModelsConfigPatch": {
+        "type": "object",
+        "properties": {
+          "decisionProfile": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "commentaryProfile": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "OutputConfig": {
+        "type": "object",
+        "properties": {
+          "theme": {
+            "type": "string",
+            "enum": [
+              "dark",
+              "light"
+            ]
+          },
+          "showScores": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "theme",
+          "showScores"
+        ],
+        "additionalProperties": false
+      },
+      "OutputConfigPatch": {
+        "type": "object",
+        "properties": {
+          "theme": {
+            "type": "string",
+            "enum": [
+              "dark",
+              "light"
+            ]
+          },
+          "showScores": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "RetentionConfig": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          }
+        },
+        "required": [
+          "days"
+        ],
+        "additionalProperties": false
+      },
+      "RetentionConfigPatch": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "ConfigValues": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/RunConfig"
+          },
+          "persona": {
+            "$ref": "#/components/schemas/PersonaConfig"
+          },
+          "moderation": {
+            "$ref": "#/components/schemas/ModerationConfig"
+          },
+          "interaction": {
+            "$ref": "#/components/schemas/InteractionConfig"
+          },
+          "speech": {
+            "$ref": "#/components/schemas/SpeechConfig"
+          },
+          "models": {
+            "$ref": "#/components/schemas/ModelsConfig"
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputConfig"
+          },
+          "retention": {
+            "$ref": "#/components/schemas/RetentionConfig"
+          }
+        },
+        "required": [
+          "run",
+          "persona",
+          "moderation",
+          "interaction",
+          "speech",
+          "models",
+          "output",
+          "retention"
+        ],
+        "additionalProperties": false
+      },
+      "ConfigChanges": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/RunConfigPatch"
+          },
+          "persona": {
+            "$ref": "#/components/schemas/PersonaConfigPatch"
+          },
+          "moderation": {
+            "$ref": "#/components/schemas/ModerationConfigPatch"
+          },
+          "interaction": {
+            "$ref": "#/components/schemas/InteractionConfigPatch"
+          },
+          "speech": {
+            "$ref": "#/components/schemas/SpeechConfigPatch"
+          },
+          "models": {
+            "$ref": "#/components/schemas/ModelsConfigPatch"
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputConfigPatch"
+          },
+          "retention": {
+            "$ref": "#/components/schemas/RetentionConfigPatch"
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "minProperties": 1
+      },
+      "ConfigPatchRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expectedRevision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "changes": {
+            "$ref": "#/components/schemas/ConfigChanges"
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId",
+          "expectedRevision",
+          "changes"
+        ],
+        "additionalProperties": false
+      },
+      "ConfigView": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "values": {
+            "$ref": "#/components/schemas/ConfigValues"
+          },
+          "readOnly": {
+            "type": "object",
+            "properties": {
+              "players": {
+                "const": 4
+              },
+              "length": {
+                "const": "east"
+              },
+              "displayTimeSetting": {
+                "const": "300+0"
+              },
+              "protocolVersion": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "modelCredentialsConfigured": {
+                "type": "boolean"
+              },
+              "bilibiliCredentialsConfigured": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "players",
+              "length",
+              "displayTimeSetting",
+              "protocolVersion",
+              "modelCredentialsConfigured",
+              "bilibiliCredentialsConfigured"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "revision",
+          "values",
+          "readOnly"
+        ],
+        "additionalProperties": false
+      },
+      "ConfigResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ConfigView"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "Capabilities": {
+        "type": "object",
+        "properties": {
+          "voices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100
+                },
+                "language": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 50
+                },
+                "installed": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "language",
+                "installed"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 0,
+            "maxItems": 1000
+          },
+          "modelProfiles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "purposes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "decision",
+                      "explanation",
+                      "viewer-answer"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 3
+                },
+                "configured": {
+                  "type": "boolean"
+                },
+                "available": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "purposes",
+                "configured",
+                "available"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "ttsProviders": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "available": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "available"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "game": {
+            "type": "object",
+            "properties": {
+              "clientVersion": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "protocolVersion": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "supportedActions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 50
+                },
+                "minItems": 0,
+                "maxItems": 50
+              },
+              "syncVerified": {
+                "type": "boolean"
+              },
+              "deadlineVerified": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "clientVersion",
+              "protocolVersion",
+              "supportedActions",
+              "syncVerified",
+              "deadlineVerified"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "voices",
+          "modelProfiles",
+          "ttsProviders",
+          "game"
+        ],
+        "additionalProperties": false
+      },
+      "CapabilitiesResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "TileInstance": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "code": {
+            "$ref": "#/components/schemas/TileCode"
+          }
+        },
+        "required": [
+          "instanceId",
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "Meld": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "chi",
+              "pon",
+              "open-kan",
+              "closed-kan",
+              "added-kan"
+            ]
+          },
+          "tiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TileCode"
+            },
+            "minItems": 3,
+            "maxItems": 4
+          },
+          "fromSeat": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "calledTileIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "upgradedFrom": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "id",
+          "actor",
+          "kind",
+          "tiles"
+        ],
+        "additionalProperties": false
+      },
+      "RiverEntry": {
+        "type": "object",
+        "properties": {
+          "tile": {
+            "$ref": "#/components/schemas/TileCode"
+          },
+          "tsumogiri": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "riichiDeclaration": {
+            "type": "boolean"
+          },
+          "calledBy": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "tile",
+          "tsumogiri",
+          "riichiDeclaration",
+          "eventId"
+        ],
+        "additionalProperties": false
+      },
+      "PlayerView": {
+        "type": "object",
+        "properties": {
+          "seat": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "score": {
+            "type": "integer"
+          },
+          "river": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RiverEntry"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "melds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Meld"
+            },
+            "minItems": 0,
+            "maxItems": 4
+          },
+          "riichi": {
+            "type": "string",
+            "enum": [
+              "none",
+              "declared",
+              "accepted"
+            ]
+          },
+          "concealedCount": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": true
+                  },
+                  "value": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 14
+                  }
+                },
+                "required": [
+                  "known",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": false
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "known",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "seat",
+          "score",
+          "river",
+          "melds",
+          "riichi",
+          "concealedCount"
+        ],
+        "additionalProperties": false
+      },
+      "ActionSpec": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "discard"
+              },
+              "tile": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "tsumogiri": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "tile",
+              "tsumogiri"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "riichi"
+              },
+              "discardTile": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "tsumogiri": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "discardTile",
+              "tsumogiri"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "chi"
+              },
+              "fromSeat": {
+                "$ref": "#/components/schemas/Seat"
+              },
+              "calledTile": {
+                "$ref": "#/components/schemas/TileCode"
+              },
+              "consumed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "kind",
+              "fromSeat",
+              "calledTile",
+              "consumed"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "pon"
+              },
+              "fromSeat": {
+                "$ref": "#/components/schemas/Seat"
+              },
+              "calledTile": {
+                "$ref": "#/components/schemas/TileCode"
+              },
+              "consumed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "kind",
+              "fromSeat",
+              "calledTile",
+              "consumed"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "open-kan"
+              },
+              "fromSeat": {
+                "$ref": "#/components/schemas/Seat"
+              },
+              "calledTile": {
+                "$ref": "#/components/schemas/TileCode"
+              },
+              "consumed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              }
+            },
+            "required": [
+              "kind",
+              "fromSeat",
+              "calledTile",
+              "consumed"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "closed-kan"
+              },
+              "tiles": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              }
+            },
+            "required": [
+              "kind",
+              "tiles"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "added-kan"
+              },
+              "meldId": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "tile": {
+                "$ref": "#/components/schemas/Id"
+              }
+            },
+            "required": [
+              "kind",
+              "meldId",
+              "tile"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "pass"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "tsumo"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "ron"
+              },
+              "fromSeat": {
+                "$ref": "#/components/schemas/Seat"
+              },
+              "winningTile": {
+                "$ref": "#/components/schemas/TileCode"
+              }
+            },
+            "required": [
+              "kind",
+              "fromSeat",
+              "winningTile"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "special"
+              },
+              "handlerKey": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "variantKey": {
+                "$ref": "#/components/schemas/Id"
+              }
+            },
+            "required": [
+              "kind",
+              "handlerKey",
+              "variantKey"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LegalAction": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "action": {
+            "$ref": "#/components/schemas/ActionSpec"
+          },
+          "authority": {
+            "type": "string",
+            "enum": [
+              "executor",
+              "client-auto-win"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "evidenceEventIds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Id"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "authority",
+          "label",
+          "evidenceEventIds"
+        ],
+        "additionalProperties": false
+      },
+      "ExecutorLegalAction": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LegalAction"
+          },
+          {
+            "properties": {
+              "authority": {
+                "const": "executor"
+              },
+              "action": {
+                "not": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "tsumo",
+                        "ron"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "OperationWindow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "connectionEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "openedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "deadline": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": true
+                  },
+                  "value": {
+                    "type": "object",
+                    "properties": {
+                      "at": {
+                        "$ref": "#/components/schemas/Timestamp"
+                      },
+                      "sourceEventId": {
+                        "$ref": "#/components/schemas/Id"
+                      },
+                      "uncertaintyMs": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "at",
+                      "sourceEventId",
+                      "uncertaintyMs"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "known",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": false
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "known",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegalAction"
+            },
+            "minItems": 0,
+            "maxItems": 500
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "claimed",
+              "submitted",
+              "closed",
+              "uncertain"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "connectionEpoch",
+          "openedAt",
+          "deadline",
+          "candidates",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "ObservedAction": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "handId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "discard",
+              "riichi",
+              "chi",
+              "pon",
+              "open-kan",
+              "closed-kan",
+              "added-kan",
+              "pass",
+              "tsumo",
+              "ron",
+              "special"
+            ]
+          },
+          "tiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TileCode"
+            },
+            "minItems": 0,
+            "maxItems": 14
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "program",
+              "client-auto-win",
+              "manual",
+              "server",
+              "unknown"
+            ]
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "eventId",
+          "handId",
+          "actor",
+          "kind",
+          "tiles",
+          "origin",
+          "observedAt"
+        ],
+        "additionalProperties": false
+      },
+      "GameState": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "matchId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "handId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "connectionEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "stateVersion": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "trust": {
+            "$ref": "#/components/schemas/Trust"
+          },
+          "trustIssues": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "ownSeat": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "players": {
+            "type": "object",
+            "properties": {
+              "0": {
+                "$ref": "#/components/schemas/PlayerView"
+              },
+              "1": {
+                "$ref": "#/components/schemas/PlayerView"
+              },
+              "2": {
+                "$ref": "#/components/schemas/PlayerView"
+              },
+              "3": {
+                "$ref": "#/components/schemas/PlayerView"
+              }
+            },
+            "required": [
+              "0",
+              "1",
+              "2",
+              "3"
+            ],
+            "additionalProperties": false
+          },
+          "ownConcealed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TileInstance"
+            },
+            "minItems": 0,
+            "maxItems": 14
+          },
+          "drawnTileRef": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": true
+                  },
+                  "value": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/Id"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "known",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": false
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "known",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "dealer": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "roundWind": {
+            "$ref": "#/components/schemas/WindCode"
+          },
+          "seatWind": {
+            "$ref": "#/components/schemas/WindCode"
+          },
+          "handNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4
+          },
+          "honba": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "riichiSticks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "doraIndicators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TileCode"
+            },
+            "minItems": 0,
+            "maxItems": 10
+          },
+          "doraTiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TileCode"
+            },
+            "minItems": 0,
+            "maxItems": 10
+          },
+          "tilesRemaining": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": true
+                  },
+                  "value": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "known",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": false
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "known",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "currentActor": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": true
+                  },
+                  "value": {
+                    "$ref": "#/components/schemas/Seat"
+                  }
+                },
+                "required": [
+                  "known",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": false
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "known",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "latestAction": {
+            "$ref": "#/components/schemas/ObservedAction"
+          },
+          "operationWindow": {
+            "$ref": "#/components/schemas/OperationWindow"
+          },
+          "unknownFields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "sessionId",
+          "matchId",
+          "handId",
+          "connectionEpoch",
+          "stateVersion",
+          "trust",
+          "trustIssues",
+          "ownSeat",
+          "players",
+          "ownConcealed",
+          "drawnTileRef",
+          "dealer",
+          "roundWind",
+          "seatWind",
+          "handNumber",
+          "honba",
+          "riichiSticks",
+          "doraIndicators",
+          "doraTiles",
+          "tilesRemaining",
+          "currentActor",
+          "unknownFields"
+        ],
+        "additionalProperties": false
+      },
+      "DecisionSnapshot": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/DecisionScope"
+          },
+          "windowId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "stateVersion": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "connectionEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "controlEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "actionDeadline": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "activeMode": {
+            "$ref": "#/components/schemas/DecisionMode"
+          },
+          "state": {
+            "$ref": "#/components/schemas/GameState"
+          },
+          "legalActions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExecutorLegalAction"
+            },
+            "minItems": 1,
+            "maxItems": 500
+          },
+          "knownFacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                },
+                "sourceEventIds": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "minItems": 0,
+                  "maxItems": 100
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "sourceEventIds"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 0,
+            "maxItems": 500
+          },
+          "unknownFields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "contextEventIds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Id"
+            },
+            "minItems": 0,
+            "maxItems": 5000
+          },
+          "schemaVersion": {
+            "const": 1
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "windowId",
+          "stateVersion",
+          "connectionEpoch",
+          "controlEpoch",
+          "createdAt",
+          "actionDeadline",
+          "activeMode",
+          "state",
+          "legalActions",
+          "knownFacts",
+          "unknownFields",
+          "contextEventIds",
+          "schemaVersion"
+        ],
+        "additionalProperties": false
+      },
+      "DecisionEvidence": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "observed-fact",
+              "rule-metric",
+              "engine-preference",
+              "estimate"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sourceVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "sourceEventIds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Id"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "actionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 0
+              }
+            ]
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "targetSeat": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "source",
+          "sourceVersion",
+          "sourceEventIds",
+          "name",
+          "value",
+          "limitations"
+        ],
+        "additionalProperties": false
+      },
+      "DecisionResult": {
+        "type": "object",
+        "properties": {
+          "decisionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "stateVersion": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "engine",
+              "llm",
+              "local-rule"
+            ]
+          },
+          "actionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecisionEvidence"
+            },
+            "minItems": 0,
+            "maxItems": 500
+          },
+          "fallbackReason": {
+            "type": "string",
+            "enum": [
+              "timeout",
+              "invalid-output",
+              "provider-unavailable",
+              "unmappable-action",
+              "insufficient-budget"
+            ]
+          },
+          "elapsedMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "providerVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "decisionId",
+          "stateVersion",
+          "provider",
+          "actionId",
+          "evidence",
+          "elapsedMs",
+          "providerVersion"
+        ],
+        "additionalProperties": false
+      },
+      "DecisionStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "selected",
+          "invalidated",
+          "executing",
+          "confirmed",
+          "uncertain",
+          "failed"
+        ]
+      },
+      "DecisionRecord": {
+        "type": "object",
+        "properties": {
+          "snapshot": {
+            "$ref": "#/components/schemas/DecisionSnapshot"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DecisionStatus"
+          },
+          "providerResults": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecisionResult"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "acceptedResult": {
+            "$ref": "#/components/schemas/DecisionResult"
+          },
+          "invalidationReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "snapshot",
+          "status",
+          "providerResults"
+        ],
+        "additionalProperties": false
+      },
+      "ActionAttempt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/DecisionScope"
+          },
+          "windowId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "actionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "stateVersion": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "connectionEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "controlEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "dispatching",
+              "awaiting-confirmation",
+              "confirmed",
+              "rejected",
+              "uncertain",
+              "not-dispatched"
+            ]
+          },
+          "preparedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "dispatchedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "transportReceipt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "errorCode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "windowId",
+          "actionId",
+          "stateVersion",
+          "connectionEpoch",
+          "controlEpoch",
+          "status",
+          "preparedAt"
+        ],
+        "additionalProperties": false
+      },
+      "ActionConfirmation": {
+        "type": "object",
+        "properties": {
+          "attemptId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "decisionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "observedAction": {
+            "$ref": "#/components/schemas/ObservedAction"
+          },
+          "matchedBy": {
+            "type": "string",
+            "enum": [
+              "authoritative-event",
+              "authoritative-sync"
+            ]
+          },
+          "confirmedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "resultingStateVersion": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "attemptId",
+          "decisionId",
+          "observedAction",
+          "matchedBy",
+          "confirmedAt",
+          "resultingStateVersion"
+        ],
+        "additionalProperties": false
+      },
+      "Explanation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "decisionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "observedActionEventId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "handId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "llm",
+              "fact-template"
+            ]
+          },
+          "factText": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2000
+          },
+          "personaText": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 1000
+          },
+          "evidenceIds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Id"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "id",
+          "observedActionEventId",
+          "handId",
+          "source",
+          "factText",
+          "evidenceIds",
+          "limitations",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "DecisionDetail": {
+        "type": "object",
+        "properties": {
+          "record": {
+            "$ref": "#/components/schemas/DecisionRecord"
+          },
+          "attempts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActionAttempt"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "confirmations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActionConfirmation"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "explanations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Explanation"
+            },
+            "minItems": 0,
+            "maxItems": 100
+          }
+        },
+        "required": [
+          "record",
+          "attempts",
+          "confirmations",
+          "explanations"
+        ],
+        "additionalProperties": false
+      },
+      "DecisionDetailResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DecisionDetail"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "DecisionSummary": {
+        "type": "object",
+        "properties": {
+          "decisionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "matchId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "handId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "activeMode": {
+            "$ref": "#/components/schemas/DecisionMode"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DecisionStatus"
+          },
+          "acceptedProvider": {
+            "type": "string",
+            "enum": [
+              "engine",
+              "llm",
+              "local-rule"
+            ]
+          },
+          "acceptedActionId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "fellBack": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "decisionId",
+          "matchId",
+          "handId",
+          "createdAt",
+          "activeMode",
+          "status",
+          "fellBack"
+        ],
+        "additionalProperties": false
+      },
+      "DecisionListResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DecisionSummary"
+                },
+                "minItems": 0,
+                "maxItems": 100
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "items",
+              "nextCursor"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "ProjectionMeta": {
+        "type": "object",
+        "properties": {
+          "epoch": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "generatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "epoch",
+          "revision",
+          "cursor",
+          "generatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "SessionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "controlEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "activeMode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pendingMode": {
+            "$ref": "#/components/schemas/DecisionMode"
+          },
+          "startedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "completedMatches": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "maxMatches": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "maxDurationMs": {
+                "type": "integer",
+                "minimum": 60000,
+                "maximum": 86400000
+              }
+            },
+            "required": [
+              "maxMatches",
+              "maxDurationMs"
+            ],
+            "additionalProperties": false
+          },
+          "stopAfterMatch": {
+            "type": "boolean"
+          },
+          "pauseReason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "controlEpoch",
+          "activeMode",
+          "pendingMode",
+          "startedAt",
+          "completedMatches",
+          "limits",
+          "stopAfterMatch"
+        ],
+        "additionalProperties": false
+      },
+      "RoomRules": {
+        "type": "object",
+        "properties": {
+          "players": {
+            "const": 4
+          },
+          "length": {
+            "const": "east"
+          },
+          "displayTimeSetting": {
+            "const": "300+0"
+          },
+          "computerSeats": {
+            "const": 3
+          },
+          "verifiedOptions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "protocolVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "players",
+          "length",
+          "displayTimeSetting",
+          "computerSeats",
+          "verifiedOptions",
+          "protocolVersion"
+        ],
+        "additionalProperties": false
+      },
+      "RoomView": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disconnected",
+              "lobby",
+              "creating",
+              "waiting",
+              "starting",
+              "playing",
+              "settling",
+              "unknown"
+            ]
+          },
+          "rules": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoomRules"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "autoWin": {
+            "$ref": "#/components/schemas/AutoWinState"
+          }
+        },
+        "required": [
+          "roomId",
+          "status",
+          "rules",
+          "autoWin"
+        ],
+        "additionalProperties": false
+      },
+      "GameCard": {
+        "type": "object",
+        "properties": {
+          "matchId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "handId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "stateVersion": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "trust": {
+            "$ref": "#/components/schemas/Trust"
+          },
+          "trustIssues": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "minItems": 0,
+            "maxItems": 100
+          },
+          "ownSeat": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "dealer": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "roundWind": {
+            "$ref": "#/components/schemas/WindCode"
+          },
+          "seatWind": {
+            "$ref": "#/components/schemas/WindCode"
+          },
+          "handNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4
+          },
+          "honba": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "riichiSticks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "doraIndicators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TileCode"
+            },
+            "minItems": 0,
+            "maxItems": 10
+          },
+          "doraTiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TileCode"
+            },
+            "minItems": 0,
+            "maxItems": 10
+          },
+          "tilesRemaining": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": true
+                  },
+                  "value": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "known",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "known": {
+                    "const": false
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "known",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "latestAction": {
+            "$ref": "#/components/schemas/ObservedAction"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "handStatus": {
+            "type": "string",
+            "enum": [
+              "playing",
+              "settling",
+              "finished",
+              "interrupted"
+            ]
+          },
+          "scores": {
+            "$ref": "#/components/schemas/ScoreMap"
+          }
+        },
+        "required": [
+          "matchId",
+          "handId",
+          "stateVersion",
+          "trust",
+          "trustIssues",
+          "ownSeat",
+          "dealer",
+          "roundWind",
+          "seatWind",
+          "handNumber",
+          "honba",
+          "riichiSticks",
+          "doraIndicators",
+          "doraTiles",
+          "tilesRemaining",
+          "observedAt",
+          "handStatus",
+          "scores"
+        ],
+        "additionalProperties": false
+      },
+      "ModuleHealth": {
+        "type": "object",
+        "properties": {
+          "module": {
+            "type": "string",
+            "enum": [
+              "game",
+              "engine",
+              "local-rule",
+              "models",
+              "live",
+              "bilibili",
+              "tts",
+              "playback",
+              "storage",
+              "obs"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "degraded",
+              "unavailable",
+              "recovering"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "module",
+          "status",
+          "updatedAt"
+        ],
+        "additionalProperties": false
+      },
+      "SpeechView": {
+        "type": "object",
+        "properties": {
+          "muted": {
+            "type": "boolean"
+          },
+          "queueEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "playbackEpoch": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "playingSpeechId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pendingCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "muted",
+          "queueEpoch",
+          "playbackEpoch",
+          "playingSpeechId",
+          "pendingCount"
+        ],
+        "additionalProperties": false
+      },
+      "InteractionView": {
+        "type": "object",
+        "properties": {
+          "roomId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "connection": {
+            "type": "string",
+            "enum": [
+              "disconnected",
+              "connecting",
+              "connected",
+              "recovering"
+            ]
+          },
+          "identity": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "unknown",
+              "unavailable"
+            ]
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "pendingCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "roomId",
+          "connection",
+          "identity",
+          "dryRun",
+          "pendingCount"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleState": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "room": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoomView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "game": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GameCard"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModuleHealth"
+            },
+            "minItems": 0,
+            "maxItems": 20
+          },
+          "speech": {
+            "$ref": "#/components/schemas/SpeechView"
+          },
+          "interaction": {
+            "$ref": "#/components/schemas/InteractionView"
+          },
+          "configRevision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "recentCommands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommandView"
+            },
+            "minItems": 0,
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "session",
+          "room",
+          "game",
+          "modules",
+          "speech",
+          "interaction",
+          "configRevision",
+          "recentCommands"
+        ],
+        "additionalProperties": false
+      },
+      "ContentCard": {
+        "type": "object",
+        "properties": {
+          "contentId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "handId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2000
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "contentId",
+          "handId",
+          "text",
+          "createdAt",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "ObsState": {
+        "type": "object",
+        "properties": {
+          "runStatus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activeMode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pendingMode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "game": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GameCard"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subtitle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContentCard"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "interaction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContentCard"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "muted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "runStatus",
+          "activeMode",
+          "pendingMode",
+          "game",
+          "subtitle",
+          "interaction",
+          "muted"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleSnapshot": {
+        "type": "object",
+        "properties": {
+          "projection": {
+            "$ref": "#/components/schemas/ProjectionMeta"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ConsoleState"
+          }
+        },
+        "required": [
+          "projection",
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "ConsoleSnapshotResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ConsoleSnapshot"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "ObsSnapshot": {
+        "type": "object",
+        "properties": {
+          "projection": {
+            "$ref": "#/components/schemas/ProjectionMeta"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ObsState"
+          }
+        },
+        "required": [
+          "projection",
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "ObsSnapshotResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ObsSnapshot"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "CommandStreamEvent": {
+        "type": "object",
+        "properties": {
+          "projection": {
+            "$ref": "#/components/schemas/ProjectionMeta"
+          },
+          "command": {
+            "$ref": "#/components/schemas/CommandView"
+          }
+        },
+        "required": [
+          "projection",
+          "command"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "接收前拒绝或服务错误；接收后失败通过 CommandView.error 查询",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        },
+        "headers": {
+          "Retry-After": {
+            "description": "429 时给出建议等待秒数",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "examples": {
+      "Health": {
+        "value": {
+          "apiVersion": 1,
+          "requestId": "req-example",
+          "at": "2026-11-05T10:00:00.000Z",
+          "data": {
+            "status": "alive",
+            "buildVersion": "design"
+          }
+        }
+      },
+      "Auth": {
+        "value": {
+          "apiVersion": 1,
+          "requestId": "req-example",
+          "at": "2026-11-05T10:00:00.000Z",
+          "data": {
+            "csrfToken": "example-placeholder-token",
+            "expiresAt": "2026-11-05T22:00:00.000Z"
+          }
+        }
+      },
+      "ConfigConflict": {
+        "value": {
+          "apiVersion": 1,
+          "requestId": "req-example",
+          "at": "2026-11-05T10:00:00.000Z",
+          "error": {
+            "code": "CONFIG_REVISION_MISMATCH",
+            "message": "配置已更新，请刷新后重试",
+            "effect": "none",
+            "retry": "after-refresh",
+            "details": {
+              "currentRevision": 13
+            }
+          }
+        }
+      },
+      "CommandWaiting": {
+        "value": {
+          "apiVersion": 1,
+          "requestId": "req-example",
+          "at": "2026-11-05T10:00:00.000Z",
+          "data": {
+            "commandId": "cmd-resume-example",
+            "name": "control.resume",
+            "sessionId": "session-example",
+            "status": "waiting-sync",
+            "acceptedAt": "2026-11-05T10:00:00.000Z",
+            "updatedAt": "2026-11-05T10:00:00.000Z"
+          }
+        }
+      },
+      "NextMode": {
+        "value": {
+          "commandId": "cmd-mode-example",
+          "issuedAt": "2026-11-05T10:00:00.000Z",
+          "sessionId": "session-example",
+          "expectedControlEpoch": 8,
+          "mode": "llm"
+        }
+      },
+      "ConfigPatch": {
+        "value": {
+          "commandId": "cmd-config-example",
+          "issuedAt": "2026-11-05T10:00:00.000Z",
+          "sessionId": "session-example",
+          "expectedRevision": 12,
+          "changes": {
+            "interaction": {
+              "globalIntervalMs": 5000,
+              "viewerCooldownMs": 30000
+            },
+            "persona": {
+              "name": "麻将搭子",
+              "teasingIntensity": "normal"
+            }
+          }
+        }
+      },
+      "ConsoleIdle": {
+        "value": {
+          "apiVersion": 1,
+          "requestId": "req-example",
+          "at": "2026-11-05T10:00:00.000Z",
+          "data": {
+            "projection": {
+              "epoch": "epoch-example",
+              "revision": 24,
+              "cursor": "console.epoch-example.24",
+              "generatedAt": "2026-11-05T10:00:00.000Z"
+            },
+            "state": {
+              "session": null,
+              "room": null,
+              "game": null,
+              "modules": [],
+              "speech": {
+                "muted": false,
+                "queueEpoch": 0,
+                "playbackEpoch": 0,
+                "playingSpeechId": null,
+                "pendingCount": 0
+              },
+              "interaction": {
+                "roomId": null,
+                "connection": "disconnected",
+                "identity": "unknown",
+                "dryRun": true,
+                "pendingCount": 0
+              },
+              "configRevision": 12,
+              "recentCommands": []
+            }
+          }
+        }
+      },
+      "ObsIdle": {
+        "value": {
+          "apiVersion": 1,
+          "requestId": "req-example",
+          "at": "2026-11-05T10:00:00.000Z",
+          "data": {
+            "projection": {
+              "epoch": "epoch-example",
+              "revision": 24,
+              "cursor": "obs.epoch-example.24",
+              "generatedAt": "2026-11-05T10:00:00.000Z"
+            },
+            "state": {
+              "runStatus": null,
+              "activeMode": null,
+              "pendingMode": null,
+              "game": null,
+              "subtitle": null,
+              "interaction": null,
+              "muted": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

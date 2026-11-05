@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "reducerVersion": "1.0.0",
+  "fixtureId": "phase1-discard",
+  "evidenceKind": "synthetic",
+  "sourceVersion": "synthetic-v1",
+  "sessionId": "fixture-phase1-discard",
+  "virtualNow": "2026-11-05T00:00:00.000Z",
+  "description": "合成四人东场景：红五、普通五的不同实例、隐藏摸牌、两次弃牌、同东一连庄及新窗口。中止与时钟均为测试输入，不代表真实客户端行为。",
+  "redaction": "Only visible domain facts; no credentials, player identities, raw frames, hidden draws, or wall tiles.",
+  "eventCount": 17,
+  "eventsSha256": "6c0f52090dd3d63d3e0f82f2f0c06b1af99b03e3c7e770277a376fd646cf1af3"
+}

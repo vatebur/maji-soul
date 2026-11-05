@@ -1,0 +1,23 @@
+{
+  "node": "24.22.1",
+  "npm": "11.19.1",
+  "rust": "1.93.1",
+  "target": "aarch64-apple-darwin",
+  "typescript": "5.9.3",
+  "sqliteDriver": "node:sqlite",
+  "sqlite": "3.53.4",
+  "akagiCommit": "63cea4b5d23d83bbee8d56bc3b9d547cca2046c3",
+  "model4pSha256": "33c20aaba3f349ef689df73b726224804dc4aaff99922093d8f30cc38d709a1d",
+  "runnerProtocol": 1,
+  "clientVersion": "4.0.51",
+  "clientBundleHash": "3c0ce0802ed3ca8946842693db3e58f4d8945f37",
+  "protoSha256": "1c332959d97fc1e86cb2c3eb5df625dec25cc61129bce1f07e5db63d93413502",
+  "rpcMapSha256": "c25d385cf61f41d617a71af7701b98410b0df03df14c7c90bbd607b7b5d11953",
+  "probeEvidenceSchema": 1,
+  "replaySchema": 1,
+  "reducerVersion": "1.0.0",
+  "storageSchema": 1,
+  "ttsVoice": "Tingting",
+  "audioFormat": "WAV PCM S16LE mono 24000Hz",
+  "automationEnabled": false
+}

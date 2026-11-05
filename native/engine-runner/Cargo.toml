@@ -1,0 +1,13 @@
+[package]
+name = "maji-engine-runner"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+native_bot = { git = "https://github.com/shinkuan/Akagi", rev = "63cea4b5d23d83bbee8d56bc3b9d547cca2046c3" }
+serde_json = "1"
+sha2 = "0.10"
+
+[profile.release]
+panic = "abort"

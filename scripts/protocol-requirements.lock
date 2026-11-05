@@ -1,0 +1,16 @@
+archspec==0.2.7
+astc_encoder_py==0.1.12
+attrs==26.1.0
+brotli==1.2.1
+certifi==2026.10.23
+charset-normalizer==3.5.2
+etcpak==0.9.15
+fsspec==2026.9.0
+idna==3.20
+lz4==4.4.5
+pillow==13.0.0
+pyfmodex==0.7.2
+requests==2.32.5
+texture2ddecoder==1.0.6
+UnityPy==1.23.0
+urllib3==2.8.0

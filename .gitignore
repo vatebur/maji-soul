@@ -1,0 +1,9 @@
+node_modules/
+.runtime/
+.env
+config.local.json
+data/
+*.log
+native/engine-runner/target/
+.DS_Store
+.vfox/
