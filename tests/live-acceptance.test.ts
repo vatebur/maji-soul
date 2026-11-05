@@ -14,6 +14,7 @@ test('production acceptance assembly persists exactly one discard and exports an
     assert.ok('scope' in report, JSON.stringify(report));
     assert.equal(report.status, 'passed'); assert.equal(report.scope, 'one-ordinary-discard');
     assert.equal(report.attempt?.status, 'confirmed'); assert.equal(report.attempt?.executionMode, 'live');
+    assert.equal(report.executionDiagnostic,null);
     assert.equal(report.counts.confirmations, 1); assert.equal(report.counts.outbox, 1);
     assert.equal(report.paused, true); assert.equal(report.automationEnabled, false);
     assert.equal(report.programPaused, true); assert.equal(report.clientAutoWinMayActAfterProgramPause, true);
@@ -43,6 +44,8 @@ test('room flags cannot replace automatic switch readback and final verification
       };
       const report = await acceptLivePage(h.page, { ...h.options, discardOnce:true });
       assert.equal(report.status,'blocked'); assert.equal(h.page.sends,0);
+      assert.deepEqual(report.executionDiagnostic,failure==='final' ?
+        {phase:'prepare',code:'AUTO_WIN_UNVERIFIED',invocationStarted:false}:null);
       assert.equal(h.page.calls.includes('prepare'),false);
       assert.equal(h.page.controls.at(-1)?.paused,true);
       const db = new DatabaseSync(h.page.databasePath,{readOnly:true});

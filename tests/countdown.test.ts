@@ -31,7 +31,9 @@ test('blank, altered and displaced digits and unsupported layout block without g
   assert.throws(()=>readCountdownPixels(shifted),/COUNTDOWN_LAYOUT_UNVERIFIED/);
 });
 
-test('synthetic one-digit deadline uses the same measured glyph and zero remains expired',()=>{
+test('real single-digit capture uses its centered origin and old synthetic left-aligned digits are rejected',()=>{
+  const real=fixtures.samples.find((sample:any)=>sample.name==='single-8-current-client-20261106');
+  assert.ok(real);assert.equal(readCountdownPixels(imageFor(real)).seconds,8);
   for(const [sampleIndex,fromX,toX,width,expected] of [[0,164,36,52,0],[2,167,39,51,9]]){
     const image=imageFor(fixtures.samples[sampleIndex!]),copy=new Uint8Array(image.rgba);
     for(let y=645;y<745;y++)for(let x=1400;x<1615;x++)image.rgba.set([0,0,0,255],(y*2036+x)*4);
@@ -39,8 +41,29 @@ test('synthetic one-digit deadline uses the same measured glyph and zero remains
       const source=(y*2036+1380+fromX!+x)*4,target=(y*2036+1380+toX!+x)*4;
       image.rgba.set(copy.subarray(source,source+4),target);
     }
+    assert.throws(()=>readCountdownPixels(image),/COUNTDOWN_LAYOUT_UNVERIFIED/);
+    const old=new Uint8Array(image.rgba);
+    for(let y=645;y<745;y++)for(let x=1400;x<1615;x++)image.rgba.set([0,0,0,255],(y*2036+x)*4);
+    for(let y=645;y<745;y++)for(let x=0;x<width!;x++){
+      const source=(y*2036+1380+toX!+x)*4,target=(y*2036+1380+toX!+64+x)*4;
+      image.rgba.set(old.subarray(source,source+4),target);
+    }
+    // Shape-only synthetic 0/9 variants use the origin observed in the real 8.
     assert.equal(readCountdownPixels(image).seconds,expected);
   }
+});
+
+test('real two-digit countdown retains its observed origin and rejects an inferred centering offset',()=>{
+  const real=fixtures.samples.find((sample:any)=>sample.name==='two-digit-95-current-client-20261106');
+  assert.ok(real);const image=imageFor(real);
+  assert.equal(readCountdownPixels(image).seconds,95);
+  const original=new Uint8Array(image.rgba);
+  for(let y=645;y<745;y++)for(let x=1400;x<1615;x++)image.rgba.set([0,0,0,255],(y*2036+x)*4);
+  for(let y=645;y<745;y++)for(let x=1400;x<1583;x++){
+    const source=(y*2036+x)*4,target=(y*2036+x+32)*4;
+    image.rgba.set(original.subarray(source,source+4),target);
+  }
+  assert.throws(()=>readCountdownPixels(image),/COUNTDOWN_LAYOUT_UNVERIFIED/);
 });
 
 class Page implements EgoPagePort {

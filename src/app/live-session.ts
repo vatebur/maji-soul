@@ -10,6 +10,19 @@ import { digest, requireThat } from '../domain/game/value.ts';
 export interface LiveSegment { sync: AuthoritativeSync; subsequent: GameObservation[] }
 const endNames = ['ActionHule','ActionNoTile','ActionLiuJu'];
 const recoverableReasons = ['DISCONNECTED','CONNECTION_CHANGED','RECONNECT_REQUESTED'];
+const recoverableAutoWinErrors = new Set(['AUTO_WIN_CDP_UNAVAILABLE','AUTO_WIN_PROFILE_UNVERIFIED','AUTO_WIN_VIEWPORT_MISMATCH',
+  'AUTO_WIN_SCREENSHOT_INVALID','AUTO_WIN_SCREENSHOT_FORMAT','AUTO_WIN_SCREENSHOT_LIMIT','AUTO_WIN_READBACK_STALE',
+  'AUTO_WIN_READBACK_UNKNOWN','AUTO_WIN_READBACK_FAILED','AUTO_WIN_UNVERIFIED','AUTO_WIN_TOGGLE_REQUIRES_PAUSE']);
+const autoWinProtocolErrors = new Set(['BRIDGE_MISSING','BRIDGE_UNTRUSTED','BRIDGE_QUEUE_OVERFLOW','EGO_RPC_TIMEOUT','EGO_PAGE_FAILED',
+  'CONTROL_BARRIER_FAILED','PROCESS_INSTANCE_STALE','FENCE_STALE','SOURCE_STEP_GAP','DISCONNECTED','CONNECTION_CHANGED','RECONNECT_REQUESTED']);
+
+export interface AutoWinRecovery {
+  trigger: 'initial-sync' | 'reconnect'; status: 'pending' | 'verified' | 'unverified' | 'not-required'; attempted: boolean;
+  connectionEpoch: number; gameHandKey: string; pageEpoch: number; sourceStream: number | null; step: number; generation: number;
+  code: string | null;
+  readback: {source:'unity-button-pixels-v1'|null;state:'enabled'|'disabled'|'unknown';observedAt:string|null;
+    pageEpoch:number|null;generation:number|null;step:number|null;rgbaSha256:string|null;clicked:boolean} | null;
+}
 
 const diagnosticObject = (value: unknown): Record<string, any> => value !== null && typeof value==='object' && !Array.isArray(value) ? value : {};
 const diagnosticNumber = (value: unknown): number | null => typeof value==='number' && Number.isFinite(value) && Math.abs(value)<=Number.MAX_SAFE_INTEGER ? value : null;
@@ -68,6 +81,7 @@ export class LiveGameSession {
   #cursor: {generation:number;pageEpoch:number;lastStep:number|null} | null = null;
   #timingDiagnostics: ReturnType<typeof summarizeTimingAcquisition> = null;
   #browserStatsBefore: ReturnType<typeof summarizeBrowserStats> = null;
+  #autoWinRecoveries: AutoWinRecovery[] = [];
   constructor(actor: GameActor, page: EgoPagePort, room: FriendRoom) {
     this.coordinator = new GameCoordinator(actor); this.#page = page; this.#room = room;
   }
@@ -76,6 +90,8 @@ export class LiveGameSession {
   get actor() { return this.coordinator.actor; }
   get cursor() { return this.#cursor && {...this.#cursor}; }
   get diagnostics() { return structuredClone({timing:this.#timingDiagnostics,browserStatsBefore:this.#browserStatsBefore}); }
+  get autoWinRecovery() { return structuredClone(this.#autoWinRecoveries.at(-1) ?? null); }
+  get autoWinRecoveries() { return structuredClone(this.#autoWinRecoveries); }
   #rememberCursor(value: any) {
     this.#cursor = {generation:value.generation,pageEpoch:value.pageEpoch,lastStep:value.lastStep};
   }
@@ -84,6 +100,7 @@ export class LiveGameSession {
     return `hand-${digest([gameMatchKey,opening.sha256]).slice(0,32)}`;
   }
   async synchronize(collectExecutionProofs = true) {
+    const recovering=this.#recovering;
     // A failed collection on reconnect cannot inherit an earlier proof.
     this.#timingDiagnostics=null;this.#browserStatsBefore=null;
     const token = this.actor.beginSync(); await this.actor.awaitControlBarrier();
@@ -124,7 +141,54 @@ export class LiveGameSession {
     this.#gameUuid = pageState.gameUuid;
     this.#recovering = false; this.#pendingResult = null;
     this.segments.push({sync,subsequent:[]});
+    if (!collectExecutionProofs) await this.#restoreAutoWin(cursor,!!terminal,recovering);
     return {sync,cursor,timing,timingEvidence,autoWinReadback};
+  }
+  async #restoreAutoWin(cursor:any,terminal:boolean,recovering:boolean) {
+    const p=this.actor.projection;
+    const recovery:AutoWinRecovery={trigger:recovering?'reconnect':'initial-sync',status:terminal?'not-required':'pending',attempted:false,
+      connectionEpoch:p.connectionEpoch,gameHandKey:p.gameHandKey!,pageEpoch:cursor.pageEpoch,
+      sourceStream:diagnosticNumber(cursor.sourceStream),step:cursor.lastStep,generation:cursor.generation,code:null,readback:null};
+    this.#autoWinRecoveries.push(recovery);
+    if (terminal) return;
+    requireThat(this.actor.control.paused && !this.actor.control.needsSync && p.state?.trust==='trusted','AUTO_WIN_RECOVERY_REQUIRES_SYNC');
+    recovery.attempted=true;
+    let fatal:unknown,failed=false;
+    try {
+      const readback=await bridgeCall(this.#page,'ensureAutoWin');
+      recovery.readback={source:readback.source==='unity-button-pixels-v1'?'unity-button-pixels-v1':null,
+        state:['enabled','disabled','unknown'].includes(readback.state)?readback.state:'unknown',observedAt:diagnosticTime(readback.observedAt),
+        pageEpoch:diagnosticNumber(readback.pageEpoch),generation:diagnosticNumber(readback.generation),step:diagnosticNumber(readback.step),
+        rgbaSha256:typeof readback.rgbaSha256==='string' && /^[a-f0-9]{64}$/.test(readback.rgbaSha256)?readback.rgbaSha256:null,
+        clicked:readback.clicked===true};
+      requireThat(readback.state==='enabled','AUTO_WIN_UNVERIFIED');
+      requireThat(readback.pageEpoch===cursor.pageEpoch && readback.step===cursor.lastStep &&
+        Number.isSafeInteger(readback.generation) && readback.generation>=cursor.generation,'AUTO_WIN_READBACK_STALE');
+      recovery.status='verified';
+    } catch(error) {
+      const code=error instanceof Error?error.message:'';
+      recovery.status='unverified';recovery.code=recoverableAutoWinErrors.has(code)||autoWinProtocolErrors.has(code)?code:'AUTO_WIN_RECOVERY_FAILED';
+      if (!recoverableAutoWinErrors.has(code)) {
+        fatal=autoWinProtocolErrors.has(code)?error:new Error('AUTO_WIN_RECOVERY_FAILED');failed=true;
+      }
+    }
+    // The UI gesture can change generation or receive real game facts. Retain
+    // those facts and close the cursor; do not recursively reconnect from here.
+    const batch=await bridgeCall(this.#page,'drain');
+    await this.#consumeBatch(batch,false);
+    if (failed) throw fatal;
+  }
+  #validateAutoWinRecovery(batch:any) {
+    const recovery=this.#autoWinRecoveries.at(-1),proof=recovery?.readback;
+    if (!recovery || recovery.status!=='verified' || !proof) return;
+    const sameScope=batch.pageEpoch===recovery.pageEpoch && diagnosticNumber(batch.sourceStream)===recovery.sourceStream &&
+      this.actor.projection.connectionEpoch===recovery.connectionEpoch && this.actor.projection.gameHandKey===recovery.gameHandKey &&
+      batch.connected!==false && batch.freshConnection!==false && !batch.reason && !batch.overflow;
+    const retained=batch.lastAutoWinReadback;
+    const sameProof=retained?.state==='enabled' && ['pageEpoch','generation','step','observedAt','rgbaSha256'].every(key=>retained[key]===proof[key as keyof typeof proof]);
+    if (!sameScope || retained && retained.state!=='enabled' || batch.generation!==proof.generation && !sameProof) {
+      recovery.status='unverified';recovery.code='AUTO_WIN_READBACK_STALE';
+    }
   }
   async #ingest(observations: GameObservation[]) {
     await this.coordinator.ingest(observations);
@@ -137,7 +201,11 @@ export class LiveGameSession {
   }
   async pump(): Promise<void> {
     const batch = await bridgeCall(this.#page,'drain');
+    await this.#consumeBatch(batch,true);
+  }
+  async #consumeBatch(batch:any,allowSynchronization:boolean): Promise<void> {
     this.#rememberCursor(batch);
+    this.#validateAutoWinRecovery(batch);
     requireThat(!batch.overflow,'BRIDGE_QUEUE_OVERFLOW');
     const disconnected = batch.records.some((r:any)=>r.kind==='disconnected');
     const reauthenticated = batch.records.some((r:any)=>r.kind==='auth-summary');
@@ -145,7 +213,7 @@ export class LiveGameSession {
       requireThat(!batch.reason || recoverableReasons.includes(batch.reason),'BRIDGE_UNTRUSTED');
       if (!this.#recovering) { this.actor.failClosed('DISCONNECTED'); this.#recovering = true; }
       await this.actor.awaitControlBarrier();
-      if (batch.connected === true && batch.freshConnection && batch.authSummary) {
+      if (allowSynchronization && batch.connected === true && batch.freshConnection && batch.authSummary) {
         await this.synchronize(false); this.counts.reconnects++;
       }
       return;
@@ -181,6 +249,7 @@ export class LiveGameSession {
         this.#pendingResult = null;
       }
     }
+    this.#validateAutoWinRecovery(batch);
     await this.actor.awaitControlBarrier();
   }
 }

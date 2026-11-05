@@ -75,6 +75,9 @@ export function readCountdownPixels(image: PixelImage) {
   }
   const found=components(mask,region.width,region.height);
   requireThat(found.length>=1 && found.length<=3, 'COUNTDOWN_DIGITS_UNREADABLE');
+  // The real one-digit 8 is centered +64px. Captured two-digit 35/95 and
+  // three-digit timers retain the original origin; do not infer a +32px shift.
+  const lengthOffset=found.length===1 ? 64 : 0;
   const digits=found.map((component,index)=>{
     requireThat(component.area>=800 && component.area<=3000 && component.width>=24 && component.width<=60 && component.height>=80 && component.height<=88,
       'COUNTDOWN_GLYPH_UNVERIFIED');
@@ -83,7 +86,7 @@ export function readCountdownPixels(image: PixelImage) {
     const best=ranked[0]!,gap=best.score-ranked[1]!.score;
     requireThat(best.score>=.96 && gap>=.18 && Math.abs(component.width-best.template.width)<=2 && Math.abs(component.height-best.template.height)<=2,
       'COUNTDOWN_GLYPH_UNVERIFIED');
-    requireThat(Math.abs(component.x-TEMPLATE_X[best.template.digit]!-index*64)<=2 && Math.abs(component.y-TEMPLATE_Y[best.template.digit]!)<=2,
+    requireThat(Math.abs(component.x-TEMPLATE_X[best.template.digit]!-lengthOffset-index*64)<=2 && Math.abs(component.y-TEMPLATE_Y[best.template.digit]!)<=2,
       'COUNTDOWN_LAYOUT_UNVERIFIED');
     return { value:best.template.digit,score:best.score,runnerUpGap:gap };
   });

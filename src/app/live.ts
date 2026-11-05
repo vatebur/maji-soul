@@ -35,6 +35,7 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
   await mkdir(resolve(databasePath, '..'), { recursive: true, mode: 0o700 });
   const storage = new StorageClient(databasePath);
   let actor: GameActor | undefined;
+  let executor: ActionExecutor | undefined;
   let liveSession: LiveGameSession | undefined;
   try {
     actor = await GameActor.open(storage, sessionId, randomUUID());
@@ -47,7 +48,7 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
           return send(action);
         };
       } };
-    const executor = new ActionExecutor(actor, { transport: guarded, receiptTimeoutMs: 10_000 });
+    executor = new ActionExecutor(actor, { transport: guarded, receiptTimeoutMs: 10_000 });
     await actor.awaitControlBarrier();
     liveSession = new LiveGameSession(actor,page,options.room);
     const {cursor,timing,timingEvidence,autoWinReadback} = await liveSession.synchronize(observeMs===0 || options.discardOnce===true);
@@ -88,15 +89,18 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
     const settled = !!finalCursor && !pageAfter.reason && !pageAfter.overflow && !pageAfter.queued && pageAfter.connected !== false &&
       pageAfter.generation === finalCursor.generation && pageAfter.pageEpoch === finalCursor.pageEpoch && pageAfter.lastStep === finalCursor.lastStep;
     const expectedStatus = options.pauseBeforeDispatch ? 'not-dispatched' : 'confirmed';
-    const passed = settled && (!attempt || attempt.status === expectedStatus) && !liveSession.recovering && !liveSession.awaitingSettlement && !actor.projection.matchEndPending;
+    const autoWinRecovery=liveSession.autoWinRecovery;
+    const autoWinRecoveryReady=actor.projection.matchStatus==='finished' || !autoWinRecovery || ['verified','not-required'].includes(autoWinRecovery.status);
+    const passed = settled && autoWinRecoveryReady && (!attempt || attempt.status === expectedStatus) && !liveSession.recovering && !liveSession.awaitingSettlement && !actor.projection.matchEndPending;
     const report = { schemaVersion: 1, evidenceKind: 'current-client-integration', status: passed ? 'passed' : 'blocked',
       scope: observeMs>0 ? 'lifecycle-observation' : options.pauseBeforeDispatch ? 'pause-before-final-send' : options.discardOnce ? 'one-ordinary-discard' : 'complete-current-hand-sync', sessionId, databasePath,
-      attempt, counts: inspection.counts, finalStateHash: digest(inspection.projection.state),
+      attempt, executionDiagnostic:executor.diagnostic, counts: inspection.counts, finalStateHash: digest(inspection.projection.state),
       paused: actor.control.paused && actor.control.controlPending === 0,
       programPaused: actor.control.paused && actor.control.controlPending === 0,
-      clientAutoWinLastReadback: autoWinReadback?.state ?? 'unknown',
+      clientAutoWinLastReadback: autoWinRecovery ? autoWinRecovery.readback?.state ?? 'unknown' : autoWinReadback?.state ?? 'unknown',
       clientAutoWinMayActAfterProgramPause: true,
       countdownSource: timing ? 'server-sync-and-client-pixels' : 'no-executable-window', timing: timing ?? null, timingEvidence, autoWinReadback,
+      autoWinRecovery, autoWinRecoveries:liveSession.autoWinRecoveries,
       browserStatsBefore: summarizeBrowserStats(cursor.stats), browserStatsAfter: summarizeBrowserStats(pageAfter.stats),
       observationClosure: {settled,drained:finalCursor,read:{generation:pageAfter.generation,pageEpoch:pageAfter.pageEpoch,
         lastStep:pageAfter.lastStep,connected:pageAfter.connected ?? null,queued:pageAfter.queued ?? 0,
@@ -115,7 +119,8 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
     const diagnostics=liveSession?.diagnostics;
     const pageAfter=await bridgeCall(page,'read').catch(()=>null);
     const report = { schemaVersion: 1, evidenceKind: 'current-client-integration', status: 'blocked', code,
-      sessionId, databasePath, timingDiagnostics:diagnostics?.timing ?? null,
+      sessionId, databasePath, executionDiagnostic:executor?.diagnostic ?? null, timingDiagnostics:diagnostics?.timing ?? null,
+      autoWinRecovery:liveSession?.autoWinRecovery ?? null,autoWinRecoveries:liveSession?.autoWinRecoveries ?? [],
       browserStatsBefore:diagnostics?.browserStatsBefore ?? null,browserStatsAfter:summarizeBrowserStats(pageAfter?.stats),
       automationEnabled: false, reportPath: join(directory, 'report.json') };
     await writeFile(report.reportPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });

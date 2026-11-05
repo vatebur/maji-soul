@@ -1,0 +1,515 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-06",
+  "timezone": "Asia/Shanghai",
+  "evidenceKind": "current-client-integration",
+  "clientVersion": "4.0.51",
+  "allPhase1GatesPassed": false,
+  "automationEnabled": false,
+  "originalLedgerReused": true,
+  "identityPreserved": true,
+  "identityComparison": {
+    "runAliases": [
+      "normal-sync",
+      "ordinary-discard-initial-blocked",
+      "ordinary-discard-confirmed",
+      "pause-before-final-send",
+      "injected-dispatch-delay-rejected"
+    ],
+    "sameMatch": true,
+    "sameHand": true
+  },
+  "naturalRoundTripRangeMs": {
+    "minimum": 64.8,
+    "maximum": 250.9,
+    "controlledLatencyInjected": false
+  },
+  "runs": [
+    {
+      "alias": "normal-sync",
+      "reportSha256": "96c0f1631aaba70a1d06b0eb246285e714b4687f50d9fc4a7e9452bd6a4e2a44",
+      "reportStatus": "passed",
+      "reasonCode": null,
+      "acceptedChecks": [
+        "AUTOMATIC_COUNTDOWN_NORMAL_WINDOW",
+        "ELAPSED_SECONDS_CORROBORATED",
+        "AUTO_WIN_ENABLE_READBACK"
+      ],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "autoWin": {
+        "readbackState": "enabled",
+        "clickedToEnable": true,
+        "actualTriggerConfirmed": false
+      },
+      "timing": {
+        "fixedMs": 300000,
+        "addMs": 0,
+        "operationStep": 7,
+        "protocolRemainingMs": 199000,
+        "networkAllowanceMs": 172,
+        "quantizationAllowanceMs": 2000,
+        "totalUncertaintyMs": 2172,
+        "budgetAtResponseAfterSafetyMarginMs": 196578,
+        "responseIntervalMs": 2274.3,
+        "serverElapsedDeltaMs": 2000,
+        "sameSampleHand": true,
+        "sameSampleStep": true,
+        "sameSamplePageEpoch": true,
+        "samples": [
+          {
+            "displayedSeconds": 202.0,
+            "elapsedSeconds": 99,
+            "roundTripMs": 82.9,
+            "displayDelayMs": 1.5,
+            "displayProtocolResidualMs": 1001.5
+          },
+          {
+            "displayedSeconds": 200.0,
+            "elapsedSeconds": 101,
+            "roundTripMs": 172.0,
+            "displayDelayMs": 5.4,
+            "displayProtocolResidualMs": 1005.4
+          }
+        ]
+      },
+      "capture": {
+        "eventCount": 9,
+        "eventsFileSha256": "e574166430044c9a80e303a88e2933ab6e6fe8c60e08e39550167eaf16a0191c",
+        "manifestEventsSha256": "2ea5f96f67545bc88b755dda369b0049bc7d93d813be594910657d19c85d5167",
+        "originHandOrdinal": 1,
+        "containsExecutableWindow": false
+      },
+      "attempt": null
+    },
+    {
+      "alias": "ordinary-discard-initial-blocked",
+      "reportSha256": "1014273336523bbef73e4cbf34c3cf15959d6e7ccd56081cb0825d02ae32be71",
+      "reportStatus": "blocked",
+      "reasonCode": null,
+      "acceptedChecks": [],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "autoWin": {
+        "readbackState": "enabled",
+        "clickedToEnable": true,
+        "actualTriggerConfirmed": false
+      },
+      "timing": {
+        "fixedMs": 300000,
+        "addMs": 0,
+        "operationStep": 15,
+        "protocolRemainingMs": 197000,
+        "networkAllowanceMs": 251,
+        "quantizationAllowanceMs": 2000,
+        "totalUncertaintyMs": 2251,
+        "budgetAtResponseAfterSafetyMarginMs": 194499,
+        "responseIntervalMs": 2356.3,
+        "serverElapsedDeltaMs": 3000,
+        "sameSampleHand": true,
+        "sameSampleStep": true,
+        "sameSamplePageEpoch": true,
+        "samples": [
+          {
+            "displayedSeconds": 199.0,
+            "elapsedSeconds": 100,
+            "roundTripMs": 169.0,
+            "displayDelayMs": 3.3,
+            "displayProtocolResidualMs": -996.7
+          },
+          {
+            "displayedSeconds": 197.0,
+            "elapsedSeconds": 103,
+            "roundTripMs": 250.9,
+            "displayDelayMs": 2.8,
+            "displayProtocolResidualMs": 2.8
+          }
+        ]
+      },
+      "capture": {
+        "eventCount": 17,
+        "eventsFileSha256": "93ed6048daba80a2a24890290006019497af8999ce5bba09f5533a316cc3e6cb",
+        "manifestEventsSha256": "8bf48cba5d98a45dcfb42d1e86a93a5a928acce6617fa64aff7509f56bdda4dd",
+        "originHandOrdinal": 1,
+        "containsExecutableWindow": false
+      },
+      "attempt": {
+        "status": "not-dispatched",
+        "delivery": "not-sent"
+      },
+      "exclusion": {
+        "code": "UNEXPLAINED_NOT_SENT",
+        "reproduced": false,
+        "ordinaryDiscardAccepted": false
+      }
+    },
+    {
+      "alias": "ordinary-discard-confirmed",
+      "reportSha256": "d30d5dda339f8877d90509264e520a7ac27b55ca7b68481179dc23d918e2a7fa",
+      "reportStatus": "passed",
+      "reasonCode": null,
+      "acceptedChecks": [
+        "AUTOMATIC_ORDINARY_DISCARD_CONFIRMED",
+        "AUTO_WIN_RECONNECT_ENABLE_READBACK"
+      ],
+      "programActionSends": {
+        "before": 0,
+        "after": 1,
+        "delta": 1
+      },
+      "authoritativeProgramConfirmations": 1,
+      "programPaused": true,
+      "observationSettled": true,
+      "autoWin": {
+        "readbackState": "enabled",
+        "clickedToEnable": true,
+        "actualTriggerConfirmed": false
+      },
+      "timing": {
+        "fixedMs": 300000,
+        "addMs": 0,
+        "operationStep": 23,
+        "protocolRemainingMs": 222000,
+        "networkAllowanceMs": 84,
+        "quantizationAllowanceMs": 2000,
+        "totalUncertaintyMs": 2084,
+        "budgetAtResponseAfterSafetyMarginMs": 219666,
+        "responseIntervalMs": 2185.9,
+        "serverElapsedDeltaMs": 3000,
+        "sameSampleHand": true,
+        "sameSampleStep": true,
+        "sameSamplePageEpoch": true,
+        "samples": [
+          {
+            "displayedSeconds": 225.0,
+            "elapsedSeconds": 75,
+            "roundTripMs": 130.1,
+            "displayDelayMs": 5.6,
+            "displayProtocolResidualMs": 5.6
+          },
+          {
+            "displayedSeconds": 222.0,
+            "elapsedSeconds": 78,
+            "roundTripMs": 83.7,
+            "displayDelayMs": 2.3,
+            "displayProtocolResidualMs": 2.3
+          }
+        ]
+      },
+      "capture": {
+        "eventCount": 26,
+        "eventsFileSha256": "03472009ed0435777ec9434d28fc2d304eb4bdce797f2b4337ab284ac8f7b508",
+        "manifestEventsSha256": "439561268f1741ca2030dd627d0766dcb0e3f632f707d637ff9ed4d6c80197d5",
+        "originHandOrdinal": 1,
+        "containsExecutableWindow": false
+      },
+      "attempt": {
+        "status": "confirmed",
+        "delivery": "accepted"
+      }
+    },
+    {
+      "alias": "pause-before-final-send",
+      "reportSha256": "2e538357735282bc7eee0fad1eb18c5e8819a907174064ad9ad2525696c22117",
+      "reportStatus": "passed",
+      "reasonCode": null,
+      "acceptedChecks": [
+        "PAGE_FINAL_PAUSE_PREVENTS_SEND"
+      ],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "autoWin": {
+        "readbackState": "enabled",
+        "clickedToEnable": true,
+        "actualTriggerConfirmed": false
+      },
+      "timing": {
+        "fixedMs": 300000,
+        "addMs": 0,
+        "operationStep": 31,
+        "protocolRemainingMs": 177000,
+        "networkAllowanceMs": 70,
+        "quantizationAllowanceMs": 2000,
+        "totalUncertaintyMs": 2070,
+        "budgetAtResponseAfterSafetyMarginMs": 174680,
+        "responseIntervalMs": 2173.0,
+        "serverElapsedDeltaMs": 2000,
+        "sameSampleHand": true,
+        "sameSampleStep": true,
+        "sameSamplePageEpoch": true,
+        "samples": [
+          {
+            "displayedSeconds": 179.0,
+            "elapsedSeconds": 121,
+            "roundTripMs": 64.8,
+            "displayDelayMs": 2.4,
+            "displayProtocolResidualMs": 2.4
+          },
+          {
+            "displayedSeconds": 177.0,
+            "elapsedSeconds": 123,
+            "roundTripMs": 69.6,
+            "displayDelayMs": 2.4,
+            "displayProtocolResidualMs": 2.4
+          }
+        ]
+      },
+      "capture": {
+        "eventCount": 33,
+        "eventsFileSha256": "7608b2055173d44f601fec230b811b51a3e5bf688540105a85a7dfba52425bd5",
+        "manifestEventsSha256": "252f81687134741bb13c0784aca5fcd9250dbd535bccc223019da7481ad50c51",
+        "originHandOrdinal": 1,
+        "containsExecutableWindow": false
+      },
+      "attempt": {
+        "status": "not-dispatched",
+        "delivery": "not-sent"
+      }
+    },
+    {
+      "alias": "near-deadline-harness-excluded",
+      "reportSha256": "0872d9be4840082941683354ef8aa0ac8af26588aaf415f83573a20a1511a891",
+      "reportStatus": "blocked",
+      "reasonCode": "EGO_PAGE_FAILED",
+      "acceptedChecks": [],
+      "programActionSends": {
+        "before": null,
+        "after": 0,
+        "delta": null
+      },
+      "authoritativeProgramConfirmations": null,
+      "programPaused": null,
+      "observationSettled": null,
+      "autoWin": {
+        "readbackState": null,
+        "clickedToEnable": null,
+        "actualTriggerConfirmed": false
+      },
+      "timing": null,
+      "capture": null,
+      "attempt": null,
+      "exclusion": {
+        "code": "HARNESS_NON_SERIALIZABLE_ARGUMENT",
+        "nearDeadlineAccepted": false
+      }
+    },
+    {
+      "alias": "near-deadline-layout-blocked",
+      "reportSha256": "34d37666e5fd7a470653a727b46dfc3e08d9431aee71337913fbcab7811088c5",
+      "reportStatus": "blocked",
+      "reasonCode": "COUNTDOWN_LAYOUT_UNVERIFIED",
+      "acceptedChecks": [],
+      "programActionSends": {
+        "before": null,
+        "after": 0,
+        "delta": null
+      },
+      "authoritativeProgramConfirmations": null,
+      "programPaused": null,
+      "observationSettled": null,
+      "autoWin": {
+        "readbackState": null,
+        "clickedToEnable": null,
+        "actualTriggerConfirmed": false
+      },
+      "timing": null,
+      "capture": null,
+      "attempt": null,
+      "exclusion": {
+        "code": "SINGLE_DIGIT_LAYOUT_MISMATCH",
+        "nearDeadlineAccepted": false,
+        "fixedPendingRetest": false,
+        "retestAlias": "near-deadline-automatic-rejected"
+      }
+    },
+    {
+      "alias": "near-deadline-automatic-rejected",
+      "reportSha256": "a71b15c8022608ab1e5d4cc313c360fe54415e79770631e342a3b887480f909b",
+      "reportStatus": "blocked",
+      "reasonCode": "COUNTDOWN_EXPIRED",
+      "acceptedChecks": [
+        "AUTOMATIC_NEAR_DEADLINE_REJECTION"
+      ],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": null,
+      "programPaused": null,
+      "observationSettled": null,
+      "autoWin": {
+        "readbackState": null,
+        "clickedToEnable": null,
+        "actualTriggerConfirmed": false
+      },
+      "timing": {
+        "derivedTimingVerified": false,
+        "budgetCalculationOnly": true,
+        "fixedMs": 300000,
+        "addMs": 0,
+        "operationStep": 39,
+        "protocolRemainingMs": 2000,
+        "networkAllowanceMs": 90,
+        "quantizationAllowanceMs": 2000,
+        "totalUncertaintyMs": 2090,
+        "safetyMarginMs": 250,
+        "budgetAtResponseAfterSafetyMarginMs": -340,
+        "responseIntervalMs": 2192.8,
+        "serverElapsedDeltaMs": 2000,
+        "sameSampleHand": null,
+        "sameSampleStep": true,
+        "sameSamplePageEpoch": true,
+        "samples": [
+          {
+            "displayedSeconds": 4.0,
+            "elapsedSeconds": 296,
+            "roundTripMs": 85.7,
+            "displayDelayMs": 1.7,
+            "displayProtocolResidualMs": 1.7
+          },
+          {
+            "displayedSeconds": 2.0,
+            "elapsedSeconds": 298,
+            "roundTripMs": 89.8,
+            "displayDelayMs": 8.8,
+            "displayProtocolResidualMs": 8.8
+          }
+        ]
+      },
+      "scopeEvidence": {
+        "sourceSha256": "a6aed0d5a6b414f8e0991e1434fd5da20d1109951178f9aedbca243f60659594",
+        "action": "ActionDealTile",
+        "operationStep": 39,
+        "operationTypes": [
+          1
+        ],
+        "samePageAsTimingFailure": true,
+        "sameGenerationAsTimingFailure": true,
+        "sameStepAsTimingFailure": true,
+        "openingMatchesNormalRun": true
+      },
+      "capture": null,
+      "attempt": null
+    },
+    {
+      "alias": "injected-dispatch-delay-rejected",
+      "reportSha256": "ec4abcd0ba0138d3efbba3ba0e677c9fcb1958d20b400b71bd70ea56fe535325",
+      "reportStatus": "blocked",
+      "reasonCode": "TRANSPORT_NOT_SENT",
+      "acceptedChecks": [
+        "INJECTED_DISPATCH_DELAY_NO_SEND"
+      ],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 0,
+      "autoWin": {
+        "readbackState": "enabled",
+        "clickedToEnable": true,
+        "actualTriggerConfirmed": false
+      },
+      "timing": {
+        "fixedMs": 300000,
+        "addMs": 0,
+        "operationStep": 47,
+        "protocolRemainingMs": 241000,
+        "networkAllowanceMs": 95,
+        "quantizationAllowanceMs": 2000,
+        "totalUncertaintyMs": 2095,
+        "budgetAtResponseAfterSafetyMarginMs": 238655,
+        "responseIntervalMs": 2200.5,
+        "serverElapsedDeltaMs": 2000,
+        "sameSampleHand": true,
+        "sameSampleStep": true,
+        "sameSamplePageEpoch": true,
+        "samples": [
+          {
+            "displayedSeconds": 243.0,
+            "elapsedSeconds": 57,
+            "roundTripMs": 94.3,
+            "displayDelayMs": 5.2,
+            "displayProtocolResidualMs": 5.2
+          },
+          {
+            "displayedSeconds": 241.0,
+            "elapsedSeconds": 59,
+            "roundTripMs": 94.8,
+            "displayDelayMs": 8.5,
+            "displayProtocolResidualMs": 8.5
+          }
+        ]
+      },
+      "injection": {
+        "kind": "injected-cross-process-dispatch-delay",
+        "sourceSha256": "7dbffdd8cacd32c0683fb34984fc1bf5b75be4413658c995252be339a0ac763b",
+        "requestedDelayMs": 1200,
+        "preparedPermitRemainingMs": 715,
+        "actualDelayMs": 1202.23,
+        "actualDelayExceedsPreparedPermitRemaining": true,
+        "serverNetworkDelayInjected": false
+      },
+      "capture": {
+        "eventCount": 49,
+        "eventsFileSha256": "3ea94c7ee40f4c8a4c45ffd806575db852744567870efbb394a5ee85060e8964",
+        "manifestEventsSha256": "5aa3611bf15e8801e9aedf84b6d0530b6e68fddcfed8538841386008c182dff1",
+        "originHandOrdinal": 1,
+        "containsExecutableWindow": false,
+        "pureReducerMatchesExpected": true
+      },
+      "attempt": {
+        "status": "not-dispatched",
+        "delivery": "not-sent"
+      },
+      "executionDiagnostic": {
+        "phase": "dispatch",
+        "invocationStarted": true,
+        "code": "TRANSPORT_NOT_SENT"
+      }
+    }
+  ],
+  "countdownLayout": {
+    "singleDigitOffsetPx": 64,
+    "twoDigitOffsetPx": 0,
+    "threeDigitOffsetPx": 0,
+    "strictThresholdsUnchanged": true,
+    "fixtureAliases": [
+      "single-8-current-client-20261106",
+      "two-digit-95-current-client-20261106"
+    ],
+    "imageSourceSha256": [
+      "d90af012de6071b7094b189d7866fa06a9455a0cd81f50798b29a1a67eeca6e9",
+      "640625905e93953f9f86032b1093b0323c7279d111bc5c2d1dfb341f80f656ad"
+    ],
+    "fullScreenshotsTracked": false
+  },
+  "pendingChecks": [
+    "CONTROLLED_NETWORK_DELAY",
+    "OLD_PERMIT_RECONNECT_CHALLENGE",
+    "AUTO_WIN_ACTUAL_TRIGGER",
+    "CROSS_HAND_AND_MATCH_LIFECYCLE"
+  ]
+}

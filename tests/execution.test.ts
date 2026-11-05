@@ -117,6 +117,8 @@ test('send failure or bounded receipt timeout remains uncertain; a state-only sy
       const pending = executor.executeContract(snapshot.id, redCandidate(snapshot).id); await transport.preparing;
       transport.release(async () => { if (cause === 'send-throws') throw new Error('injected-transport-failure'); return late.promise; });
       const uncertain = await pending; assert.equal(uncertain.status, 'uncertain'); assert.equal(transport.sends, 1);
+      assert.deepEqual(executor.diagnostic, { phase:'dispatch', code:cause === 'send-throws' ? 'EXECUTION_ERROR' : 'ACTION_TIMEOUT', invocationStarted:true });
+      assert.equal(JSON.stringify(executor.diagnostic).includes('injected-transport-failure'), false);
       assert.equal(h.actor.control.needsSync, true); assert.equal(h.actor.control.paused, true);
       late.resolve(receipt());
       await assert.rejects(executor.executeContract(snapshot.id, redCandidate(snapshot).id), /DECISION_STALE|EXECUTION_PAUSED/);
@@ -208,6 +210,44 @@ test('a page final fence can reject an already invoked cross-process dispatch af
     const execution = executor.executeLive(snapshot.id, redCandidate(snapshot).id); await invoked.promise;
     h.actor.pause(); await h.actor.awaitControlBarrier(); finalSend.resolve();
     assert.equal((await execution).status, 'not-dispatched'); assert.equal(sends, 0);
+    assert.deepEqual(executor.diagnostic, { phase:'dispatch', code:'TRANSPORT_NOT_SENT', invocationStarted:true });
     assert.equal((await h.store.inspect(FIXTURE_SESSION)).counts.confirmations, 0);
   } finally { await h.cleanup(); }
+});
+
+test('prepare diagnostics retain only exact known codes without changing the unsent attempt or its slot', async t => {
+  for (const knownCode of [true,false]) await t.test(knownCode ? 'known-code' : 'arbitrary-uppercase-message',async()=>{
+    const h=await actorHarness();
+    const secret='ACCOUNT_SECRET_MUST_NOT_BECOME_A_DIAGNOSTIC';
+    let preparations=0;
+    try {
+      const failure=Object.assign(new Error(knownCode ? 'AUTO_WIN_READBACK_STALE' : secret), {payload:{token:secret}});
+      const transport: ProductionTransport={kind:'live',invalidate:()=>{},prepare:async()=>{
+        preparations++;
+        throw failure;
+      }};
+      const executor=new ActionExecutor(h.actor,{transport});
+      const initialDiagnostic=executor.diagnostic;assert.equal(initialDiagnostic,null);
+      await h.actor.resume();const snapshot=await h.actor.freezeDecision(),candidate=redCandidate(snapshot);
+      const result=await executor.executeLive(snapshot.id,candidate.id);
+      assert.equal(result.status,'not-dispatched');assert.equal(result.receipt?.delivery,'not-sent');
+      assert.deepEqual(executor.diagnostic,{phase:'prepare',code:knownCode?'AUTO_WIN_READBACK_STALE':'EXECUTION_ERROR',invocationStarted:false});
+      const detached=executor.diagnostic!;detached.invocationStarted=true;
+      assert.equal(executor.diagnostic!.invocationStarted,false);
+      const serialized=JSON.stringify(executor.diagnostic);
+      for(const excluded of [secret,'payload','stack','message','token'])assert.equal(serialized.includes(excluded),false);
+      assert.deepEqual(Object.keys(result.receipt!).sort(),['callId','delivery','observedAt']);
+      const inspection=await h.store.inspect(FIXTURE_SESSION);
+      assert.equal(inspection.attempts.length,1);assert.equal(inspection.counts.confirmations,0);
+      assert.equal(inspection.counts.faults,0);assert.equal(h.actor.control.paused,false);
+      assert.equal(JSON.stringify(inspection).includes(secret),false);
+      // A repeat reads the original reservation and never prepares or dispatches again.
+      assert.deepEqual(await executor.executeLive(snapshot.id,candidate.id),result);
+      assert.deepEqual(executor.diagnostic,{phase:'reserve',code:'EXISTING_ATTEMPT',invocationStarted:false});
+      assert.equal(preparations,1);
+      const next=await h.actor.freezeDecision();
+      await assert.rejects(h.store.reserveAction({attemptId:'same-source-after-diagnostic',decisionId:next.id,
+        actionId:redCandidate(next).id,processInstanceId:h.actor.processInstanceId,executionMode:'live',preparedAt:next.createdAt}),/ACTION_SLOT_TAKEN/);
+    } finally { await h.cleanup(); }
+  });
 });
