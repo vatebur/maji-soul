@@ -10,6 +10,7 @@ import type { FriendRoom } from '../domain/game/types.ts';
 import { digest, requireThat } from '../domain/game/value.ts';
 import { exportLiveCapture } from './live-capture.ts';
 import { LiveGameSession, summarizeBrowserStats } from './live-session.ts';
+import { validateObservationDuration } from './live-observation.ts';
 
 export interface LiveAcceptanceOptions {
   outputDirectory: string; room: FriendRoom;
@@ -26,8 +27,7 @@ export interface LiveAcceptanceOptions {
 
 /** Uses the real worker, Actor, executor and Page bridge. Never loops decisions. */
 export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceOptions) {
-  const observeMs = options.observeMs ?? 0;
-  requireThat(Number.isInteger(observeMs) && observeMs >= 0 && observeMs <= 300_000, 'INVALID_OBSERVATION_DURATION');
+  const observeMs = validateObservationDuration(options.observeMs);
   const directory = resolve(options.outputDirectory);
   await mkdir(resolve(directory, '..'), { recursive: true, mode: 0o700 });
   await mkdir(directory, { mode: 0o700 });

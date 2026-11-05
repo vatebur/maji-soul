@@ -3,9 +3,11 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { bridgeCall, type EgoPagePort } from '../adapters/majsoul/ego-transport.ts';
 import type { LiveAcceptanceOptions } from './live.ts';
+import { validateObservationDuration } from './live-observation.ts';
 
 /** Run inside ego's documented Node environment; browser control stays in this process. */
 export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptanceOptions, runtime: string): Promise<any> {
+  const observeMs = validateObservationDuration(options.observeMs);
   const child = spawn(runtime, [fileURLToPath(new URL('./live-child.ts', import.meta.url))], { stdio: ['pipe', 'pipe', 'pipe'] });
   // Child diagnostics never enter page data or the report (and cannot expose raw frames).
   child.stderr.resume();
@@ -22,7 +24,6 @@ export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptan
       void bridgeCall(page, 'pause').catch(() => {});
       reject(Error(code));
     };
-    const observeMs = Number.isInteger(options.observeMs) && options.observeMs! > 0 ? Math.min(options.observeMs!,300_000) : 0;
     const timer = setTimeout(() => abort('LIVE_CHILD_TIMEOUT'), 45_000+observeMs);
     child.on('error', () => abort('LIVE_NODE_UNAVAILABLE'));
     lines.on('line', line => {

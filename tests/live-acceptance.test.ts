@@ -1,11 +1,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { acceptLivePage } from '../src/app/live.ts';
+import { acceptLiveViaNode } from '../src/app/live-broker.ts';
 import { replay } from '../src/app/replay.ts';
 import { createLiveScenario as scenario, ScriptedPage } from './live-helpers.ts';
+
+test('invalid observation durations are rejected before output creation, child startup or Page calls', async () => {
+  const h = await scenario();
+  try {
+    for (const value of [-1, 0.5, 1_800_001, Number.NaN, Number.POSITIVE_INFINITY, '1800000', false, null]) {
+      const options = { ...h.options, observeMs: value as number };
+      await assert.rejects(acceptLivePage(h.page, options), /INVALID_OBSERVATION_DURATION/);
+      await assert.rejects(acceptLiveViaNode(h.page, options, '/must-not-start-maji-node'), /INVALID_OBSERVATION_DURATION/);
+    }
+    assert.deepEqual(h.page.calls, []);
+    await assert.rejects(access(h.options.outputDirectory), { code: 'ENOENT' });
+  } finally { await h.cleanup(); }
+});
 
 test('production acceptance assembly persists exactly one discard and exports an independently replayable capture', async () => {
   const h = await scenario();

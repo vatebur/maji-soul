@@ -84,12 +84,14 @@ async function scenario(mode:LifecyclePage['mode']) {
   return{directory,page,options,cleanup:()=>rm(directory,{recursive:true,force:true})};
 }
 
-test('production observer follows draw, dealer repeat, abortive draw, next dealer and full match result without sending',async()=>{
+test('maximum-length observer follows hand boundaries and stops at the full match result without sending',async t=>{
   const h=await scenario('sequence');
+  const timeouts=t.mock.method(globalThis,'setTimeout');
   try{
-    const report=await acceptLiveViaNode(h.page,h.options,process.execPath);
+    const report=await acceptLiveViaNode(h.page,{...h.options,observeMs:1_800_000},process.execPath);
     assert.equal(report.status,'passed',JSON.stringify(report));
     assert.equal(report.scope,'lifecycle-observation');
+    assert.ok(timeouts.mock.calls.some(call=>call.arguments[1]===1_845_000));
     assert.deepEqual(report.lifecycle,{handStarts:2,handEnds:3,matchEnds:1,reconnects:0,handOrdinal:3,
       handStatus:'finished',matchStatus:'finished',matchEndPending:false,awaitingSettlement:false,recovering:false});
     assert.equal(h.page.sends,0);assert.equal(report.counts.confirmations,0);
