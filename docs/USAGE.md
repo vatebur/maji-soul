@@ -44,7 +44,7 @@ vfox exec nodejs@24.22.1 -- node scripts/build-phase1-fixtures.ts
 
 ## 受控实场单步
 
-先按 ego-browser 技能取得已授权的活动 TaskSpace 与页面，当前支持 Unity WebGL 4.0.51。命令不创建／抢占用户空间，也不自动建房。只有四人东风、300＋0 秒、三电脑友人房可验收；自动和牌须人工开启并视觉读回。
+先按 ego-browser 技能取得已授权的活动 TaskSpace 与页面，当前支持 Unity WebGL 4.0.51。命令不创建／抢占用户空间，也不自动建房。只有四人东风、300＋0 秒、三电脑友人房可验收；倒计时与自动和牌均由程序截图读回；当前只支持 Unity 4.0.51、2036×918 CSS 像素、DPR=1、未滚动页面。布局或字形无法核实时拒发，不要求人工输入秒数。
 
 ```sh
 # 示例空间号／页面标签须替换成实际已授权值。
@@ -52,13 +52,13 @@ vfox exec nodejs@24.22.1 -- npm start -- live-install 15 p1
 # 安装后再开局，确保游戏连接从第一帧经过统一请求号分配。
 # 已有游戏连接或需要换执行进程时，受控重载并从新连接捕获：
 vfox exec nodejs@24.22.1 -- npm start -- live-reconnect 15 p1
-# 页面恢复后重新读回房型、自动和牌、源step及倒计时，再填本机JSON。
-vfox exec nodejs@24.22.1 -- npm start -- live-sync 15 p1 /absolute/path/readback.json
+# 页面恢复后自动采集两次同步和倒计时，检测并恢复自动和牌，再执行同步。
+vfox exec nodejs@24.22.1 -- npm start -- live-sync 15 p1 /absolute/path/live-options.json
 # 新一次运行前重新取得桥接执行代际及新读回；下面命令显式尝试一次摸切：
-vfox exec nodejs@24.22.1 -- npm start -- live-once 15 p1 /absolute/path/readback.json
+vfox exec nodejs@24.22.1 -- npm start -- live-once 15 p1 /absolute/path/live-options.json
 ```
 
-`readback.json` 最小结构如下，数值均需按当前页面实际填写；过期读回、错误 step、未验证自动和牌会拒发。`outputDirectory` 必须是尚不存在的绝对目录。
+`live-options.json` 最小结构如下；不再填写 `countdown`。房型仍须与认证响应一致，`room.autoWin` 的声明会被当前页面的自动读回替代。`outputDirectory` 必须是尚不存在的绝对目录。
 
 ```json
 {
@@ -69,17 +69,15 @@ vfox exec nodejs@24.22.1 -- npm start -- live-once 15 p1 /absolute/path/readback
       "players": 4, "length": "east", "displayTimeSetting": "300+0", "computerSeats": 3,
       "verifiedOptions": {"doraRule": "standard-riichi"}, "protocolVersion": "4.0.51"
     },
-    "autoWin": "verified-on"
-  },
-  "countdown": {
-    "source": "client-countdown", "step": 9,
-    "sampledAt": "2026-11-05T13:33:50.000Z", "remainingMs": 120000, "uncertaintyMs": 5000
+    "autoWin": "unknown"
   },
   "sourceVersion": "majsoul-4.0.51/proto-1c332959d97f"
 }
 ```
 
-手动截图读回时间经过后须扣除已耗时间，并用当前 `sampledAt` 记录保守剩余值；采样与同步响应相差须小于 5 秒。页面发出许可后最长 1 秒有效，人工单步预算最多 30 秒。开局首弃没有可验证摸牌实例，不开放执行；等待独立 ActionDealTile。`pauseBeforeDispatch:true` 可在受控验收中准备后暂停，期望 not-dispatched 且发送计数不增。
+每个窗口自动采集同小局、同 step、同页面的两次同步，间隔至少 2 秒，核对服务器已耗时的秒单位与客户端倒计时，并预留完整 RTT＋2 秒量化误差及 250ms 发送余量。过期、重连旧样本、暂停或不支持的追加时间语义均拒发。最终页面许可最长 1 秒，并受单调时钟和开关复核约束；人工秒数不能替代它。开局首弃没有可验证摸牌实例，仍不开放执行；等待独立 ActionDealTile。`pauseBeforeDispatch:true` 可验证 not-dispatched 且发送计数不增。
+
+报告的 `programPaused`／旧字段 `paused` 仅指程序执行器已暂停；客户端自动和牌开关保持开启，仍可能自行和牌。人工接管时如需关闭它，请在页面关掉“和”并确认。程序不会把这类客户端发送记作程序发送。新增实场验收步骤见[自动化门槛](./validation/automation-gates.md)。
 
 所有运行默认共用 `data/live/state.sqlite`，报告／脱敏 capture 存入新的 outputDirectory。`databasePath` 仅供隔离测试或明确管理同一持久台账；不要为重试另建数据库。旧 uncertain／未决动作须保留原台账并同步对账；新 session 不能绕过。任一阻塞返回 `status:blocked`，CLI 退出码 2；不会自动重试。普通单步结束及异常路径会暂停；远端控制失败关闸。
 

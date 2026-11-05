@@ -2,6 +2,9 @@ import type { GameObservation, GameProjection, HandInitialView, LegalAction, Mel
 import { doraFromIndicator, eventIdFor, known, reduceObservation, seats, unknown } from '../../domain/game/reducer.ts';
 import { canonical, cursorParts, digest, requireThat } from '../../domain/game/value.ts';
 import { integer, parseObservation, timestamp } from '../../schemas/game.ts';
+import type { VerifiedOperationTiming } from './operation-timing.ts';
+import { legalOperationActions, type OfferedOperations } from './actions.ts';
+export type { VerifiedOperationTiming } from './operation-timing.ts';
 
 export interface NormalizeContext {
   projection: GameProjection;
@@ -13,11 +16,6 @@ export interface NormalizeContext {
   /** Historical offers are expired; only the last restore action may open a window. */
   historyReplay?: boolean;
   timing?: VerifiedOperationTiming;
-}
-
-/** A client countdown readback, tied to the exact action step, in milliseconds. */
-export interface VerifiedOperationTiming {
-  source: 'client-countdown'; step: number; sampledAt: string; remainingMs: number; uncertaintyMs: number;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -37,9 +35,17 @@ function scoreList(value: unknown) {
 export function operationDeadline(operation: Record<string, unknown>, context: NormalizeContext, sourceEventId: string) {
   const timing = context.timing;
   if (!timing) return unknown('DEADLINE_PROVENANCE_UNVERIFIED');
-  requireThat(timing.source === 'client-countdown' && timing.step === context.step, 'TIMING_SCOPE_MISMATCH');
+  requireThat(['client-countdown', 'protocol-operation'].includes(timing.source) && timing.step === context.step, 'TIMING_SCOPE_MISMATCH');
   timestamp(timing.sampledAt); integer(timing.remainingMs, 1, 600_000); integer(timing.uncertaintyMs, 1, 120_000);
   integer(operation.time_fixed, 0, 600_000); integer(operation.time_add, 0, 600_000);
+  if (timing.source === 'protocol-operation') {
+    requireThat(context.source === 'majsoul-sync' && timing.origin === 'sync-game' && timing.connectionEpoch === context.connectionEpoch && timing.sampledAt === context.receivedAt, 'TIMING_SCOPE_MISMATCH');
+    integer(timing.pageEpoch, 1); integer(timing.fixedMs, 1, 600_000); integer(timing.addMs, 0, 0);
+    integer(timing.elapsedMs, 0, 1_200_000); integer(timing.networkAllowanceMs, 0, 30_000); integer(timing.quantizationAllowanceMs, 2_000, 120_000);
+    requireThat(Number.isFinite(timing.sampledMonoMs) && timing.sampledMonoMs >= 0 && timing.fixedMs === operation.time_fixed && timing.addMs === operation.time_add &&
+      timing.remainingMs === timing.fixedMs + timing.addMs - timing.elapsedMs && timing.uncertaintyMs === timing.networkAllowanceMs + timing.quantizationAllowanceMs, 'COUNTDOWN_READBACK_MISMATCH');
+    requireThat(timing.remainingMs > timing.uncertaintyMs + 250, 'COUNTDOWN_EXPIRED');
+  }
   requireThat(timing.remainingMs <= operation.time_fixed + operation.time_add && Math.abs(Date.parse(timing.sampledAt) - Date.parse(context.receivedAt)) <= 5_000, 'COUNTDOWN_READBACK_MISMATCH');
   const at = Date.parse(timing.sampledAt) + timing.remainingMs;
   requireThat(at >= Date.parse(context.receivedAt), 'COUNTDOWN_EXPIRED');
@@ -83,22 +89,19 @@ export function normalizeNewRound(payload: unknown, context: NewRoundContext): G
   return [hand];
 }
 
-function offerDiscard(offered: Record<string, unknown>, context: NormalizeContext, permitted: boolean): GameObservation | undefined {
+function offerDiscard(offered: Record<string, unknown>, context: NormalizeContext, permitted: boolean, autoWinKind?: 'tsumo' | 'ron'): GameObservation | undefined {
   requireThat(Array.isArray(offered.operation_list) && offered.operation_list.length <= 16, 'INVALID_OPERATION_LIST');
   const operations = offered.operation_list.map(record);
   if (!operations.length) return;
   const { projection } = context, current = projection.state!;
   integer(offered.seat, 0, 3);
-  requireThat(offered.seat === current.ownSeat && operations.length === 1 && operations[0]!.type === 1, 'UNSUPPORTED_OPERATION');
-  for (const field of ['combination', 'change_tiles', 'change_tile_states']) requireThat(operations[0]![field] === undefined || Array.isArray(operations[0]![field]) && operations[0]![field].length === 0, 'UNVERIFIED_OPERATION_RESTRICTIONS');
-  requireThat(operations[0]!.gap_type === undefined || operations[0]!.gap_type === 0, 'UNVERIFIED_OPERATION_RESTRICTIONS');
-  requireThat(permitted && current.players[current.ownSeat].riichi === 'none', 'UNVERIFIED_DISCARD_WINDOW');
-  const drawnRef = current.drawnTileRef; requireThat(drawnRef.known && drawnRef.value !== null, 'DRAWN_TILE_UNKNOWN');
+  const wins = operations.filter(o => o.type === 8 || o.type === 9);
+  if (wins.length) requireThat(wins.length === 1 && (wins[0]!.type === 8 ? autoWinKind === 'tsumo' : autoWinKind === 'ron'), 'AUTO_WIN_OPERATION_MISMATCH');
+  else if (operations.some(o => [1,4,6,7].includes(o.type as number))) requireThat(permitted, 'UNVERIFIED_DISCARD_WINDOW');
   const sourceCursor = `${context.sourceStream}:${context.step}`;
   const windowId = `window-${digest([projection.gameMatchKey, projection.gameHandKey, context.connectionEpoch, sourceCursor]).slice(0, 24)}`;
   const evidenceId = eventIdFor(projection.sessionId, projection.sequence + 1);
-  const candidates: LegalAction[] = current.ownConcealed.map(t => ({ id: `discard-${digest([windowId, t.instanceId]).slice(0, 24)}`,
-    action: { kind: 'discard', tile: t.instanceId, tsumogiri: t.instanceId === drawnRef.value }, authority: 'executor', label: `打 ${t.code}`, evidenceEventIds: [evidenceId] }));
+  const candidates = legalOperationActions(current, offered as unknown as OfferedOperations, windowId, evidenceId);
   return parseObservation({ schemaVersion: 1, observationId: `observation-${digest([context.connectionEpoch, sourceCursor, 'window']).slice(0, 24)}`,
     connectionEpoch: context.connectionEpoch, source: context.source ?? 'majsoul-network', sourceDedupKey: `${sourceCursor}:window`, receivedAt: context.receivedAt,
     type: 'OperationOffered', payload: { window: { id: windowId, connectionEpoch: context.connectionEpoch, openedAt: context.receivedAt,
@@ -119,7 +122,7 @@ export function majsoulTile(value: unknown): TileCode {
  * insufficient. Decoders materialize protobuf's declared scalar defaults.
  */
 export function normalizeAction(name: string, payload: unknown, context: NormalizeContext): GameObservation[] {
-  requireThat(['ActionDealTile', 'ActionDiscardTile', 'ActionChiPengGang'].includes(name), 'UNSUPPORTED_PROTOCOL_ACTION');
+  requireThat(['ActionDealTile', 'ActionDiscardTile', 'ActionChiPengGang', 'ActionAnGangAddGang'].includes(name), 'UNSUPPORTED_PROTOCOL_ACTION');
   const input = record(payload), { projection } = context, state = projection.state;
   integer(context.step, 0, 999_999_999); integer(context.connectionEpoch); timestamp(context.receivedAt);
   const sourceCursor = `${context.sourceStream}:${context.step}`; cursorParts(sourceCursor);
@@ -165,7 +168,7 @@ export function normalizeAction(name: string, payload: unknown, context: Normali
     const riichi = flag(input.is_liqi), doubleRiichi = flag(input.is_wliqi);
     append('TileDiscarded', { actor, tile: majsoulTile(input.tile), tsumogiri: known(flag(input.moqie)),
       riichiDeclaration: riichi || doubleRiichi }, 'discard', true);
-  } else {
+  } else if (name === 'ActionChiPengGang') {
     integer(input.type, 0, 2);
     requireThat(Array.isArray(input.tiles) && Array.isArray(input.froms) && input.tiles.length === input.froms.length && input.tiles.length === (input.type === 2 ? 4 : 3), 'INVALID_PROTOCOL_MELD');
     input.froms.forEach(s => integer(s, 0, 3));
@@ -179,6 +182,33 @@ export function normalizeAction(name: string, payload: unknown, context: Normali
       const index = available.findIndex(t => t.code === tile); requireThat(index >= 0, 'MELD_CONSUMED_MISMATCH'); consumed.push(available.splice(index, 1)[0]!.instanceId);
     }
     append('MeldDeclared', { meld, consumed }, 'meld', true);
+  } else {
+    integer(input.type, 2, 3);
+    const code = majsoulTile(input.tiles), own = projected.state!.players[actor];
+    const kind = input.type === 3 ? 'closed-kan' : 'added-kan';
+    let tiles: TileCode[], consumed: string[] = [], previous: Meld | undefined;
+    if (kind === 'closed-kan') {
+      if (actor === state.ownSeat) {
+        const physical = projected.state!.ownConcealed.filter(t => t.code.replace('r', '') === code.replace('r', ''));
+        requireThat(physical.length === 4, 'MELD_CONSUMED_MISMATCH'); tiles = physical.map(t => t.code); consumed = physical.map(t => t.instanceId);
+      } else {
+        // Standard riichi has one red five; revealing all four proves its presence.
+        tiles = [code, code, code, code].map(t => t.replace('r', '') as TileCode);
+        if (code[0] === '5' && code[1] !== 'z') {
+          requireThat(projection.room?.rules.verifiedOptions.redFives === true, 'RED_FIVE_RULE_UNVERIFIED');
+          tiles[0] = `${code.slice(0, 2)}r` as TileCode;
+        }
+      }
+    } else {
+      const pons = own.melds.filter(m => m.kind === 'pon' && m.tiles.every(t => t.replace('r', '') === code.replace('r', '')));
+      requireThat(pons.length === 1, 'AMBIGUOUS_KAN_UPGRADE'); previous = pons[0]!; tiles = [...previous.tiles, code];
+      if (actor === state.ownSeat) {
+        const physical = projected.state!.ownConcealed.filter(t => t.code === code); requireThat(physical.length === 1, 'MELD_CONSUMED_MISMATCH'); consumed = [physical[0]!.instanceId];
+      }
+    }
+    const meld: Meld = { id: `meld-${digest([projection.gameMatchKey, projection.gameHandKey, sourceCursor]).slice(0, 24)}`, actor, kind, tiles,
+      ...(previous ? { fromSeat: previous.fromSeat!, calledTileIndex: previous.calledTileIndex!, upgradedFrom: previous.id } : {}) };
+    append('MeldDeclared', { meld, consumed }, 'meld', true);
   }
 
   if (input.doras !== undefined) {
@@ -191,7 +221,8 @@ export function normalizeAction(name: string, payload: unknown, context: Normali
   }
 
   if (!context.historyReplay && input.operation !== undefined && input.operation !== null) {
-    const offered = offerDiscard(record(input.operation), { ...context, projection: projected }, name === 'ActionDealTile' && actor === state.ownSeat);
+    const offered = offerDiscard(record(input.operation), { ...context, projection: projected }, (name === 'ActionDealTile' || name === 'ActionChiPengGang') && actor === state.ownSeat,
+      name === 'ActionDealTile' && actor === state.ownSeat ? 'tsumo' : (name === 'ActionDiscardTile' || name === 'ActionAnGangAddGang') && actor !== state.ownSeat ? 'ron' : undefined);
     if (offered) { projected = reduceObservation(projected, offered); observations.push(offered); }
   }
   return observations;

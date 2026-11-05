@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { randomUUID } from 'node:crypto';
 import protobuf from 'protobufjs';
+import { createOperationRules, legalOperationActions, expectedActionFor, type OfferedOperations } from '../src/adapters/majsoul/actions.ts';
+import { initialView } from '../scripts/build-phase1-fixtures.ts';
+import type { GameState, TileCode } from '../src/domain/game/types.ts';
 
 const proto = `syntax="proto3"; package lq;
 message Wrapper { string name=1; bytes data=2; }
@@ -11,24 +14,28 @@ message Error { uint32 code=1; }
 message Empty {}
 message ReqAuthGame { uint32 account_id=1; string token=2; string game_uuid=3; }
 message ResAuthGame { repeated uint32 seat_list=1; }
-message ReqInputOperation { uint32 type=1; string tile=2; bool moqie=3; uint32 timeuse=4; }
+message ReqInputOperation { uint32 type=1; string tile=2; bool moqie=3; uint32 timeuse=4; uint32 index=5; }
+message ReqInputChiPengGang { uint32 type=1; uint32 index=2; uint32 timeuse=3; }
 message Response { Error error=1; }
 message ReqSyncGame { string round_id=1; uint32 step=2; }
 message ResSyncGame { Error error=1; bool is_end=2; uint32 step=3; GameRestore game_restore=4; }
-message GameRestore { repeated ActionPrototype actions=1; uint32 passed_waiting_time=2; }
+message GameRestore { repeated ActionPrototype actions=1; uint32 passed_waiting_time=2; uint32 game_state=3; uint32 last_pause_time_ms=4; }
 message ActionPrototype { uint32 step=1; string name=2; bytes data=3; }
 message ActionMJStart {}
 message OptionalOperation { uint32 type=1; repeated string combination=2; }
 message OptionalOperationList { uint32 seat=1; repeated OptionalOperation operation_list=2; uint32 time_fixed=3; uint32 time_add=4; }
 message ActionNewRound { uint32 chang=1; uint32 ju=2; uint32 ben=3; repeated string tiles=4; repeated int32 scores=5; repeated string doras=6; uint32 left_tile_count=7; string md5=8; OptionalOperationList operation=9; }
 message ActionDealTile { uint32 seat=1; string tile=2; uint32 left_tile_count=3; OptionalOperationList operation=4; }
-message ActionDiscardTile { uint32 seat=1; string tile=2; bool moqie=3; bool is_liqi=4; bool is_wliqi=5; }
+message ActionDiscardTile { uint32 seat=1; string tile=2; bool moqie=3; bool is_liqi=4; bool is_wliqi=5; OptionalOperationList operation=6; }
+message HuleInfo { uint32 seat=1; bool zimo=2; }
+message ActionHule { repeated HuleInfo hules=1; }
 `;
 const rpcMap: Record<string, { req: string; resp: string }> = {
   '.lq.FastTest.authGame': { req: 'lq.ReqAuthGame', resp: 'lq.ResAuthGame' },
   '.lq.FastTest.heartBeat': { req: 'lq.Empty', resp: 'lq.Response' },
   '.lq.FastTest.syncGame': { req: 'lq.ReqSyncGame', resp: 'lq.ResSyncGame' },
   '.lq.FastTest.inputOperation': { req: 'lq.ReqInputOperation', resp: 'lq.Response' },
+  '.lq.FastTest.inputChiPengGang': { req: 'lq.ReqInputChiPengGang', resp: 'lq.Response' },
 };
 const schema = protobuf.parse(proto, { keepCase: true }).root;
 const encode = (name: string, value: unknown) => schema.lookupType(name).encode(schema.lookupType(name).fromObject(value as object)).finish();
@@ -36,7 +43,21 @@ const responseFrame = (id: number, method: string, value = {}) => new Uint8Array
 const requestFrame = (id: number, method: string, value = {}) => new Uint8Array([2, id & 255, id >> 8, ...encode('lq.Wrapper', { name: method, data: encode(rpcMap[method]!.req, value) })]);
 const packetId = (packet: Uint8Array) => packet[1]! + packet[2]! * 256;
 const source = readFileSync('src/adapters/majsoul/browser-bridge.js', 'utf8').replace('export function', 'function');
-function fixture(capacity = 256) {
+const phase2Filler:TileCode[]=['1p','2p','3p','4p','5p','6p','7p','8p','9p','1s','2s','3s','4s','6s'];
+function phase2State(owned:TileCode[],called?:TileCode):GameState {
+  const view=initialView();view.ownConcealed=[...owned,...phase2Filler.slice(0,(called?13:14)-owned.length)].map((code,i)=>({instanceId:`physical-${i}`,code}));
+  view.players[0].concealedCount={known:true,value:view.ownConcealed.length};
+  view.currentActor=called?{known:false,reason:'awaiting-call'}:{known:true,value:0};
+  view.drawnTileRef={known:true,value:called?null:view.ownConcealed.at(-1)!.instanceId};
+  const state:GameState={...view,sessionId:'session',matchId:'match',handId:'hand',connectionEpoch:1,stateVersion:4,trust:'trusted',trustIssues:[]};
+  if(called){
+    state.players[3].river.push({tile:called,tsumogiri:true,riichiDeclaration:false,eventId:'offered-river'});
+    state.latestAction={eventId:'offered-river',handId:'hand',actor:3,kind:'discard',tiles:[called],tsumogiri:{known:true,value:true},origin:'unknown',observedAt:new Date().toISOString()};
+  }
+  return state;
+}
+const phase2Offer=(type:number,combination:string[]):OfferedOperations=>({seat:0,operation_list:[{type,combination}]});
+function fixture(capacity = 256, phase2ActionsEnabled = false) {
   class Socket extends EventTarget {
     readyState = 1;
     sent: Uint8Array[] = [];
@@ -44,12 +65,18 @@ function fixture(capacity = 256) {
     receive(raw: Uint8Array) { this.dispatchEvent(new MessageEvent('message', { data: raw.buffer })); }
     close() { this.readyState = 3; this.dispatchEvent(new Event('close')); }
   }
-  const window: Record<string, any> = { WebSocket: Socket, protobuf };
+  const window: Record<string, any> = Object.assign(new EventTarget(),{ WebSocket: Socket, protobuf });
+  let monoOffset=0,wallOffset=0;
+  class ContextDate extends Date { static now(){return Date.now()+wallOffset;} }
   const context = { window, WebSocket: Socket, Uint8Array, ArrayBuffer, TextDecoder, MessageEvent,
-    performance, crypto: { randomUUID }, Date, setTimeout, clearTimeout, proto, rpcMap, capacity };
-  runInNewContext(source + '\ninstallBrowserBridge({proto,rpcMap,ownSeat:0,capacity});', context);
+    performance:{ now:()=>performance.now()+monoOffset }, crypto: { randomUUID }, Date:ContextDate, setTimeout, clearTimeout, proto, rpcMap, capacity,
+    operationRulesSource:createOperationRules.toString(),phase2ActionsEnabled };
+  runInNewContext(source + '\ninstallBrowserBridge({proto,rpcMap,ownSeat:0,capacity,operationRulesSource,phase2ActionsEnabled});', context);
   const socket: Socket = new window.WebSocket('fixture');
   const bridge = window.__majiBridge;
+  const autoWin = (state='enabled') => bridge.ackAutoWin({source:'unity-button-pixels-v1',state,
+    observedAt:new Date().toISOString(),pageEpoch:bridge.read().pageEpoch,generation:bridge.read().generation,
+    step:bridge.read().lastStep,rgbaSha256:'a'.repeat(64)});
   const start = () => { socket.send(requestFrame(80, '.lq.FastTest.heartBeat')); socket.receive(responseFrame(packetId(socket.sent.at(-1)!), '.lq.FastTest.heartBeat')); };
   function action(name: string, step: number, payload: object) {
     const data = new Uint8Array(encode(`lq.${name}`, payload));
@@ -57,13 +84,26 @@ function fixture(capacity = 256) {
     for (let i = 0; i < data.length; i++) data[i] = data[i]! ^ ((base + 5 * i + keys[i % 9]!) & 255);
     socket.receive(new Uint8Array([1, ...encode('lq.Wrapper', { name: '.lq.ActionPrototype', data: encode('lq.ActionPrototype', { name, step, data }) })]));
   }
-  function opened() {
+  async function opened() {
     start();
     action('ActionNewRound', 0, { tiles: ['1m'], md5: 'first-hand' });
     action('ActionDealTile', 1, { seat: 0, tile: '2m', left_tile_count: 68, operation: { seat: 0, operation_list: [{ type: 1 }], time_fixed: 300000 } });
+    bridge.drain();
+    const work=bridge.sync(),id=packetId(socket.sent.at(-1)!);
+    socket.receive(responseFrame(id,'.lq.FastTest.syncGame',{step:2,game_restore:{game_state:1,last_pause_time_ms:0,passed_waiting_time:1,actions:[
+      {name:'ActionNewRound',step:0,data:encode('lq.ActionNewRound',{tiles:['1m'],md5:'first-hand'})},
+      {name:'ActionDealTile',step:1,data:encode('lq.ActionDealTile',{seat:0,tile:'2m',left_tile_count:68,operation:{seat:0,operation_list:[{type:1}],time_fixed:300000}})},
+    ]}}));
+    const raw=await work;bridge.ackSync({generation:raw.generation,step:1});
+    const timing={source:'protocol-operation',origin:'sync-game',step:1,connectionEpoch:1,pageEpoch:raw.pageEpoch,
+      sampledAt:raw.receivedAt,sampledMonoMs:raw.receivedMonoMs,remainingMs:299000,
+      uncertaintyMs:Math.ceil(raw.receivedMonoMs-raw.requestedMonoMs)+2000,fixedMs:300000,addMs:0,elapsedMs:1000,
+      networkAllowanceMs:Math.ceil(raw.receivedMonoMs-raw.requestedMonoMs),quantizationAllowanceMs:2000};
+    bridge.ackTiming(timing);
     const drained = bridge.drain();
     const expected = { generation: drained.generation, pageEpoch: drained.pageEpoch, step: drained.lastStep };
     bridge.pause({ processInstanceId: 'process', controlEpoch: 3, paused: false });
+    autoWin();
     const fence = { processInstanceId: 'process', sessionId: 'session', matchId: 'match', handId: 'hand', decisionId: 'decision', windowId: 'window', stateVersion: 4, connectionEpoch: 1, controlEpoch: 3 };
     const command = { attemptId: 'attempt', actionId: 'action', permitId: 'permit', fence, expiresAt: new Date(Date.now() + 1000).toISOString() };
     const selected = { id: 'action', action: { kind: 'discard', tile: 'instance', tsumogiri: true } };
@@ -71,10 +111,38 @@ function fixture(capacity = 256) {
       snapshot: { scope: fence, ...fence, sourceCursor: 'verified-hand:1', actionDeadline: new Date(Date.now() + 30000).toISOString(),
         legalActions: [selected], state: { ownSeat: 0, ownConcealed: [{ instanceId: 'instance', code: '2m' }] } },
       action: selected, tile: '2m', expected,
-      timing: { source: 'manual-client-countdown', budgetMs: 30000, observedAt: new Date().toISOString() } };
+      timing };
     return input;
   }
-  return { socket, bridge, window, Socket, action, opened, start };
+  async function openedCustom(state:GameState,offered:OfferedOperations,selectedIndex=0) {
+    const input:any=await opened();
+    const name=state.currentActor.known?'ActionDealTile':'ActionDiscardTile';
+    const payload=name==='ActionDealTile'?{seat:0,tile:'2m',left_tile_count:68,operation:{...offered,time_fixed:300000,time_add:0}}:
+      {seat:state.latestAction!.actor,tile:state.latestAction!.tiles[0],moqie:true,is_liqi:false,is_wliqi:false,operation:{...offered,time_fixed:300000,time_add:0}};
+    const work=bridge.sync(),id=packetId(socket.sent.at(-1)!);
+    socket.receive(responseFrame(id,'.lq.FastTest.syncGame',{step:2,game_restore:{game_state:1,last_pause_time_ms:0,passed_waiting_time:1,actions:[
+      {name:'ActionNewRound',step:0,data:encode('lq.ActionNewRound',{tiles:['1m'],md5:'first-hand'})},
+      {name,step:1,data:encode(`lq.${name}`,payload)},
+    ]}}));
+    const raw=await work;bridge.ackSync({generation:raw.generation,step:1});
+    const rtt=Math.ceil(raw.receivedMonoMs-raw.requestedMonoMs);
+    input.timing={...input.timing,sampledAt:raw.receivedAt,sampledMonoMs:raw.receivedMonoMs,pageEpoch:raw.pageEpoch,networkAllowanceMs:rtt,uncertaintyMs:rtt+2000};
+    bridge.ackTiming(input.timing);
+    const drained=bridge.drain();input.expected={generation:drained.generation,pageEpoch:drained.pageEpoch,step:drained.lastStep};
+    bridge.pause({processInstanceId:'process',controlEpoch:3,paused:false});autoWin();
+    const candidates=legalOperationActions(state,offered,'window','evidence'),selected=candidates[selectedIndex]!;
+    input.action=selected;input.snapshot.legalActions=candidates;input.snapshot.state=state;
+    input.command.actionId=selected.id;input.intent.actionId=selected.id;input.intent.actionSpec=structuredClone(selected.action);
+    input.intent.expectedAction=expectedActionFor(selected.action,state);
+    const spec=selected.action;
+    if(spec.kind==='discard'||spec.kind==='riichi-discard'){
+      const tile=state.ownConcealed.find(t=>t.instanceId===spec.tile)!;
+      input.tile=tile.code.endsWith('r')?`0${tile.code[1]}`:tile.code;
+      input.intent.tile=tile.code;input.intent.tsumogiri=spec.tsumogiri;
+    } else {delete input.tile;delete input.intent.tile;delete input.intent.tsumogiri;}
+    return input;
+  }
+  return { socket, bridge, window, Socket, action, opened, openedCustom,start, autoWin, advanceMono:(ms:number)=>{monoOffset+=ms;},advanceWall:(ms:number)=>{wallOffset+=ms;} };
 }
 
 test('mux shares one allocator, restores original client IDs and suppresses its own responses', async () => {
@@ -185,8 +253,8 @@ test('auth correlation exposes own seat and match UUID, removes accounts and tok
   f.bridge.restore();
 });
 
-test('durable intent and every fence field are checked before page preparation', () => {
-  const f = fixture(), input = f.opened();
+test('durable intent and every fence field are checked before page preparation', async () => {
+  const f = fixture(), input = await f.opened();
   for (const field of ['sessionId','matchId','handId','windowId','stateVersion','connectionEpoch','controlEpoch']) {
     const changed = structuredClone(input) as any;
     changed.intent[field] = `wrong-${field}`;
@@ -199,7 +267,7 @@ test('durable intent and every fence field are checked before page preparation',
 
 test('page pause, ingress and monotonic expiry block previously prepared commands without sending', async t => {
   for (const scenario of ['pause', 'ingress', 'expiry']) await t.test(scenario, async () => {
-    const f = fixture(), input = f.opened();
+    const f = fixture(), input = await f.opened();
     if (scenario === 'expiry') input.command.expiresAt = new Date(Date.now() + 20).toISOString();
     const prepared = f.bridge.prepare(input), count = f.socket.sent.length;
     if (scenario === 'pause') f.bridge.pause({ processInstanceId: 'process', controlEpoch: 4, paused: true });
@@ -215,7 +283,7 @@ test('page pause, ingress and monotonic expiry block previously prepared command
 });
 
 test('accepted RPC receipt remains distinct from action observation and a permit is used once', async () => {
-  const f = fixture(), input = f.opened();
+  const f = fixture(), input = await f.opened();
   const prepared = f.bridge.prepare(input);
   const work = f.bridge.dispatch({ command: input.command, token: prepared.token });
   const id = packetId(f.socket.sent.at(-1)!);
@@ -237,4 +305,197 @@ test('bounded queue closes execution on overflow', () => {
   assert.equal(f.bridge.read().queued, 8);
   assert.equal(f.bridge.read().reason, 'BRIDGE_QUEUE_OVERFLOW');
   f.bridge.restore();
+});
+
+test('automatic win proof expires monotonically and cannot survive a reconnect', async () => {
+  const f=fixture(),input=await f.opened();
+  f.autoWin('disabled');
+  assert.throws(()=>f.bridge.prepare(input),/AUTO_WIN_UNVERIFIED/);
+  f.autoWin();const prepared=f.bridge.prepare(input),before=f.socket.sent.length;
+  f.advanceMono(1001);
+  assert.equal((await f.bridge.dispatch({command:input.command,token:prepared.token})).delivery,'not-sent');
+  assert.equal(f.socket.sent.length,before);
+  f.autoWin();f.bridge.reconnect();
+  assert.equal(f.bridge.read().autoWin,null);
+  assert.throws(()=>f.autoWin(),/BRIDGE_UNTRUSTED/);
+  f.bridge.restore();
+});
+
+test('client win requests revoke a prepared discard and are counted separately', async () => {
+  for (const type of [8,9]) {
+    const f=fixture(),input=await f.opened(),prepared=f.bridge.prepare(input);
+    f.socket.send(requestFrame(18,'.lq.FastTest.inputOperation',{type}));
+    const wire=packetId(f.socket.sent.at(-1)!);f.socket.receive(responseFrame(wire,'.lq.FastTest.inputOperation'));
+    const before=f.socket.sent.length;
+    assert.equal((await f.bridge.dispatch({command:input.command,token:prepared.token})).delivery,'not-sent');
+    assert.equal(f.socket.sent.length,before);
+    assert.equal(f.bridge.read().stats.clientWinRequests,1);
+    assert.equal(f.bridge.read().stats.bridgeActionSends,0);
+    f.bridge.restore();
+  }
+});
+
+test('a win offer reserves the complete operation window for the client', async () => {
+  for (const type of [8,9]) {
+    const f=fixture(),input=await f.opened();
+    f.action('ActionDealTile',2,{seat:0,tile:'2m',left_tile_count:67,
+      operation:{seat:0,operation_list:[{type:1},{type}],time_fixed:300000}});
+    const read=f.bridge.drain();input.expected={generation:read.generation,pageEpoch:read.pageEpoch,step:read.lastStep};
+    input.snapshot.sourceCursor='verified-hand:2';f.autoWin();
+    assert.throws(()=>f.bridge.prepare(input),/CLIENT_AUTO_WIN_WINDOW/);
+    assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+  }
+});
+
+test('win diagnostics correlate offered client request, receipt and authoritative own win', async () => {
+  const f=fixture();await f.opened();
+  f.action('ActionDealTile',2,{seat:0,tile:'2m',left_tile_count:67,
+    operation:{seat:0,operation_list:[{type:8}],time_fixed:300000}});
+  f.bridge.drain();f.autoWin();
+  f.socket.send(requestFrame(19,'.lq.FastTest.inputOperation',{type:8}));
+  const id=packetId(f.socket.sent.at(-1)!);
+  assert.equal(f.bridge.read().lastClientWin.delivery,'pending');
+  f.socket.receive(responseFrame(id,'.lq.FastTest.inputOperation'));
+  f.action('ActionHule',3,{hules:[{seat:0,zimo:true}]});
+  const read=f.bridge.read();
+  assert.equal(read.lastClientWin.offered,true);assert.equal(read.lastClientWin.autoWinVerifiedAtRequest,true);
+  assert.equal(read.lastClientWin.delivery,'accepted');assert.equal(read.lastClientWin.step,2);
+  assert.equal(read.lastOwnWin.clientWinRequestId,id);assert.equal(read.lastOwnWin.step,3);
+  assert.equal(read.lastOwnWin.kind,'tsumo');assert.equal(read.lastOwnWin.pageEpoch,read.pageEpoch);
+  assert.equal(read.stats.authoritativeOwnWins,1);assert.equal(read.stats.bridgeActionSends,0);
+  f.bridge.restore();
+});
+
+test('automatic timing rejects manual provenance, forged samples and wrong protocol steps', async () => {
+  for(const field of ['source','step','sampledMonoMs','remainingMs','fixedMs','networkAllowanceMs']) {
+    const f=fixture(),input=await f.opened(),timing:any={...input.timing};
+    if(field==='source')timing.source='manual-client-countdown';else timing[field]+=1;
+    assert.throws(()=>f.bridge.ackTiming(timing),/TIMING_SCOPE_MISMATCH|COUNTDOWN_READBACK_MISMATCH/);
+    assert.throws(()=>f.bridge.prepare(input),/DEADLINE_PROVENANCE_UNVERIFIED/);
+    assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+  }
+});
+
+test('near-deadline budget and backward wall-clock jumps cannot revive a permit', async () => {
+  const f=fixture(),input=await f.opened();
+  f.advanceMono(input.timing.remainingMs-input.timing.uncertaintyMs-100);f.autoWin();
+  assert.throws(()=>f.bridge.prepare(input),/DEADLINE_EXCEEDED/);
+  assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+  const second=fixture(),selected=await second.opened(),permit=second.bridge.prepare(selected),before=second.socket.sent.length;
+  second.advanceMono(1100);second.advanceWall(-60000);
+  assert.equal((await second.bridge.dispatch({command:selected.command,token:permit.token})).delivery,'not-sent');
+  assert.equal(second.socket.sent.length,before);second.bridge.restore();
+});
+
+test('live offers require a fresh synchronization before automatic timing can be acknowledged', async () => {
+  const f=fixture(),input=await f.opened();
+  f.action('ActionDealTile',2,{seat:0,tile:'2m',left_tile_count:67,
+    operation:{seat:0,operation_list:[{type:1}],time_fixed:300000}});
+  assert.throws(()=>f.bridge.ackTiming({...input.timing,step:2}),/DEADLINE_PROVENANCE_UNVERIFIED/);
+  assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+});
+
+test('the phase 2 Page gate rejects a legal call before allocating any game send',async()=>{
+  const f=fixture(),state=phase2State(['3m','4m'],'2m'),input=await f.openedCustom(state,phase2Offer(2,['3m|4m']));
+  const before=f.socket.sent.length;
+  assert.throws(()=>f.bridge.prepare(input),/PHASE2_ACTIONS_DISABLED/);
+  assert.equal(f.socket.sent.length,before);assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+});
+
+test('phase 2 final sends select exact call, kan and riichi protocol candidates',async t=>{
+  const added=phase2State(['5mr']);added.ownConcealed=added.ownConcealed.slice(0,11);added.players[0].concealedCount={known:true,value:11};
+  added.drawnTileRef={known:true,value:added.ownConcealed.at(-1)!.instanceId};
+  added.players[0].melds=[{id:'prior-pon',actor:0,kind:'pon',tiles:['5m','5m','5m'],fromSeat:2,calledTileIndex:1}];
+  added.players[2].river=[{tile:'5m',tsumogiri:true,riichiDeclaration:false,calledBy:0,eventId:'pon-source'}];
+  const cases=[
+    {name:'chi',state:phase2State(['3m','4m'],'2m'),offered:phase2Offer(2,['3m|4m']),selected:0,method:'.lq.FastTest.inputChiPengGang',params:{type:2,index:0,timeuse:0}},
+    {name:'pon-red-index-1',state:phase2State(['5m','5mr','5m'],'5m'),offered:phase2Offer(3,['5m|5m','5m|0m']),selected:1,method:'.lq.FastTest.inputChiPengGang',params:{type:3,index:1,timeuse:0}},
+    {name:'open-kan-red',state:phase2State(['5m','5m','5mr'],'5m'),offered:phase2Offer(5,['5m|5m|0m']),selected:0,method:'.lq.FastTest.inputChiPengGang',params:{type:5,index:0,timeuse:0}},
+    {name:'closed-kan-index-1',state:phase2State(['5m','5mr','5m','5m','7s','7s','7s','7s']),offered:phase2Offer(4,['7s|7s|7s|7s','5m|0m|5m|5m']),selected:1,method:'.lq.FastTest.inputOperation',params:{type:4,index:1,timeuse:0}},
+    {name:'added-kan-red',state:added,offered:phase2Offer(6,['5m|5m|5m']),selected:0,method:'.lq.FastTest.inputOperation',params:{type:6,index:0,timeuse:0}},
+    {name:'riichi-red-physical',state:phase2State(['5mr']),offered:phase2Offer(7,['0m','9p']),selected:0,method:'.lq.FastTest.inputOperation',params:{type:7,tile:'0m',moqie:false,timeuse:0}},
+  ];
+  for(const c of cases)await t.test(c.name,async()=>{
+    const f=fixture(256,true),input=await f.openedCustom(c.state,c.offered,c.selected),prepared=f.bridge.prepare(input),before=f.socket.sent.length;
+    if('consumed' in input.action.action && c.name.includes('red'))assert.ok(input.action.action.consumed.some((id:string)=>c.state.ownConcealed.find(tile=>tile.instanceId===id)?.code==='5mr'));
+    const work=f.bridge.dispatch({command:input.command,token:prepared.token});
+    assert.equal(f.socket.sent.length,before+1);
+    const packet=f.socket.sent.at(-1)!,envelope=schema.lookupType('lq.Wrapper').decode(packet.subarray(3)) as unknown as {name:string;data:Uint8Array};
+    assert.equal(envelope.name,c.method);
+    const type=schema.lookupType(rpcMap[c.method]!.req),params=type.toObject(type.decode(envelope.data));
+    assert.deepEqual(params,c.params);
+    f.socket.receive(responseFrame(packetId(packet),c.method));assert.equal((await work).delivery,'accepted');
+    assert.equal(f.bridge.read().stats.bridgeActionSends,1);f.bridge.restore();
+  });
+});
+
+test('phase 2 preparation rederives combination, consumed references and durable actionSpec',async()=>{
+  for(const tamper of ['index','combination','consumed','actionSpec']){
+    const f=fixture(256,true),input=await f.openedCustom(phase2State(['5m','5mr','5m'],'5m'),phase2Offer(3,['5m|5m','5m|0m']),1);
+    const before=f.socket.sent.length;
+    if(tamper==='actionSpec')input.intent.actionSpec.consumed[0]='old-physical';
+    else {
+      if(tamper==='index')input.action.action.operation.index=0;
+      if(tamper==='combination')input.action.action.operation.combination='5m|5m';
+      if(tamper==='consumed')input.action.action.consumed[0]='old-physical';
+      // Simulate a malicious candidate that also appears in the immutable input list:
+      // the Page must still compare its complete action against the current wire offer.
+      input.snapshot.legalActions=[input.action];input.intent.actionSpec=structuredClone(input.action.action);
+    }
+    assert.throws(()=>f.bridge.prepare(input),/ACTION_NOT_LEGAL|DURABLE_INTENT_REQUIRED/);
+    assert.equal(f.socket.sent.length,before);assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+  }
+});
+
+test('phase 2 permits are revoked by client winning, ingress and reconnect',async()=>{
+  for(const revoke of ['client-win','ingress','reconnect']){
+    const f=fixture(256,true),input=await f.openedCustom(phase2State(['3m','4m'],'2m'),phase2Offer(2,['3m|4m'])),prepared=f.bridge.prepare(input);
+    if(revoke==='client-win'){
+      f.socket.send(requestFrame(20,'.lq.FastTest.inputOperation',{type:9}));
+      f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.inputOperation'));
+    } else if(revoke==='ingress')f.action('ActionDiscardTile',2,{seat:1,tile:'9s',moqie:true});
+    else f.bridge.reconnect();
+    const before=f.socket.sent.length,result=await f.bridge.dispatch({command:input.command,token:prepared.token});
+    assert.equal(result.delivery,'not-sent');assert.equal(f.socket.sent.length,before);assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+  }
+});
+
+test('an immediate client win retains the preceding switch readback without weakening send fences',async()=>{
+  const f=fixture();await f.opened();
+  f.action('ActionDealTile',2,{seat:0,tile:'2m',left_tile_count:67,operation:{seat:0,operation_list:[{type:8}],time_fixed:300000}});
+  // Unity handles the offer immediately, before an asynchronous screenshot could run.
+  f.socket.send(requestFrame(22,'.lq.FastTest.inputOperation',{type:8}));
+  const id=packetId(f.socket.sent.at(-1)!);f.socket.receive(responseFrame(id,'.lq.FastTest.inputOperation'));
+  f.action('ActionHule',3,{hules:[{seat:0,zimo:true}]});
+  const result=f.bridge.read();
+  assert.equal(result.lastClientWin.autoWinVerifiedAtRequest,false);
+  assert.equal(result.lastClientWin.priorAutoWinReadback.state,'enabled');
+  assert.equal(result.lastClientWin.priorAutoWinReadback.step,1);
+  assert.equal(result.lastClientWin.step,2);assert.equal(result.lastOwnWin.clientWinRequestId,id);
+  assert.ok(result.lastClientWin.priorAutoWinReadback.ageAtRequestMs>=result.lastClientWin.priorAutoWinReadback.ageAtOfferMs);
+  f.action('ActionNewRound',0,{tiles:['1m'],md5:'next-hand'});
+  assert.equal(f.bridge.read().lastAutoWinReadback,null);assert.equal(f.bridge.read().lastClientWin,null);
+  f.bridge.restore();
+});
+
+test('local toolbar input, keys, resizing and scrolling revoke final sends and listeners are removed',async()=>{
+  for(const name of ['pointerdown','keydown','resize','scroll']){
+    const f=fixture(256,true),input=await f.openedCustom(phase2State(['3m','4m'],'2m'),phase2Offer(2,['3m|4m'])),prepared=f.bridge.prepare(input);
+    const before=f.socket.sent.length,generation=f.bridge.read().generation;
+    f.window.dispatchEvent(new Event(name));
+    assert.equal(f.bridge.read().generation,generation+1);assert.equal(f.bridge.read().autoWin,null);assert.equal(f.bridge.read().lastAutoWinReadback,null);
+    const result=await f.bridge.dispatch({command:input.command,token:prepared.token});
+    assert.equal(result.delivery,'not-sent');assert.equal(f.socket.sent.length,before);assert.equal(f.bridge.read().stats.bridgeActionSends,0);
+    f.bridge.restore();const after=f.bridge.read().generation;f.window.dispatchEvent(new Event(name));assert.equal(f.bridge.read().generation,after);
+  }
+});
+
+test('an unknown switch readback revokes the previous enabled proof and trigger attribution',async()=>{
+  const f=fixture(),input=await f.opened();f.autoWin('unknown');
+  assert.equal(f.bridge.read().lastAutoWinReadback.state,'unknown');
+  assert.throws(()=>f.bridge.prepare(input),/AUTO_WIN_UNVERIFIED/);
+  f.action('ActionDealTile',2,{seat:0,tile:'2m',left_tile_count:67,operation:{seat:0,operation_list:[{type:8}],time_fixed:300000}});
+  f.socket.send(requestFrame(23,'.lq.FastTest.inputOperation',{type:8}));
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.inputOperation'));
+  assert.equal(f.bridge.read().lastClientWin.priorAutoWinReadback,null);f.bridge.restore();
 });

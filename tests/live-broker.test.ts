@@ -44,7 +44,7 @@ test('Page failure replies cross stdio as a safe code and cannot prepare or leak
   try {
     const sensitive = 'COOKIE=SHOULD_NOT_LEAK';
     const page: EgoPagePort = { evaluate: async (source, argument) => {
-      if ((argument as { method: string }).method === 'sync') throw new Error(sensitive);
+      if ((argument as { method: string }).method === 'automaticTiming') throw new Error(sensitive);
       return h.page.evaluate(source, argument);
     } };
     const report = await acceptLiveViaNode(page, { ...h.options, discardOnce: true }, process.execPath);

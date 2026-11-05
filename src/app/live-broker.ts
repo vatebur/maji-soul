@@ -34,7 +34,10 @@ export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptan
         try {
           const result = await bridgeCall(page, message.method, message.argument);
           child.stdin.write(JSON.stringify({ id: message.id, ok: true, result }) + '\n');
-        } catch { child.stdin.write(JSON.stringify({ id: message.id, ok: false }) + '\n'); }
+        } catch (error) {
+          const code = error instanceof Error && /^[A-Z][A-Z0-9_]+$/.test(error.message) ? error.message : 'EGO_PAGE_FAILED';
+          child.stdin.write(JSON.stringify({ id: message.id, ok: false, code }) + '\n');
+        }
       }).catch(() => abort('LIVE_CHILD_FAILED'));
     });
     child.on('close', () => { void chain.then(() => {

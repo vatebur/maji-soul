@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-05",
+  "timezone": "Asia/Shanghai",
+  "evidenceKind": "offline-contract-and-current-client-glyph-extraction",
+  "clientVersion": "4.0.51",
+  "viewport": { "width": 2036, "height": 918, "devicePixelRatio": 1 },
+  "countdown": {
+    "acquisition": "automatic-screenshot-glyphs-and-two-sync-samples",
+    "historicalScreenshotsRead": 11,
+    "digitsCovered": "0123456789",
+    "minimumDice": 0.96,
+    "minimumRunnerUpGap": 0.18,
+    "networkAllowance": "full-sync-round-trip",
+    "quantizationAllowanceMs": 2000,
+    "sendMarginMs": 250,
+    "supportsTimeAdd": false,
+    "newLiveValidation": "pending"
+  },
+  "autoWin": {
+    "readback": "unity-button-pixels-v1",
+    "reconnect": "recollect-and-enable-once-then-confirm",
+    "maximumSendProofAgeMs": 1000,
+    "clientWinOpcodes": [8, 9],
+    "programWinSending": false,
+    "actualAutomaticTrigger": "pending"
+  },
+  "phase2": {
+    "offlineActions": ["chi", "pon", "open-kan", "closed-kan", "added-kan", "riichi-discard"],
+    "sharedPageRules": true,
+    "durableMeldAndRiichiConfirmation": true,
+    "liveSendingEnabledByDefault": false,
+    "currentClientBranchesAndFullMatch": "pending"
+  },
+  "sharedLedger": "data/live/state.sqlite",
+  "automationEnabled": false,
+  "remaining": ["current-client-deadline-and-auto-win-acceptance", "cross-hand-coordination", "engine-and-llm-full-match", "same-room-continuation"],
+  "verificationCommand": "vfox exec nodejs@24.22.1 -- npm run verify",
+  "verification": { "typecheck": "passed", "nodeTests": 164, "failed": 0, "skipped": 0 }
+}

@@ -35,7 +35,7 @@ try {
   } else if (command === 'inspect' && probe && options.length === 1) {
     console.log(JSON.stringify(await inspectDatabase(probe, options[0]!), null, 2));
   } else {
-    console.log('maji-soul\n  doctor\n  spike storage|model|speech [--play]\n  replay <fixture-directory> [--out <new-directory>]\n  dry-run <fixture-directory> [--candidate <index>] [--out <new-directory>]\n  inspect <database> <session-id>\n  live-install <active-ego-space-id> <page-label>\n  live-reconnect <active-ego-space-id> <page-label>\n  live-sync <active-ego-space-id> <page-label> <absolute-readback-json>\n  live-once <active-ego-space-id> <page-label> <absolute-readback-json>\n实场命令仅在已授权ego空间执行同步或一次显式摸切；持续自动运行保持关闭。');
+    console.log('maji-soul\n  doctor\n  spike storage|model|speech [--play]\n  replay <fixture-directory> [--out <new-directory>]\n  dry-run <fixture-directory> [--candidate <index>] [--out <new-directory>]\n  inspect <database> <session-id>\n  live-install <active-ego-space-id> <page-label>\n  live-reconnect <active-ego-space-id> <page-label>\n  live-sync <active-ego-space-id> <page-label> <absolute-options-json>\n  live-once <active-ego-space-id> <page-label> <absolute-options-json>\n实场自动读回倒计时与和牌开关，仅同步或一次显式摸切；持续自动运行保持关闭。');
     if (command && command !== 'help') process.exitCode = 1;
   }
 } catch (error) {

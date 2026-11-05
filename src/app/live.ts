@@ -7,23 +7,21 @@ import { GameActor } from '../application/game/actor.ts';
 import { ActionExecutor, type ProductionTransport } from '../application/game/executor.ts';
 import { bridgeCall, EgoProductionTransport, type EgoPagePort } from '../adapters/majsoul/ego-transport.ts';
 import { handSourceStream, normalizeSyncGame } from '../adapters/majsoul/sync.ts';
-import { normalizeAction, type VerifiedOperationTiming } from '../adapters/majsoul/normalize.ts';
+import { normalizeAction } from '../adapters/majsoul/normalize.ts';
 import type { FriendRoom, GameObservation } from '../domain/game/types.ts';
 import { digest, requireThat } from '../domain/game/value.ts';
 import { exportLiveCapture } from './live-capture.ts';
+import { deriveSyncOperationTiming, type SyncCountdownEvidence } from '../adapters/majsoul/operation-timing.ts';
 
 export interface LiveAcceptanceOptions {
   outputDirectory: string; room: FriendRoom;
   /** Reuse this ledger across reconnects; defaults to the repository's live ledger. */
   databasePath?: string;
-  /** An operator's current screenshot readback, bound to this exact protocol step. */
-  countdown: VerifiedOperationTiming;
   sourceVersion: string;
   /** Explicit single-step selection, not an AI strategy or a fallback algorithm. */
   discardOnce?: boolean;
   /** Controlled live acceptance: revoke the page permit immediately before dispatch. */
   pauseBeforeDispatch?: boolean;
-  countdownEvidence?: { screenshotPath: string; observedAt: string; displayedSeconds: number };
 }
 
 /** Uses the real worker, Actor, executor and Page bridge. Never loops decisions. */
@@ -49,7 +47,10 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
     const executor = new ActionExecutor(actor, { transport: guarded, receiptTimeoutMs: 10_000 });
     await actor.awaitControlBarrier();
     const token = actor.beginSync(); await actor.awaitControlBarrier();
-    const raw = await bridgeCall(page, 'sync');
+    const acquisition = await bridgeCall(page, 'automaticTiming');
+    const raw = acquisition.raw;
+    const timingEvidence = acquisition.evidence as SyncCountdownEvidence | null;
+    const timing = timingEvidence ? deriveSyncOperationTiming(raw, token.connectionEpoch, timingEvidence) : undefined;
     const pageState = await bridgeCall(page, 'read');
     requireThat(typeof pageState.gameUuid === 'string' && pageState.gameUuid.length > 0 && [0, 1, 2, 3].includes(pageState.ownSeat), 'GAME_IDENTITY_UNVERIFIED');
     const config = pageState.authSummary?.gameConfig;
@@ -63,10 +64,14 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
     const o = opening.payload ?? opening.data;
     requireThat(typeof o.sha256 === 'string' && /^[0-9a-f]{64}$/.test(o.sha256), 'HAND_IDENTITY_UNVERIFIED');
     const gameHandKey = `hand-${digest([gameMatchKey, o.sha256]).slice(0, 32)}`;
-    const sync = normalizeSyncGame(raw, { ...token, sessionId, room: options.room, gameMatchKey, gameHandKey,
-      ownSeat: pageState.ownSeat, handOrdinal: 1, receivedAt: raw.receivedAt, timing: options.countdown });
-    await actor.applySync(sync);
     await bridgeCall(page, 'ackSync', { generation: raw.generation, step: raw.step - 1 });
+    const autoWinReadback = await bridgeCall(page, 'ensureAutoWin');
+    requireThat(autoWinReadback.state === 'enabled' && autoWinReadback.pageEpoch === raw.pageEpoch, 'AUTO_WIN_UNVERIFIED');
+    if (timing) await bridgeCall(page, 'ackTiming', timing);
+    const room: FriendRoom = { ...options.room, autoWin: 'verified-on' };
+    const sync = normalizeSyncGame(raw, { ...token, sessionId, room, gameMatchKey, gameHandKey,
+      ownSeat: pageState.ownSeat, handOrdinal: 1, receivedAt: raw.receivedAt, ...(timing ? { timing } : {}) });
+    await actor.applySync(sync);
     const cursor = await bridgeCall(page, 'drain');
     requireThat(!cursor.reason && !cursor.overflow && cursor.records.length === 0 && cursor.lastStep === raw.step - 1, 'SYNC_CAPTURE_RACE');
     const subsequent: GameObservation[] = [];
@@ -83,9 +88,9 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
     };
     let attemptId: string | null = null;
     if (options.discardOnce) {
-      requireThat(options.room.autoWin === 'verified-on', 'AUTO_WIN_UNVERIFIED');
+      requireThat(timing, 'TIMING_EVIDENCE_REQUIRED');
       transport.bind({ generation: cursor.generation, pageEpoch: cursor.pageEpoch, step: cursor.lastStep },
-        { source: 'manual-client-countdown', budgetMs: 30_000, observedAt: options.countdown.sampledAt });
+        timing);
       await actor.resume();
       const snapshot = await actor.freezeDecision();
       const selected = snapshot.legalActions.find(a => a.action.kind === 'discard' && a.action.tsumogiri);
@@ -108,8 +113,12 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       scope: options.pauseBeforeDispatch ? 'pause-before-final-send' : options.discardOnce ? 'one-ordinary-discard' : 'complete-current-hand-sync', sessionId, databasePath,
       attempt, counts: inspection.counts, finalStateHash: digest(inspection.projection.state),
       paused: actor.control.paused && actor.control.controlPending === 0,
-      countdownSource: 'manual-screenshot-readback', countdownEvidence: options.countdownEvidence ?? null,
+      programPaused: actor.control.paused && actor.control.controlPending === 0,
+      clientAutoWinLastReadback: autoWinReadback.state,
+      clientAutoWinMayActAfterProgramPause: true,
+      countdownSource: 'server-sync-and-client-pixels', timing: timing ?? null, timingEvidence, autoWinReadback,
       browserStatsBefore: cursor.stats ?? null, browserStatsAfter: pageAfter.stats ?? null,
+      clientWinDiagnostics: { request: pageAfter.lastClientWin ?? null, authority: pageAfter.lastOwnWin ?? null },
       automationEnabled: false, captureDirectory: capture.directory,
       reportPath: join(directory, 'report.json') };
     await writeFile(report.reportPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });

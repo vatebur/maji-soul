@@ -7,6 +7,7 @@ import type { EgoPagePort } from '../src/adapters/majsoul/ego-transport.ts';
 import type { ActorControl } from '../src/application/game/actor.ts';
 import type { CallReceipt } from '../src/domain/game/types.ts';
 import { buildPhase1Fixture, initialView } from '../scripts/build-phase1-fixtures.ts';
+import { sampleSyncOperationTiming } from '../src/adapters/majsoul/operation-timing.ts';
 
 /** Scripted Page boundary; all state, attempt persistence and replay run production code.
  * The disposable fixture is contract evidence, never an actual browser acceptance claim. */
@@ -18,13 +19,40 @@ export class ScriptedPage implements EgoPagePort {
   sends = 0;
   captureRace = false;
   delivery: CallReceipt['delivery'] = 'accepted';
+  autoWinState = 'enabled';
+  autoWinNeedsEnable = false;
   prepared: any;
   #records: unknown[] = [];
+  #inputGeneration = 0;
+  #timingVerified = false;
   constructor(databasePath: string) { this.databasePath = databasePath; }
   async evaluate(_source: string | ((argument: any) => any), argument?: unknown): Promise<any> {
     const { method, argument: input } = argument as { method: string; argument: any };
     this.calls.push(method);
-    const cursor = { generation: this.sends, pageEpoch: 1, lastStep: 2 + this.sends, records: [] };
+    const cursor = { generation: this.sends + this.#inputGeneration, pageEpoch: 1, lastStep: 2 + this.sends, records: [] };
+    if (method === 'automaticTiming') {
+      const raw = await this.evaluate(_source, { method: 'sync', argument: null });
+      const previous = structuredClone(raw);
+      previous.requestedMonoMs -= 2500; previous.receivedMonoMs -= 2500;
+      previous.receivedAt = new Date(Date.parse(raw.receivedAt) - 2500).toISOString();
+      previous.game_restore.passed_waiting_time -= 3;
+      return { raw, evidence: { source: 'automatic-client-countdown', samples: [
+        sampleSyncOperationTiming(previous, { remainingMs: 283000, sampledMonoMs: previous.receivedMonoMs }),
+        sampleSyncOperationTiming(raw, { remainingMs: 280000, sampledMonoMs: raw.receivedMonoMs }),
+      ] } };
+    }
+    if (method === 'ensureAutoWin' || method === 'verifyAutoWin') {
+      let clicked = false;
+      if (method === 'ensureAutoWin' && this.autoWinNeedsEnable) {
+        // The real Unity toggle emits pointerdown. The bridge listener revokes
+        // timing even though no game action RPC was sent.
+        this.#inputGeneration++; this.#timingVerified = false;
+        this.autoWinNeedsEnable = false; this.autoWinState = 'enabled'; clicked = true;
+      }
+      if (this.autoWinState !== 'enabled') throw Error('AUTO_WIN_UNVERIFIED');
+      return { state: 'enabled', pageEpoch: 1, generation: this.sends + this.#inputGeneration, step: cursor.lastStep, clicked, source: 'contract-pixels-only' };
+    }
+    if (method === 'ackTiming') { this.#timingVerified = true; return { verified: true, pageEpoch: 1, step: cursor.lastStep }; }
     if (method === 'pause') {
       const control = input ?? { processInstanceId: 'emergency-pause', controlEpoch: 0, paused: true, reason: null };
       this.controls.push(control); return { paused: control.paused };
@@ -32,8 +60,8 @@ export class ScriptedPage implements EgoPagePort {
     if (method === 'read') return { ...cursor, ownSeat: 1, gameUuid: 'contract-only-game-uuid', authSummary: { gameConfig: {
       category: 1, mode: { mode: 1, ai: true, detail_rule: { time_fixed: 300, time_add: 0 } },
     } } };
-    if (method === 'sync') return { generation: 0, receivedAt: this.at, step: 3, is_end: false,
-      game_restore: { actions: [{ name: 'ActionNewRound', step: 0, payload: {
+    if (method === 'sync') return { generation: 0, pageEpoch: 1, requestedMonoMs: 4900, receivedMonoMs: 5000, receivedAt: this.at, step: 3, is_end: false,
+      game_restore: { game_state: 1, last_pause_time_ms: 0, passed_waiting_time: 20, actions: [{ name: 'ActionNewRound', step: 0, payload: {
         chang: 0, ju: 0, ben: 0, liqibang: 0, left_tile_count: 69, sha256: 'a'.repeat(64),
         scores: [25000, 25000, 25000, 25000], doras: ['4z'], opens: [],
         tiles: initialView().ownConcealed.slice(0, 13).map(t => t.code), operation: null,
@@ -48,6 +76,7 @@ export class ScriptedPage implements EgoPagePort {
       const records = this.#records.splice(0); return { ...cursor, records };
     }
     if (method === 'prepare') {
+      assert.equal(this.#timingVerified,true,'toggle input revoked timing; acknowledge after enabling');
       // The page must receive an intent that the actual worker has already committed.
       const raw = new DatabaseSync(this.databasePath, { readOnly: true });
       try {
@@ -75,7 +104,6 @@ export class ScriptedPage implements EgoPagePort {
 export async function createLiveScenario() {
   const directory = await mkdtemp(join(tmpdir(), 'maji-live-contract-')), run = join(directory, 'run');
   const page = new ScriptedPage(join(run, 'state.sqlite'));
-  const options = { outputDirectory: run, databasePath: page.databasePath, room: buildPhase1Fixture().projection.room!, sourceVersion: 'contract-test-only',
-    countdown: { source: 'client-countdown' as const, step: 2, sampledAt: page.at, remainingMs: 280000, uncertaintyMs: 1000 } };
+  const options = { outputDirectory: run, databasePath: page.databasePath, room: buildPhase1Fixture().projection.room!, sourceVersion: 'contract-test-only' };
   return { directory, page, options, cleanup: () => rm(directory, { recursive: true, force: true }) };
 }

@@ -29,6 +29,12 @@ export function normalizeSyncGame(value: unknown, context: SyncGameContext): Aut
   integer(context.connectionEpoch, 1); integer(context.handOrdinal, 1, 1000); integer(context.ownSeat, 0, 3); timestamp(context.receivedAt);
   requireThat(response.error === undefined || response.error === null, 'SYNC_RPC_REJECTED');
   requireThat(response.is_end === false, 'SYNC_GAME_ENDED'); integer(response.step, 1, 999_999_999);
+  if (context.timing?.source === 'protocol-operation') {
+    integer(restore.passed_waiting_time, 0, 1_200);
+    requireThat(restore.game_state === 1 && restore.last_pause_time_ms === 0, 'TIMING_GAME_NOT_RUNNING');
+    requireThat(context.timing.elapsedMs === restore.passed_waiting_time * 1_000 && context.timing.pageEpoch === response.pageEpoch && context.timing.sampledMonoMs === response.receivedMonoMs,
+      'TIMING_SCOPE_MISMATCH');
+  }
   requireThat(Array.isArray(restore.actions) && restore.actions.length > 0 && restore.actions.length <= 512, 'SYNC_ACTIONS_REQUIRED');
   const actions = restore.actions.map(record), sourceStream = context.sourceStream ?? handSourceStream(context.gameMatchKey, context.gameHandKey);
   for (let i = 0; i < actions.length; i++) {
@@ -69,6 +75,6 @@ export function normalizeSyncGame(value: unknown, context: SyncGameContext): Aut
   const result = parseSync({ syncId: context.syncId, connectionEpoch: context.connectionEpoch, receivedAt: context.receivedAt,
     coverage: 'complete-current-state', room: context.room, gameMatchKey: context.gameMatchKey, gameHandKey: context.gameHandKey,
     handOrdinal: context.handOrdinal, currentView, missingFields: [], historyCoverage: 'complete-hand', handHistory,
-    observedActions: handHistory.filter(o => o.type === 'TileDiscarded'), sourceCursor: `${sourceStream}:${response.step - 1}` });
+    observedActions: handHistory.filter(o => o.type === 'TileDiscarded' || o.type === 'MeldDeclared'), sourceCursor: `${sourceStream}:${response.step - 1}` });
   return result;
 }

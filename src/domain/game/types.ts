@@ -21,8 +21,12 @@ export interface HandInitialView {
   doraIndicators: TileCode[]; doraTiles: TileCode[];
   tilesRemaining: Knowledge<number>; currentActor: Knowledge<Seat>; unknownFields: string[];
 }
-// Phase 1 exposes only the verified ordinary-discard mapping. Other opcodes close the gate.
-export type ActionSpec = { kind: 'discard'; tile: string; tsumogiri: boolean } | { kind: 'tsumo' };
+export interface OperationSelection { type: number; index: number; combination: string }
+export type ActionSpec = { kind: 'discard'; tile: string; tsumogiri: boolean }
+  | { kind: 'riichi-discard'; tile: string; tsumogiri: boolean; operation: OperationSelection }
+  | { kind: Meld['kind']; consumed: string[]; tiles: TileCode[]; operation: OperationSelection;
+      fromSeat?: Seat; calledTileIndex?: number; upgradedFrom?: string }
+  | { kind: 'tsumo' } | { kind: 'ron' };
 export interface LegalAction {
   id: string; action: ActionSpec; authority: 'executor' | 'client-auto-win'; label: string; evidenceEventIds: string[];
 }
@@ -32,8 +36,9 @@ export interface OperationWindow {
   candidates: LegalAction[]; status: 'open' | 'claimed' | 'submitted' | 'closed' | 'uncertain';
 }
 export interface ObservedAction {
-  eventId: string; handId: string; actor: Seat; kind: 'discard'; tiles: TileCode[];
+  eventId: string; handId: string; actor: Seat; kind: 'discard' | 'meld'; tiles: TileCode[];
   tsumogiri: Knowledge<boolean>; origin: 'unknown'; observedAt: string;
+  riichiDeclaration?: boolean; meld?: Meld;
 }
 export interface GameState extends HandInitialView {
   sessionId: string; matchId: string; handId: string; connectionEpoch: number; stateVersion: number;
@@ -108,5 +113,9 @@ export interface ActionAttempt {
   stateVersion: number; connectionEpoch: number; controlEpoch: number; processInstanceId: string;
   executionMode: ExecutionMode; status: AttemptStatus; preparedAt: string;
   actor: Seat; tile: TileCode; tsumogiri: boolean; expectedCursor: string;
+  /** Missing only on legacy ordinary-discard rows. Never infer a meld from tile alone. */
+  actionSpec?: ActionSpec;
+  expectedAction?: { kind: 'discard'; tile: TileCode; tsumogiri: boolean; riichiDeclaration: boolean }
+    | { kind: 'meld'; meld: Omit<Meld, 'id' | 'actor'> };
   receipt?: CallReceipt; confirmationEventId?: string;
 }

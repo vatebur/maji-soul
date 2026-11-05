@@ -16,6 +16,9 @@ test('production acceptance assembly persists exactly one discard and exports an
     assert.equal(report.attempt?.status, 'confirmed'); assert.equal(report.attempt?.executionMode, 'live');
     assert.equal(report.counts.confirmations, 1); assert.equal(report.counts.outbox, 1);
     assert.equal(report.paused, true); assert.equal(report.automationEnabled, false);
+    assert.equal(report.programPaused, true); assert.equal(report.clientAutoWinMayActAfterProgramPause, true);
+    assert.equal(report.countdownSource, 'server-sync-and-client-pixels');
+    assert.equal(h.page.prepared.timing.source, 'protocol-operation');
     assert.equal(h.page.sends, 1); assert.equal(h.page.prepared.tile, '0m');
     assert.equal(h.page.prepared.action.action.tsumogiri, true);
     assert.equal(h.page.controls.at(-1)?.paused, true);
@@ -28,6 +31,30 @@ test('production acceptance assembly persists exactly one discard and exports an
   } finally { await h.cleanup(); }
 });
 
+test('room flags cannot replace automatic switch readback and final verification', async t => {
+  for (const failure of ['initial','final'] as const) await t.test(failure, async () => {
+    const h = await scenario();
+    try {
+      const evaluate = h.page.evaluate.bind(h.page);
+      h.page.evaluate = async (source, argument) => {
+        const method = (argument as {method:string}).method;
+        if (method === (failure === 'initial' ? 'ensureAutoWin' : 'verifyAutoWin')) throw Error('AUTO_WIN_UNVERIFIED');
+        return evaluate(source,argument);
+      };
+      const report = await acceptLivePage(h.page, { ...h.options, discardOnce:true });
+      assert.equal(report.status,'blocked'); assert.equal(h.page.sends,0);
+      assert.equal(h.page.calls.includes('prepare'),false);
+      assert.equal(h.page.controls.at(-1)?.paused,true);
+      const db = new DatabaseSync(h.page.databasePath,{readOnly:true});
+      try {
+        const rows = db.prepare('SELECT status FROM action_attempts').all();
+        assert.equal(rows.length,failure === 'initial' ? 0 : 1);
+        if (failure === 'final') assert.equal(rows[0]?.status,'not-dispatched');
+      } finally {db.close();}
+    } finally { await h.cleanup(); }
+  });
+});
+
 test('sync-only assembly has no transmission even with a legal ordinary-discard window', async () => {
   const h = await scenario();
   try {
@@ -36,6 +63,20 @@ test('sync-only assembly has no transmission even with a legal ordinary-discard 
     assert.equal(report.scope, 'complete-current-hand-sync'); assert.equal(report.attempt, null);
     assert.equal(h.page.sends, 0); assert.equal(h.page.calls.includes('prepare'), false);
     assert.equal(report.counts.confirmations, 0); assert.equal(report.paused, true);
+  } finally { await h.cleanup(); }
+});
+
+test('re-enabling the client switch re-acknowledges the original timing after local input revoked it', async () => {
+  const h = await scenario();
+  try {
+    h.page.autoWinState = 'disabled'; h.page.autoWinNeedsEnable = true;
+    const report = await acceptLivePage(h.page,{...h.options,room:{...h.options.room,autoWin:'unknown'},discardOnce:true});
+    assert.equal(report.status,'passed'); assert.ok('autoWinReadback' in report);
+    assert.equal(report.autoWinReadback.clicked,true);
+    assert.ok(h.page.calls.indexOf('ensureAutoWin') < h.page.calls.indexOf('ackTiming'));
+    assert.equal(h.page.prepared.expected.generation,1);
+    assert.equal(h.page.prepared.timing.remainingMs,280000);
+    assert.equal(h.page.sends,1);
   } finally { await h.cleanup(); }
 });
 
@@ -83,7 +124,7 @@ test('a new run and process cannot bypass an uncertain action in the shared game
     // alone cannot prove whether the previous command reached the server.
     const secondPage = new ScriptedPage(h.page.databasePath);
     const second = await acceptLivePage(secondPage, { ...h.options, outputDirectory: join(h.directory, 'second-run'),
-      countdown: { ...h.options.countdown, sampledAt: secondPage.at }, discardOnce: true });
+      discardOnce: true });
     assert.equal(second.status, 'blocked'); assert.ok('code' in second);
     assert.equal(second.code, 'ACTION_RECONCILIATION_REQUIRED');
     assert.notEqual(second.sessionId, first.sessionId); assert.equal(second.databasePath, first.databasePath);

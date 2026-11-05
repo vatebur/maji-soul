@@ -57,9 +57,17 @@ export function validateWindow(value: unknown): asserts value is OperationWindow
     const a = object(c, ['id', 'action', 'authority', 'label', 'evidenceEventIds']); string(a.id); string(a.label);
     oneOf(a.authority, ['executor', 'client-auto-win']); array(a.evidenceEventIds, v => string(v), 32);
     const kind = (a.action as { kind?: unknown } | null)?.kind;
-    if (kind === 'discard') {
-      const action = object(a.action, ['kind', 'tile', 'tsumogiri']); string(action.tile); boolean(action.tsumogiri); oneOf(a.authority, ['executor']);
-    } else { object(a.action, ['kind']); oneOf(kind, ['tsumo']); oneOf(a.authority, ['client-auto-win']); }
+    const selection = (value: unknown) => { const s = object(value, ['type', 'index', 'combination']); integer(s.type, 1, 9); integer(s.index, 0, 63); string(s.combination, 64); };
+    if (kind === 'discard' || kind === 'riichi-discard') {
+      const action = object(a.action, kind === 'discard' ? ['kind', 'tile', 'tsumogiri'] : ['kind', 'tile', 'tsumogiri', 'operation']); string(action.tile); boolean(action.tsumogiri); oneOf(a.authority, ['executor']);
+      if (kind === 'riichi-discard') selection(action.operation);
+    } else if (['chi', 'pon', 'open-kan', 'closed-kan', 'added-kan'].includes(String(kind))) {
+      const action = object(a.action, ['kind', 'consumed', 'tiles', 'operation'], ['fromSeat', 'calledTileIndex', 'upgradedFrom']);
+      array(action.consumed, v => string(v), 4); array(action.tiles, tile, 4); selection(action.operation); oneOf(a.authority, ['executor']);
+      if (action.fromSeat !== undefined) seat(action.fromSeat);
+      if (action.calledTileIndex !== undefined) integer(action.calledTileIndex, 0, 3);
+      if (action.upgradedFrom !== undefined) string(action.upgradedFrom);
+    } else { object(a.action, ['kind']); oneOf(kind, ['tsumo', 'ron']); oneOf(a.authority, ['client-auto-win']); }
   }, 64);
   requireThat(new Set((value as OperationWindow).candidates.map(c => c.id)).size === (value as OperationWindow).candidates.length, 'DUPLICATE_CANDIDATE');
   const window = value as OperationWindow;
@@ -126,7 +134,7 @@ export function parseSync(value: unknown): AuthoritativeSync {
   string(s.gameMatchKey); string(s.gameHandKey); integer(s.handOrdinal, 1, 1000); string(s.sourceCursor); cursorParts(s.sourceCursor);
   array(s.missingFields, v => string(v), 64); oneOf(s.historyCoverage, ['complete-hand', 'partial', 'none']);
   if (s.currentView !== undefined) validateView(s.currentView, true);
-  array(s.handHistory, parseObservation, 1024); array(s.observedActions, v => { const o = parseObservation(v); requireThat(o.type === 'TileDiscarded' && o.sourceCursor, 'INVALID_SYNC_ACTION'); }, 256);
+  array(s.handHistory, parseObservation, 1024); array(s.observedActions, v => { const o = parseObservation(v); requireThat((o.type === 'TileDiscarded' || o.type === 'MeldDeclared') && o.sourceCursor, 'INVALID_SYNC_ACTION'); }, 256);
   const sync = value as AuthoritativeSync;
   for (const o of [...sync.handHistory, ...sync.observedActions]) {
     requireThat(o.source === 'majsoul-sync' && o.connectionEpoch === sync.connectionEpoch, 'SYNC_EVIDENCE_EPOCH_MISMATCH');

@@ -72,7 +72,7 @@ test('own draws preserve the red-five code and an ordinary-discard offer retains
 
 test('unknown operations, restrictions, critical fields and unsupported transitions fail the whole normalization', () => {
   const current = atSequence(11), base = { seat: 0, tile: '5m', left_tile_count: 65 };
-  for (const operations of [[{ type: 99 }], [{ type: 1 }, { type: 8 }], [{ type: 1, combination: ['5m'] }]]) {
+  for (const operations of [[{ type: 99 }], [{ type: 1 }, { type: 11 }], [{ type: 1, change_tiles: ['5m'] }]]) {
     assert.throws(() => normalizeAction('ActionDealTile', { ...base, operation: { seat: 0, operation_list: operations } }, context(current, 9)), /UNSUPPORTED_OPERATION|UNVERIFIED_OPERATION_RESTRICTIONS/);
   }
   assert.throws(() => normalizeAction('ActionDealTile', { seat: 0, left_tile_count: 65 }, context(current, 9)), /INVALID_PROTOCOL_TILE/);

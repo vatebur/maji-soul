@@ -75,13 +75,38 @@ export function assertWindow(state: GameState, window: OperationWindow): void {
   const actions = new Set<string>();
   for (const c of window.candidates) {
     requireThat(c.evidenceEventIds.length > 0 && !actions.has(canonical(c.action)), 'INVALID_CANDIDATES'); actions.add(canonical(c.action));
-    if (c.action.kind === 'discard') {
+    if (c.action.kind === 'discard' || c.action.kind === 'riichi-discard') {
       const { tile, tsumogiri } = c.action;
       requireThat(c.authority === 'executor' && state.currentActor.known && state.currentActor.value === state.ownSeat, 'INVALID_DISCARD_ACTOR');
       requireThat(state.ownConcealed.length === 14 - 3 * state.players[state.ownSeat].melds.length, 'INVALID_DISCARD_COUNT');
       requireThat(state.ownConcealed.some(t => t.instanceId === tile) && state.drawnTileRef.known && tsumogiri === (state.drawnTileRef.value === tile), 'INVALID_DISCARD_CANDIDATE');
       if (state.players[state.ownSeat].riichi === 'accepted') requireThat(tsumogiri, 'RIICHI_HAND_DISCARD');
-    } else requireThat(c.authority === 'client-auto-win', 'INVALID_WIN_AUTHORITY');
+      if (c.action.kind === 'riichi-discard') requireThat(c.action.operation.type === 7 && state.players[state.ownSeat].riichi === 'none' && state.players[state.ownSeat].score >= 1000 && state.players[state.ownSeat].melds.every(m => m.kind === 'closed-kan'), 'INVALID_RIICHI_CANDIDATE');
+    } else if (c.action.kind === 'tsumo' || c.action.kind === 'ron') requireThat(c.authority === 'client-auto-win', 'INVALID_WIN_AUTHORITY');
+    else {
+      const action = c.action, own = state.players[state.ownSeat];
+      const code = { chi: 2, pon: 3, 'closed-kan': 4, 'open-kan': 5, 'added-kan': 6 }[action.kind];
+      requireThat(c.authority === 'executor' && action.operation.type === code, 'INVALID_MELD_CANDIDATE');
+      const meld: Meld = { id: 'candidate', actor: state.ownSeat, kind: action.kind, tiles: action.tiles,
+        ...(action.fromSeat === undefined ? {} : { fromSeat: action.fromSeat, calledTileIndex: action.calledTileIndex }),
+        ...(action.upgradedFrom === undefined ? {} : { upgradedFrom: action.upgradedFrom }) };
+      validateMeld(meld);
+      requireThat(new Set(action.consumed).size === action.consumed.length, 'INVALID_CONSUMED_REFS');
+      let consumedCodes = [...action.tiles];
+      if (action.kind === 'added-kan') {
+        const prior = own.melds.find(m => m.id === action.upgradedFrom);
+        requireThat(prior?.kind === 'pon' && prior.fromSeat === action.fromSeat && prior.calledTileIndex === action.calledTileIndex && own.riichi === 'none', 'INVALID_KAN_UPGRADE');
+        for (const code of prior.tiles) { const at = consumedCodes.indexOf(code); requireThat(at >= 0, 'KAN_TILE_MISMATCH'); consumedCodes.splice(at, 1); }
+      } else if (action.kind !== 'closed-kan') {
+        requireThat(!state.currentActor.known && state.latestAction?.kind === 'discard' && state.latestAction.actor === action.fromSeat && own.riichi === 'none', 'INVALID_CALL_WINDOW');
+        const river = state.players[action.fromSeat!].river.at(-1);
+        requireThat(river?.eventId === state.latestAction.eventId && river.calledBy === undefined && river.tile === action.tiles[action.calledTileIndex!], 'CALLED_TILE_MISMATCH');
+        consumedCodes.splice(action.calledTileIndex!, 1);
+      }
+      if (action.kind === 'closed-kan' || action.kind === 'added-kan') requireThat(state.currentActor.known && state.currentActor.value === state.ownSeat, 'KAN_ACTOR_MISMATCH');
+      const actual = action.consumed.map(id => state.ownConcealed.find(t => t.instanceId === id)?.code);
+      requireThat(actual.every(Boolean) && canonical(actual.sort()) === canonical(consumedCodes.sort()), 'MELD_CONSUMED_MISMATCH');
+    }
   }
 }
 function rekeyView(view: HandInitialView & { operationWindow?: OperationWindow }, epoch: number, handId: string): typeof view {
@@ -92,18 +117,24 @@ function rekeyView(view: HandInitialView & { operationWindow?: OperationWindow }
   }
   if (copy.operationWindow) {
     copy.operationWindow.candidates.forEach(c => {
-      if (c.action.kind === 'discard') { const id = refs.get(c.action.tile); requireThat(id, 'CANDIDATE_TILE_MISSING'); c.action.tile = id; }
+      if (c.action.kind === 'discard' || c.action.kind === 'riichi-discard') { const id = refs.get(c.action.tile); requireThat(id, 'CANDIDATE_TILE_MISSING'); c.action.tile = id; }
+      else if (c.action.kind !== 'tsumo' && c.action.kind !== 'ron') c.action.consumed = c.action.consumed.map(ref => { const id = refs.get(ref); requireThat(id, 'CANDIDATE_TILE_MISSING'); return id; });
     });
   }
   return copy;
 }
-function stateFromView(projection: GameProjection, view: HandInitialView & { operationWindow?: OperationWindow }): GameState {
+function stateFromView(projection: GameProjection, view: HandInitialView & { operationWindow?: OperationWindow }, lastDiscard?: Extract<GameObservation, { type: 'TileDiscarded' }>): GameState {
   requireThat(projection.matchId && projection.gameHandKey, 'HAND_WITHOUT_MATCH');
   assertView(view);
   const handId = localId('hand', [projection.matchId, projection.gameHandKey, projection.handOrdinal]);
   const state: GameState = { ...rekeyView(view, projection.connectionEpoch, handId),
     sessionId: projection.sessionId, matchId: projection.matchId, handId, connectionEpoch: projection.connectionEpoch,
     stateVersion: (projection.state?.stateVersion ?? 0) + 1, trust: 'syncing', trustIssues: [] };
+  if (lastDiscard) {
+    const fact = lastDiscard.payload, river = state.players[fact.actor].river.at(-1);
+    requireThat(river && river.tile === fact.tile && river.calledBy === undefined && river.riichiDeclaration === fact.riichiDeclaration && (!fact.tsumogiri.known || river.tsumogiri === fact.tsumogiri.value), 'SYNC_ACTION_NOT_IN_VIEW');
+    state.latestAction = { eventId: river.eventId, handId, actor: fact.actor, kind: 'discard', tiles: [fact.tile], tsumogiri: fact.tsumogiri, origin: 'unknown', observedAt: lastDiscard.receivedAt };
+  }
   assertView(state); trust(state); if (state.operationWindow) assertWindow(state, state.operationWindow);
   return state;
 }
@@ -260,9 +291,15 @@ function assertSyncEvidence(sync: AuthoritativeSync): void {
     }
   }
   for (const o of sync.observedActions) {
-    requireThat(o.type === 'TileDiscarded' && o.sourceCursor, 'INVALID_SYNC_ACTION');
+    requireThat((o.type === 'TileDiscarded' || o.type === 'MeldDeclared') && o.sourceCursor, 'INVALID_SYNC_ACTION');
     const cursor = cursorParts(o.sourceCursor);
     requireThat(cursor.stream === current.stream && cursor.step <= current.step, 'SYNC_EVIDENCE_CURSOR_MISMATCH');
+    if (o.type === 'MeldDeclared') {
+      const recorded = sync.handHistory.find(h => h.type === 'MeldDeclared' && h.sourceCursor === o.sourceCursor);
+      if (sync.historyCoverage === 'complete-hand') requireThat(recorded && canonical(recorded.payload) === canonical(o.payload), 'SYNC_ACTION_NOT_IN_HISTORY');
+      else requireThat(sync.currentView!.players[o.payload.meld.actor].melds.some(m => canonical(m) === canonical(o.payload.meld)), 'SYNC_ACTION_NOT_IN_VIEW');
+      continue;
+    }
     const recorded = discards.get(o.sourceCursor), fingerprint = canonical(o.payload);
     requireThat(recorded === undefined || recorded === fingerprint, 'SYNC_ACTION_CONFLICT'); discards.set(o.sourceCursor, fingerprint);
     if (sync.historyCoverage === 'complete-hand') requireThat(historyDiscards.some(h => h.sourceCursor === o.sourceCursor && canonical(h.payload) === fingerprint), 'SYNC_ACTION_NOT_IN_HISTORY');
@@ -287,7 +324,8 @@ export function reduceSync(current: GameProjection, sync: AuthoritativeSync): Ga
   if (sameHand) requireThat(sync.currentView.ownSeat === current.state?.ownSeat, 'SYNC_SEAT_MISMATCH');
   p.gameHandKey = sync.gameHandKey; p.handOrdinal = sync.handOrdinal; p.matchStatus = 'playing'; p.handStatus = 'playing';
   if (!sameHand) { p.activeMode = p.pendingMode; p.contextEventIds = []; }
-  p.sourceCursor = sync.sourceCursor; p.state = stateFromView(p, sync.currentView); requireThat(p.state.trust === 'trusted', 'SYNC_UNKNOWN_STATE');
+  const latest = sync.historyCoverage === 'complete-hand' ? sync.handHistory.filter(o => o.sourceCursor).at(-1) : undefined;
+  p.sourceCursor = sync.sourceCursor; p.state = stateFromView(p, sync.currentView, latest?.type === 'TileDiscarded' && latest.sourceCursor === sync.sourceCursor ? latest : undefined); requireThat(p.state.trust === 'trusted', 'SYNC_UNKNOWN_STATE');
   p.sequence++; p.contextEventIds = [...p.contextEventIds, eventIdFor(p.sessionId, p.sequence)].slice(-32);
   return p;
 }

@@ -5,6 +5,7 @@ import type { ActionAttempt, AuthoritativeSync, CallReceipt, DecisionMode, Decis
 import { eventIdFor, initialProjection, reduceObservation, reduceSync } from '../../domain/game/reducer.ts';
 import { canonical, cursorParts, digest, nextCursor, observationFingerprint, requireThat } from '../../domain/game/value.ts';
 import { array, integer, object, oneOf, parseObservation, parseSync, string, timestamp, validateView, validateWindow } from '../../schemas/game.ts';
+import { expectedActionFor } from '../majsoul/actions.ts';
 import type { CommitResult, ReserveActionInput, StorageInspection } from '../../ports/storage.ts';
 
 const APP_ID = 0x4d414a49;
@@ -146,25 +147,36 @@ export class StorageDatabase {
     });
   }
   #recordFact(p: GameProjection, o: GameObservation, matchedBy: 'authoritative-event' | 'authoritative-sync'): void {
-    if (o.type !== 'TileDiscarded') return;
+    if (o.type !== 'TileDiscarded' && o.type !== 'MeldDeclared') return;
     requireThat(p.gameMatchKey && p.gameHandKey && p.state && o.sourceCursor, 'FACT_SCOPE_MISSING');
-    const factKey = digest([p.gameMatchKey, p.gameHandKey, o.sourceCursor, 'discard']);
-    const factHash = digest(o.payload), existing = this.#db.prepare('SELECT fact_hash, event_id FROM observed_actions WHERE fact_key=?').get(factKey);
+    const kind = o.type === 'TileDiscarded' ? 'discard' : 'meld';
+    const factKey = digest([p.gameMatchKey, p.gameHandKey, o.sourceCursor, kind]);
+    // Physical references are local to an execution generation, not authoritative facts.
+    const factHash = digest(o.type === 'MeldDeclared' ? o.payload.meld : o.payload), existing = this.#db.prepare('SELECT fact_hash, event_id FROM observed_actions WHERE fact_key=?').get(factKey);
     if (existing) requireThat(existing.fact_hash === factHash, 'AUTHORITATIVE_FACT_CONFLICT');
     const eventId = existing ? String(existing.event_id) : matchedBy === 'authoritative-event' ? eventIdFor(p.sessionId, p.sequence) : `sync-fact-${factKey.slice(0, 32)}`;
-    const fact = { eventId, handId: p.state.handId, actor: o.payload.actor, kind: 'discard', tiles: [o.payload.tile], tsumogiri: o.payload.tsumogiri, origin: 'unknown', observedAt: o.receivedAt };
+    const fact: ObservedAction = o.type === 'TileDiscarded'
+      ? { eventId, handId: p.state.handId, actor: o.payload.actor, kind: 'discard', tiles: [o.payload.tile], tsumogiri: o.payload.tsumogiri, origin: 'unknown', observedAt: o.receivedAt, riichiDeclaration: o.payload.riichiDeclaration }
+      : { eventId, handId: p.state.handId, actor: o.payload.meld.actor, kind: 'meld', tiles: o.payload.meld.tiles, tsumogiri: { known: false, reason: 'NOT_A_DISCARD' }, origin: 'unknown', observedAt: o.receivedAt, meld: o.payload.meld };
     if (!existing) {
       this.#db.prepare('INSERT INTO observed_actions VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(factKey, eventId, p.sessionId, p.gameMatchKey, p.gameHandKey, o.sourceCursor, factHash, canonical(fact));
-      if (o.payload.actor === p.state.ownSeat) this.#db.prepare('INSERT INTO outbox VALUES (?, ?, ?, ?, ?, ?)').run(`discard-${factKey}`, p.sessionId, factKey, p.sequence, 'OwnDiscardObserved', canonical(fact));
+      if (fact.actor === p.state.ownSeat && fact.kind === 'discard') this.#db.prepare('INSERT INTO outbox VALUES (?, ?, ?, ?, ?, ?)').run(`discard-${factKey}`, p.sessionId, factKey, p.sequence, 'OwnDiscardObserved', canonical(fact));
     }
-    // A durable dispatch intent precedes asynchronous bridge preparation. A matching manual
-    // action can arrive during that preparation, so intent alone cannot establish submission.
     const rows = this.#db.prepare("SELECT body FROM action_attempts WHERE game_match_key=? AND game_hand_key=? AND expected_cursor=? AND execution_mode IN ('contract-test','live') AND status IN ('awaiting-confirmation','uncertain')").all(p.gameMatchKey, p.gameHandKey, o.sourceCursor);
     for (const row of rows) {
       const attempt = parse<ActionAttempt>(row.body);
-      if (attempt.actor !== o.payload.actor || attempt.tile !== o.payload.tile || !o.payload.tsumogiri.known || attempt.tsumogiri !== o.payload.tsumogiri.value) continue;
-      this.#confirm(attempt, factKey, eventId, matchedBy);
+      if (this.#matchesFact(attempt, fact)) this.#confirm(attempt, factKey, eventId, matchedBy);
     }
+  }
+  #matchesFact(attempt: ActionAttempt, fact: ObservedAction): boolean {
+    if (fact.actor !== attempt.actor) return false;
+    const expected = attempt.expectedAction;
+    if (!expected || expected.kind === 'discard') return fact.kind === 'discard' && fact.tiles.length === 1 && fact.tiles[0] === (expected?.tile ?? attempt.tile) && fact.tsumogiri.known && fact.tsumogiri.value === (expected?.tsumogiri ?? attempt.tsumogiri) && (fact.riichiDeclaration ?? false) === (expected?.riichiDeclaration ?? false);
+    if (fact.kind !== 'meld' || !fact.meld) return false;
+    const a = expected.meld, b = fact.meld;
+    return a.kind === b.kind && a.fromSeat === b.fromSeat && a.upgradedFrom === b.upgradedFrom &&
+      canonical([...a.tiles].sort()) === canonical([...b.tiles].sort()) &&
+      (a.calledTileIndex === undefined ? b.calledTileIndex === undefined : b.calledTileIndex !== undefined && a.tiles[a.calledTileIndex] === b.tiles[b.calledTileIndex]);
   }
   #confirm(attempt: ActionAttempt, factKey: string, eventId: string, matchedBy: 'authoritative-event' | 'authoritative-sync'): void {
     requireThat(attempt.executionMode !== 'dry-run' && (attempt.status === 'awaiting-confirmation' || attempt.status === 'uncertain'), 'CONFIRMATION_WITHOUT_POSSIBLE_SEND');
@@ -176,9 +188,9 @@ export class StorageDatabase {
     const row = this.#db.prepare('SELECT fact_key, event_id, body FROM observed_actions WHERE game_match_key=? AND game_hand_key=? AND source_cursor=?').get(attempt.gameMatchKey, attempt.gameHandKey, attempt.expectedCursor);
     if (!row) return;
     const fact = parse<ObservedAction>(row.body);
-    if (fact.actor !== attempt.actor || fact.kind !== 'discard' || fact.tiles.length !== 1 || fact.tiles[0] !== attempt.tile || !fact.tsumogiri.known || fact.tsumogiri.value !== attempt.tsumogiri) return;
+    if (!this.#matchesFact(attempt, fact)) return;
     // Live facts reference their committed game event; sync-only facts have a separate ID.
-    const event = this.#db.prepare("SELECT event_id FROM game_events WHERE event_id=? AND type='TileDiscarded'").get(row.event_id as string);
+    const event = this.#db.prepare("SELECT event_id FROM game_events WHERE event_id=? AND type IN ('TileDiscarded','MeldDeclared')").get(row.event_id as string);
     this.#confirm(attempt, String(row.fact_key), String(row.event_id), event ? 'authoritative-event' : 'authoritative-sync');
   }
   setPendingMode(sessionId: string, mode: DecisionMode): GameProjection {
@@ -220,9 +232,9 @@ export class StorageDatabase {
       requireThat(p.sequence === row.sequence && p.state && canonical(p.state) === canonical(snapshot.state), 'VERSION_CONFLICT');
       requireThat(this.#db.prepare('SELECT recovery_required FROM sessions WHERE session_id=?').get(p.sessionId)?.recovery_required === 0, 'RECOVERY_SYNC_REQUIRED');
       const candidate = snapshot.legalActions.find(a => a.id === input.actionId);
-      requireThat(candidate?.authority === 'executor' && candidate.action.kind === 'discard', 'ACTION_NOT_LEGAL');
-      const action = candidate.action;
-      const tile = p.state.ownConcealed.find(t => t.instanceId === action.tile); requireThat(tile, 'ACTION_NOT_LEGAL');
+      requireThat(candidate?.authority === 'executor' && candidate.action.kind !== 'tsumo' && candidate.action.kind !== 'ron', 'ACTION_NOT_LEGAL');
+      const action = candidate.action, expectedAction = expectedActionFor(action, p.state);
+      const representative = expectedAction.kind === 'discard' ? expectedAction.tile : expectedAction.meld.tiles[0]!;
       if (input.executionMode !== 'dry-run') {
         const pending = this.#db.prepare("SELECT attempt_id FROM action_attempts WHERE game_match_key=? AND execution_mode IN ('contract-test','live') AND status IN ('prepared','dispatching','awaiting-confirmation','uncertain') LIMIT 1").get(row.game_match_key as string);
         requireThat(!pending, 'ACTION_RECONCILIATION_REQUIRED');
@@ -235,7 +247,7 @@ export class StorageDatabase {
         gameMatchKey: String(row.game_match_key), gameHandKey: String(row.game_hand_key), windowId: snapshot.windowId,
         stateVersion: snapshot.stateVersion, connectionEpoch: snapshot.connectionEpoch, controlEpoch: snapshot.controlEpoch,
         processInstanceId: input.processInstanceId, executionMode: input.executionMode, status: 'prepared', preparedAt: input.preparedAt,
-        actor: p.state.ownSeat, tile: tile.code, tsumogiri: candidate.action.tsumogiri, expectedCursor: nextCursor(snapshot.sourceCursor) };
+        actor: p.state.ownSeat, tile: representative, tsumogiri: expectedAction.kind === 'discard' && expectedAction.tsumogiri, expectedCursor: nextCursor(snapshot.sourceCursor), actionSpec: structuredClone(action), expectedAction };
       this.#db.prepare('INSERT INTO action_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(attempt.id, p.sessionId, input.decisionId, attempt.gameMatchKey, attempt.gameHandKey, attempt.expectedCursor, attempt.status, attempt.executionMode, canonical(attempt));
       if (attempt.executionMode !== 'dry-run') {
         this.#db.prepare('INSERT INTO action_slots VALUES (?, ?, ?, ?, ?)').run(p.sessionId, attempt.handId, attempt.connectionEpoch, attempt.windowId, attempt.id);

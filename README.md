@@ -2,7 +2,7 @@
 
 面向 Mac arm64 的 AI 雀魂直播项目：通过已登录的 ego 雀魂页面完成友人场对局，结合专用麻将引擎、通用 LLM、逐手解说、B站弹幕、中文语音和 OBS 输出。
 
-**已实现阶段 1 状态／执行链路和生产桥接，并通过普通弃牌、重连同步、发送前暂停的实场验收（2026-11-05，Asia/Shanghai）。** 提供 SQLite worker、GameActor、确定性 reducer、单执行器和脱敏实场回放。倒计时／自动和牌仍需人工读回，持续自动运行保持关闭。详见[实场证据与限制](./docs/validation/phase1-live.md)、[阶段 1 实现范围](./docs/validation/state-foundation.md)和[恢复验证](./docs/validation/recovery.md)。
+**已实现阶段 1 状态／执行链路和生产桥接，并通过普通弃牌、重连同步、发送前暂停的实场验收（2026-11-05，Asia/Shanghai）。** 提供 SQLite worker、GameActor、确定性 reducer、单执行器和脱敏实场回放。已补自动倒计时与自动和牌读回、恢复，以及阶段 2 合法动作映射；新链路通过离线回归，新增实场验收待完成，持续自动运行保持关闭。详见[实场证据与限制](./docs/validation/phase1-live.md)、[阶段 1 实现范围](./docs/validation/state-foundation.md)和[恢复验证](./docs/validation/recovery.md)。
 
 使用 vfox 管理项目运行时，安装、启动与验证见[本机开发说明](./docs/USAGE.md)：
 
@@ -62,4 +62,4 @@ package-lock.json          npm 依赖锁定
 
 模型服务字段见 [.env.example](./.env.example)。实际密钥由本机 `.env` 管理，不提交到仓库；后续运行数据和脱敏回放放入被忽略的 `data/`。
 
-下一步补齐无人值守的倒计时／自动和牌读回、小局协调和阶段 2 的完整动作映射与双模式整场。控制台、OBS 页面和完整自动对局尚未交付。受控实场命令与固定 live 台账用法见[本机说明](./docs/USAGE.md)。
+当前先完成[自动化门槛实场验收](./docs/validation/automation-gates.md)；[阶段 2 动作映射](./docs/validation/phase2-actions.md)已有离线实现。后续仍需跨小局协调、双模式真实整场与同房续局。控制台、OBS 页面和完整自动对局尚未交付。受控实场命令与固定 live 台账用法见[本机说明](./docs/USAGE.md)。

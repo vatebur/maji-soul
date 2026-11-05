@@ -2,7 +2,7 @@
 
 [项目概览](../README.md)
 
-更新日期：2026-11-05（Asia/Shanghai）。已建立设计基线和阶段 1 生产桥接；普通弃牌、重连同步、发送前暂停已[实场验收](./validation/phase1-live.md)，持续自动运行仍关闭。运行方式见[USAGE.md](./USAGE.md)，范围见[阶段 0](./validation/technical-spikes.md)、[阶段 1](./validation/state-foundation.md)与[恢复验证](./validation/recovery.md)。详细需求和契约仍由各专题维护。
+更新日期：2026-11-05（Asia/Shanghai）。已建立设计基线和阶段 1 生产桥接；普通弃牌、重连同步、发送前暂停已[实场验收](./validation/phase1-live.md)，自动读回／恢复与阶段 2 动作已有离线实现，新增实场证据见[待验收门槛](./validation/automation-gates.md)和[动作映射](./validation/phase2-actions.md)。持续自动运行仍关闭。运行方式见[USAGE.md](./USAGE.md)，范围见[阶段 0](./validation/technical-spikes.md)、[阶段 1](./validation/state-foundation.md)与[恢复验证](./validation/recovery.md)。详细需求和契约仍由各专题维护。
 
 ## 按任务阅读
 

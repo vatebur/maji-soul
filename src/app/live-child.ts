@@ -27,7 +27,8 @@ lines.on('line', line => {
     } else {
       const request = pending.get(message.id); if (!request) return;
       clearTimeout(request.timer); pending.delete(message.id);
-      if (message.ok) request.resolve(message.result); else request.reject(Error('EGO_PAGE_FAILED'));
+      if (message.ok) request.resolve(message.result);
+      else request.reject(Error(typeof message.code === 'string' && /^[A-Z][A-Z0-9_]+$/.test(message.code) ? message.code : 'EGO_PAGE_FAILED'));
     }
   } catch { process.exitCode = 1; lines.close(); process.stdin.destroy(); }
 });

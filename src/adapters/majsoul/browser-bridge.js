@@ -1,24 +1,44 @@
 // Self-contained Page.evaluate installer. No authentication payload is retained.
 // Live action XOR: Akagi 63cea4b5, Copyright 2026 Shinkuan, Apache-2.0.
 // License/notice: docs/research/licenses/akagi-{LICENSE,NOTICE}.txt.
-export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 }) {
+export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, operationRulesSource, phase2ActionsEnabled = false }) {
   if (window.__majiBridge) throw Error('BRIDGE_ALREADY_INSTALLED');
   if (!Number.isInteger(capacity) || capacity < 8 || capacity > 1024) throw Error('INVALID_BRIDGE_CAPACITY');
   const root = window.protobuf.parse(proto, { keepCase: true }).root;
   const wrapper = root.lookupType('lq.Wrapper');
+  const operationRules = operationRulesSource ? (0, eval)(`(${operationRulesSource})`)() : null;
+  if (phase2ActionsEnabled && !operationRules?.mapActionToRequest) throw Error('ACTION_RULES_REQUIRED');
   const OriginalSocket = window.WebSocket, originalSend = OriginalSocket.prototype.send;
   const flows = new Map(), replayed = new WeakSet(), records = [], tokens = new Map();
   let gameSocket, pageEpoch = 1, generation = 0, lastStep = null, paused = true;
   let reason = null, overflow = false, controlEpoch = 0, processInstanceId = null, lastSync = null;
   let actionStream = 0, operation = null, restored = false, gameUuid = null, authSummary = null;
   let roundSignature = null, handEnded = false;
-  const stats = { clientRequests: 0, bridgeSyncRequests: 0, bridgeActionSends: 0 };
+  let autoWin = null;
+  let lastAutoWinReadback = null, winningOffer = null;
+  let operationTiming = null;
+  let lastClientWin = null, lastOwnWin = null;
+  const stats = { clientRequests: 0, bridgeSyncRequests: 0, bridgeActionSends: 0, clientWinRequests: 0, authoritativeOwnWins: 0 };
   const seen = new Map();
   const iso = () => new Date().toISOString();
-  const fail = code => { paused = true; reason = code; pageEpoch++; tokens.clear(); };
+  const fail = code => { paused = true; reason = code; pageEpoch++; tokens.clear(); autoWin = null; operationTiming = null; lastAutoWinReadback = null; winningOffer = null; };
   const requireThat = (value, code) => { if (!value) throw Error(code); };
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const clone = value => JSON.parse(JSON.stringify(value));
+  function observeWinningOffer() {
+    winningOffer = null;
+    if (!operation?.value.operation_list?.some(o => o.type === 8 || o.type === 9)) return;
+    const prior = lastAutoWinReadback;
+    winningOffer = { pageEpoch,sourceStream:actionStream,step:lastStep,
+      priorAutoWinReadback:prior?.state==='enabled' && prior.pageEpoch===pageEpoch && prior.sourceStream===actionStream
+        ? { ...pick(prior,['state','pageEpoch','sourceStream','step','generation','observedAt','rgbaSha256']),
+          sampledMonoMs:prior.sampledMonoMs,ageAtOfferMs:Math.max(0,performance.now()-prior.sampledMonoMs) } : null };
+  }
+  // Unity toolbar changes do not emit game RPCs. Every local interaction revokes
+  // prepared sends before Unity can handle it; a subsequent readback must be fresh.
+  const localInput = () => { generation++;tokens.clear();autoWin=null;operationTiming=null;lastAutoWinReadback=null;winningOffer=null; };
+  const inputEvents = ['pointerdown','keydown','resize','scroll'];
+  for (const name of inputEvents) window.addEventListener(name,localInput,{capture:true});
   // Private 128-bit fingerprint compares complete decoded-wire action bytes before redaction.
   // No raw action bytes (including somebody else's draw) are retained in the dedup index.
   function fingerprint(bytes) {
@@ -115,10 +135,20 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
     if (lastStep !== null && action.step !== lastStep + 1) fail('SOURCE_STEP_GAP');
     if (seen.size >= 1024) { fail('SOURCE_DEDUP_CAPACITY'); return; }
     seen.set(action.step, signature); lastStep = action.step;
-    if (action.name === 'ActionNewRound') { roundSignature = signature; handEnded = false; }
+    if (action.name === 'ActionNewRound') { roundSignature = signature; handEnded = false; lastClientWin = null; lastOwnWin = null; lastAutoWinReadback=null; winningOffer=null; }
     if (['ActionHule','ActionNoTile','ActionLiuJu'].includes(action.name)) handEnded = true;
+    if (action.name === 'ActionHule' && action.payload.hules?.some(h => h.seat === ownSeat)) {
+      stats.authoritativeOwnWins++;
+      const win = action.payload.hules.find(h => h.seat === ownSeat);
+      const matches = lastClientWin?.pageEpoch === pageEpoch && lastClientWin?.sourceStream === actionStream &&
+        lastClientWin.offered && lastClientWin.step < lastStep && lastClientWin.type === (win.zimo ? 8 : 9);
+      lastOwnWin = { pageEpoch,sourceStream:actionStream,step:lastStep,receivedAt:iso(),kind:win.zimo?'tsumo':'ron',
+        clientWinRequestId:matches?lastClientWin.requestId:null };
+    }
     const receivedAt = iso(), receivedMonoMs = performance.now();
     operation = action.payload.operation ? { step: lastStep, receivedMonoMs, value: clone(action.payload.operation) } : null;
+    observeWinningOffer();
+    operationTiming = null;
     tokens.clear();
     push({ kind: 'action', ...action, receivedAt, receivedMonoMs, sourceStream: actionStream });
   }
@@ -170,6 +200,13 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
       }
       if (!flow.fresh) return;
       event.stopImmediatePropagation();
+      if (request.winRecord) {
+        try {
+          const decoded = body(rpcMap[request.method].resp, packet.data);
+          request.winRecord.delivery = decoded.error ? 'rejected' : 'accepted';
+          request.winRecord.receiptObservedAt = iso();
+        } catch { request.winRecord.delivery = 'unknown'; }
+      }
       if (request.bridge) {
         let response;
         try { response = body(rpcMap[request.method].resp, packet.data); }
@@ -210,13 +247,30 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
     }
     // Legacy sockets predate interception: preserve client operation, deny bridge RPCs.
     if (!flow.fresh) { const result = originalSend.call(this, raw); stats.clientRequests++; return result; }
+    let clientWinType = null, winRecord = null;
     if (packet.name === '.lq.FastTest.inputOperation' || packet.name === '.lq.FastTest.inputChiPengGang') {
       tokens.clear(); generation++; // manual/client action revokes prepared program commands
+      if (packet.name === '.lq.FastTest.inputOperation') {
+        try {
+          const input = body(rpcMap[packet.name].req, packet.data);
+          if (input.type === 8 || input.type === 9) { stats.clientWinRequests++; clientWinType = input.type; }
+        } catch { fail('CLIENT_OPERATION_DECODE_FAILED'); }
+      }
     }
     const id = allocate(flow), rewritten = packet.bytes.slice(); rewritten[1] = id & 255; rewritten[2] = id >> 8;
-    flow.pending.set(id, { method: packet.name, bridge: false, clientId: packet.id });
+    if (clientWinType !== null) {
+      winRecord = { requestId:id,type:clientWinType,pageEpoch,sourceStream:actionStream,step:lastStep,observedAt:iso(),delivery:'pending',
+        offered:operation?.step===lastStep && operation.value.seat===ownSeat && !!operation.value.operation_list?.some(o=>o.type===clientWinType),
+        autoWinVerifiedAtRequest:autoWin?.state==='enabled' && autoWin.pageEpoch===pageEpoch && autoWin.generation===generation-1 &&
+          autoWin.step===lastStep && performance.now()<autoWin.expiresMonoMs,
+        priorAutoWinReadback:winningOffer?.pageEpoch===pageEpoch && winningOffer.sourceStream===actionStream && winningOffer.step===lastStep && winningOffer.priorAutoWinReadback
+          ? { ...pick(winningOffer.priorAutoWinReadback,['state','pageEpoch','sourceStream','step','generation','observedAt','rgbaSha256','ageAtOfferMs']),
+            ageAtRequestMs:Math.max(0,performance.now()-winningOffer.priorAutoWinReadback.sampledMonoMs) } : null };
+      lastClientWin = winRecord;
+    }
+    flow.pending.set(id, { method: packet.name, bridge: false, clientId: packet.id, winRecord });
     try { const result = originalSend.call(this, rewritten); stats.clientRequests++; return result; }
-    catch (error) { flow.pending.delete(id); fail('CLIENT_SEND_FAILED'); throw error; }
+    catch (error) { if (winRecord) winRecord.delivery='unknown'; flow.pending.delete(id); fail('CLIENT_SEND_FAILED'); throw error; }
   }
   OriginalSocket.prototype.send = send; window.WebSocket = SocketProxy;
   function rpc(method, params, finalCheck) {
@@ -232,7 +286,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
         if (finalCheck) finalCheck();
         invoked = true; originalSend.call(gameSocket, bytes); sent = true;
         if (method === '.lq.FastTest.syncGame') stats.bridgeSyncRequests++;
-        if (method === '.lq.FastTest.inputOperation') stats.bridgeActionSends++;
+        if (method === '.lq.FastTest.inputOperation' || method === '.lq.FastTest.inputChiPengGang') stats.bridgeActionSends++;
         if (flow.pending.has(id)) pending.timer = setTimeout(() => reject(Error('RPC_RECEIPT_TIMEOUT')), 5000);
       } catch (error) { if (!invoked) flow.pending.delete(id); reject(error); }
     });
@@ -253,27 +307,42 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
     requireThat(snapshot.sourceCursor && Number(snapshot.sourceCursor.split(':').at(-1)) === lastStep, 'SOURCE_CURSOR_STALE');
     requireThat(processInstanceId === f.processInstanceId, 'PROCESS_INSTANCE_STALE');
     requireThat(f.controlEpoch === controlEpoch, 'FENCE_STALE');
-    requireThat(action.action?.kind === 'discard' && typeof action.action.tsumogiri === 'boolean' && /^[0-9][mps]$|^[1-7]z$/.test(input.tile), 'UNSUPPORTED_ACTION');
+    requireThat(action.authority !== 'client-auto-win' && !['tsumo','ron'].includes(action.action?.kind), 'CLIENT_AUTO_WIN_WINDOW');
+    requireThat(action.action?.kind === 'discard' || phase2ActionsEnabled, 'PHASE2_ACTIONS_DISABLED');
     requireThat(intent.executionMode === 'live' && snapshot.state?.ownSeat === ownSeat && intent.actor === ownSeat, 'DURABLE_INTENT_REQUIRED');
     requireThat(snapshot.legalActions?.some(candidate => same(candidate, action)), 'ACTION_NOT_LEGAL');
-    const physical = snapshot.state.ownConcealed?.find(tile => tile.instanceId === action.action.tile);
-    const protocolTile = physical?.code.endsWith('r') ? `0${physical.code[1]}` : physical?.code;
-    requireThat(physical && protocolTile === input.tile && intent.tile === physical.code && intent.tsumogiri === action.action.tsumogiri, 'ACTION_NOT_LEGAL');
+    if (['discard','riichi-discard'].includes(action.action.kind)) {
+      const physical = snapshot.state.ownConcealed?.find(tile => tile.instanceId === action.action.tile);
+      const protocolTile = physical?.code.endsWith('r') ? `0${physical.code[1]}` : physical?.code;
+      requireThat(physical && protocolTile === input.tile && intent.tile === physical.code && intent.tsumogiri === action.action.tsumogiri, 'ACTION_NOT_LEGAL');
+    }
     requireThat(operation && operation.step === lastStep && operation.value.seat === ownSeat, 'WINDOW_CLOSED');
-    requireThat(operation.value.operation_list?.length === 1 && operation.value.operation_list[0].type === 1, 'UNSUPPORTED_OPERATION');
-    const budgetMs = input.timing?.budgetMs ?? Math.min(input.timing?.remainingMs - (input.timing?.uncertaintyMs ?? 0), 30000);
-    requireThat(Number.isInteger(budgetMs) && budgetMs > 0 && budgetMs <= 30000 && ['manual-client-countdown','client-countdown'].includes(input.timing?.source), 'DEADLINE_PROVENANCE_UNVERIFIED');
-    const observed = Date.parse(input.timing.observedAt ?? input.timing.sampledAt), now = Date.now();
-    if (input.timing.step !== undefined) requireThat(input.timing.step === lastStep, 'SOURCE_CURSOR_STALE');
-    requireThat(Number.isFinite(observed) && observed <= now && now - observed < budgetMs, 'DEADLINE_EXCEEDED');
+    requireThat(!operation.value.operation_list?.some(o => o.type === 8 || o.type === 9), 'CLIENT_AUTO_WIN_WINDOW');
+    requireThat(autoWin?.state === 'enabled' && autoWin.pageEpoch === pageEpoch && autoWin.generation === generation && autoWin.step === lastStep && performance.now() < autoWin.expiresMonoMs, 'AUTO_WIN_UNVERIFIED');
+    let request;
+    if (phase2ActionsEnabled) {
+      requireThat(same(intent.actionSpec, action.action), 'DURABLE_INTENT_REQUIRED');
+      request = operationRules.mapActionToRequest(clone(action.action), clone(snapshot.state), clone(operation.value));
+    } else {
+      requireThat(operation.value.operation_list?.length === 1 && operation.value.operation_list[0].type === 1 && !operation.value.operation_list[0].combination?.length, 'UNSUPPORTED_OPERATION');
+      request = { method:'.lq.FastTest.inputOperation',params:{type:1,tile:input.tile,moqie:action.action.tsumogiri,timeuse:0} };
+    }
+    requireThat(operationTiming && same(input.timing, operationTiming.value) && input.timing.connectionEpoch === f.connectionEpoch, 'DEADLINE_PROVENANCE_UNVERIFIED');
+    const now = Date.now();
+    requireThat(performance.now() + 250 < operationTiming.deadlineMonoMs, 'DEADLINE_EXCEEDED');
     requireThat(Date.parse(snapshot.actionDeadline) > now && Date.parse(command.expiresAt) > now, 'DEADLINE_EXCEEDED');
+    return request;
   }
   const api = {
     read: () => ({ schemaVersion: 1, pageEpoch, generation, lastStep, sourceStream: actionStream, ownSeat,
       paused, controlEpoch, reason, overflow, queued: records.length, freshConnection: !!flows.get(gameSocket)?.fresh,
       pendingRpcCount: [...flows.values()].reduce((count, flow) => count + flow.pending.size, 0),
       operation: operation ? clone(operation) : null, authSummary: authSummary ? clone(authSummary) : null,
-      gameUuid, stats: { ...stats }, allocator: 'wire-multiplexer-v1' }),
+      autoWin: autoWin ? { state: autoWin.state, pageEpoch: autoWin.pageEpoch, generation: autoWin.generation, step: autoWin.step,
+        observedAt: autoWin.observedAt, rgbaSha256: autoWin.rgbaSha256, expiresInMs: Math.max(0, autoWin.expiresMonoMs-performance.now()) } : null,
+      lastClientWin:lastClientWin?clone(lastClientWin):null,lastOwnWin:lastOwnWin?clone(lastOwnWin):null,
+      lastAutoWinReadback:lastAutoWinReadback?pick(lastAutoWinReadback,['state','pageEpoch','sourceStream','step','generation','observedAt','rgbaSha256']):null,
+      gameUuid, phase2ActionsEnabled, stats: { ...stats }, allocator: 'wire-multiplexer-v1' }),
     drain: () => { const result = { ...api.read(), records: records.splice(0) }; return result; },
     pause: control => {
       paused = true; tokens.clear();
@@ -285,9 +354,36 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
       } else { pageEpoch++; paused = true; }
       return { pageEpoch, generation, controlEpoch, paused };
     },
+    ackAutoWin(readback) {
+      tokens.clear();
+      requireThat(!restored && !reason && !overflow && flows.get(gameSocket)?.fresh, 'BRIDGE_UNTRUSTED');
+      requireThat(readback?.source === 'unity-button-pixels-v1' && ['enabled','disabled','unknown'].includes(readback.state) && /^[a-f0-9]{64}$/.test(readback.rgbaSha256), 'AUTO_WIN_READBACK_INVALID');
+      requireThat(readback.pageEpoch === pageEpoch && readback.generation === generation && readback.step === lastStep, 'AUTO_WIN_READBACK_STALE');
+      const age = Date.now()-Date.parse(readback.observedAt);
+      requireThat(Number.isFinite(age) && age>=0 && age<1000, 'AUTO_WIN_READBACK_STALE');
+      autoWin = { ...pick(readback, ['state','pageEpoch','generation','step','observedAt','rgbaSha256']), expiresMonoMs:performance.now()+1000-age };
+      lastAutoWinReadback={ ...pick(readback,['state','pageEpoch','generation','step','observedAt','rgbaSha256']),sourceStream:actionStream,sampledMonoMs:performance.now()-age };
+      if(readback.state!=='enabled')winningOffer=null;
+      return { state:autoWin.state,pageEpoch,generation,expiresInMs:1000-age };
+    },
+    ackTiming(timing) {
+      tokens.clear(); operationTiming = null;
+      requireThat(operation && operation.requestedMonoMs !== undefined && operation.gameState === 1 && operation.lastPauseTimeMs === 0, 'DEADLINE_PROVENANCE_UNVERIFIED');
+      requireThat(timing?.source === 'protocol-operation' && timing.origin === 'sync-game' && timing.step === lastStep && timing.pageEpoch === pageEpoch && Number.isInteger(timing.connectionEpoch) && timing.connectionEpoch > 0, 'TIMING_SCOPE_MISMATCH');
+      requireThat(timing.sampledAt === operation.receivedAt && timing.sampledMonoMs === operation.receivedMonoMs && timing.fixedMs === operation.value.time_fixed && timing.addMs === 0 && operation.value.time_add === 0 && timing.elapsedMs === operation.passedWaitingTime * 1000, 'TIMING_SCOPE_MISMATCH');
+      const rtt = Math.ceil(operation.receivedMonoMs - operation.requestedMonoMs);
+      requireThat(rtt >= 0 && rtt <= 30000 && timing.networkAllowanceMs === rtt && timing.quantizationAllowanceMs === 2000 && timing.uncertaintyMs === rtt + 2000 && timing.remainingMs === timing.fixedMs - timing.elapsedMs, 'COUNTDOWN_READBACK_MISMATCH');
+      const deadlineMonoMs = timing.sampledMonoMs + timing.remainingMs - timing.uncertaintyMs;
+      requireThat(performance.now() + 250 < deadlineMonoMs, 'DEADLINE_EXCEEDED');
+      operationTiming = { value:clone(timing),deadlineMonoMs };
+      return { verified:true,pageEpoch,step:lastStep,remainingMs:deadlineMonoMs-performance.now() };
+    },
     async sync() {
       paused = true; tokens.clear();
-      const startGeneration = generation, result = await rpc('.lq.FastTest.syncGame', { round_id: '', step: 0 }).work;
+      autoWin = null; operationTiming = null;
+      const requestedMonoMs = performance.now(), startGeneration = generation;
+      const result = await rpc('.lq.FastTest.syncGame', { round_id: '', step: 0 }).work;
+      const receivedMonoMs = performance.now(), receivedAt = iso();
       const response = result.response;
       requireThat(!response.error && !response.is_end && response.game_restore, 'SYNC_RESPONSE_INCOMPLETE');
       const actions = response.game_restore.actions.map(a => decodedAction(a, false));
@@ -295,10 +391,13 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
       requireThat(actions.length > 0 && (firstHandIndex === 0 || firstHandIndex === 1 && actions[0].name === 'ActionMJStart'), 'SYNC_HISTORY_INCOMPLETE');
       for (let i = 1; i < actions.length; i++) requireThat(actions[i].step === actions[i - 1].step + 1, 'SYNC_HISTORY_GAP');
       requireThat(response.step === actions.at(-1).step + 1, 'SYNC_NEXT_STEP_MISMATCH');
-      lastSync = { generation, startGeneration, step: response.step - 1, actions };
-      return { schemaVersion: 1, pageEpoch, generation, startGeneration, requestId: result.requestId, receivedAt: iso(),
+      lastSync = { generation, startGeneration, step: response.step - 1, actions, requestedMonoMs, receivedMonoMs, receivedAt,
+        passedWaitingTime:response.game_restore.passed_waiting_time, gameState:response.game_restore.game_state,
+        lastPauseTimeMs:response.game_restore.last_pause_time_ms };
+      return { schemaVersion: 1, pageEpoch, generation, startGeneration, requestId: result.requestId, requestedMonoMs, receivedMonoMs, receivedAt,
         ownSeat, gameUuid, authSummary: authSummary ? clone(authSummary) : null, step: response.step, is_end: false,
-        game_restore: { actions, passed_waiting_time: response.game_restore.passed_waiting_time } };
+        game_restore: { actions, passed_waiting_time: response.game_restore.passed_waiting_time,
+          game_state:response.game_restore.game_state,last_pause_time_ms:response.game_restore.last_pause_time_ms } };
     },
     ackSync(expected) {
       requireThat(lastSync && expected.generation === generation && expected.generation === lastSync.generation && expected.step === lastSync.step, 'SYNC_STALE');
@@ -307,7 +406,10 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
       roundSignature = lastSync.actions.find(a => a.name === 'ActionNewRound').fingerprint; handEnded = false;
       lastStep = lastSync.step;
       const last = lastSync.actions.at(-1), offered = last.payload.operation;
-      operation = offered ? { step: lastStep, receivedMonoMs: performance.now(), value: clone(offered) } : null;
+      operation = offered ? { step:lastStep,receivedMonoMs:lastSync.receivedMonoMs,receivedAt:lastSync.receivedAt,
+        requestedMonoMs:lastSync.requestedMonoMs,passedWaitingTime:lastSync.passedWaitingTime,
+        gameState:lastSync.gameState,lastPauseTimeMs:lastSync.lastPauseTimeMs,value:clone(offered) } : null;
+      observeWinningOffer();
       records.length = 0; overflow = false; reason = null; tokens.clear(); lastSync = null;
       return api.read();
     },
@@ -318,15 +420,15 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
       return { reconnectRequested: true, pageEpoch };
     },
     prepare(input) {
-      checkFence(input);
+      const request = checkFence(input);
       for (const [key, entry] of tokens) if (entry.used || entry.expiresMono <= performance.now()) tokens.delete(key);
       requireThat(tokens.size < 64, 'BRIDGE_PERMIT_CAPACITY');
-      const budgetMs = input.timing.budgetMs ?? Math.min(input.timing.remainingMs - (input.timing.uncertaintyMs ?? 0), 30000);
       const now = Date.now(), ttl = Math.min(Date.parse(input.command.expiresAt) - now,
-        Date.parse(input.snapshot.actionDeadline) - now, budgetMs - (now - Date.parse(input.timing.observedAt ?? input.timing.sampledAt)), 1000);
+        Date.parse(input.snapshot.actionDeadline) - now, operationTiming.deadlineMonoMs-performance.now()-250,
+        autoWin.expiresMonoMs-performance.now(), 1000);
       requireThat(ttl > 0, 'PERMIT_EXPIRED');
       const token = crypto.randomUUID();
-      tokens.set(token, { input: clone(input), expiresMono: performance.now() + ttl, used: false });
+      tokens.set(token, { input: clone(input), request:clone(request),expiresMono: performance.now() + ttl, used: false });
       return { token, pageEpoch, generation, expiresInMs: ttl };
     },
     async dispatch({ command, token }) {
@@ -338,10 +440,10 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
         requireThat(!paused && same(command, input.command), 'FENCE_STALE');
         requireThat(performance.now() < entry.expiresMono, 'PERMIT_EXPIRED');
         requireThat(command.fence.controlEpoch === controlEpoch && command.fence.processInstanceId === processInstanceId, 'FENCE_STALE');
-        checkFence(input);
+        requireThat(same(checkFence(input),entry.request), 'ACTION_CHANGED');
       };
       let call;
-      try { call = rpc('.lq.FastTest.inputOperation', { type: 1, tile: input.tile, moqie: input.action.action.tsumogiri, timeuse: 0 }, check); }
+      try { call = rpc(entry.request.method, entry.request.params, check); }
       catch { return { callId: `bridge:${pageEpoch}:not-sent`, delivery: 'not-sent', observedAt: iso() }; }
       if (!call.sent) { await call.work.catch(() => {}); if (call.invoked) fail('ACTION_UNCERTAIN'); return { callId: `bridge:${pageEpoch}:${call.id}`, delivery: call.invoked ? 'unknown' : 'not-sent', observedAt: iso() }; }
       operation = null; tokens.clear();
@@ -358,6 +460,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256 })
       if (OriginalSocket.prototype.send === send) OriginalSocket.prototype.send = originalSend;
       if (window.WebSocket === SocketProxy) window.WebSocket = OriginalSocket;
       for (const [socket, flow] of flows) { socket.removeEventListener('message', flow.message, true); socket.removeEventListener('close', flow.close, true); }
+      for (const name of inputEvents) window.removeEventListener(name,localInput,{capture:true});
       flows.clear(); delete window.__majiBridge;
       return { restored: true };
     },
