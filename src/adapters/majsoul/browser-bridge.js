@@ -14,6 +14,8 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
   let reason = null, overflow = false, controlEpoch = 0, processInstanceId = null, lastSync = null;
   let actionStream = 0, operation = null, restored = false, gameUuid = null, authSummary = null;
   let roundSignature = null, handEnded = false;
+  let handSha256 = null, roundIdentity = null, matchEnded = false, matchResult = null;
+  const knownRounds = new Map();
   let autoWin = null;
   let lastAutoWinReadback = null, winningOffer = null;
   let operationTiming = null;
@@ -25,6 +27,11 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
   const requireThat = (value, code) => { if (!value) throw Error(code); };
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const clone = value => JSON.parse(JSON.stringify(value));
+  const endsHand = name => ['ActionHule','ActionNoTile','ActionLiuJu'].includes(name);
+  function closeWindow() {
+    paused = true; tokens.clear(); operation = null; operationTiming = null;
+    autoWin = null; lastAutoWinReadback = null; winningOffer = null;
+  }
   function observeWinningOffer() {
     winningOffer = null;
     if (!operation?.value.operation_list?.some(o => o.type === 8 || o.type === 9)) return;
@@ -99,6 +106,8 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     if (value.gameend && typeof value.gameend === 'object') result.gameend = pick(value.gameend, ['scores']);
     if (name === 'ActionHule') result.hules = (value.hules || []).map(h => pick(h, ['seat','zimo','point_rong','point_zimo_qin','point_zimo_xian']));
     if (name === 'ActionNoTile') result.scores = (value.scores || []).map(s => pick(s, ['seat','old_scores','delta_scores']));
+    if (value.hules_history?.length) result.hules_history = [{unsupported:true}];
+    if (value.baopai) result.baopai = value.baopai;
     // Variant presence must survive redaction so a normalizer can reject it.
     for (const field of ['muyu','yongchang','hun_zhi_yi_ji_info','xia_ke_shang']) if (value[field]) result[field] = { unsupported: true };
     return result;
@@ -121,22 +130,36 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     try { action = decodedAction(protoAction, true); }
     catch { fail('UNSUPPORTED_PROTOCOL_ACTION'); push({ kind: 'fault', code: 'UNSUPPORTED_PROTOCOL_ACTION' }); return; }
     const signature = action.fingerprint;
-    // NewRound is the only accepted reset; its fingerprint makes retransmission idempotent.
-    if (action.name === 'ActionNewRound' && lastStep !== null && action.step < lastStep) {
-      if (roundSignature === signature) return;
-      if (!handEnded) { fail('SOURCE_DEDUP_CONFLICT'); push({ kind: 'fault', code: 'SOURCE_DEDUP_CONFLICT' }); return; }
-      actionStream++; seen.clear(); lastStep = null;
+    // Hand identity, not dealer/honba or a lower step, establishes a boundary.
+    if (action.name === 'ActionNewRound') {
+      const identity = action.payload.sha256 || signature;
+      if (identity === roundIdentity) {
+        if (signature !== roundSignature) { fail('SOURCE_DEDUP_CONFLICT'); push({kind:'fault',code:'SOURCE_DEDUP_CONFLICT'}); }
+        return;
+      }
+      if (knownRounds.has(identity) || matchEnded || roundSignature && !handEnded) {
+        fail(knownRounds.has(identity) ? 'STALE_HAND_HISTORY' : 'HAND_BOUNDARY_UNVERIFIED');
+        push({kind:'fault',code:reason}); return;
+      }
+      if (knownRounds.size >= 1024) { fail('HAND_HISTORY_CAPACITY'); return; }
+      if (roundSignature) actionStream++;
+      closeWindow(); seen.clear(); lastStep = null;
+      roundIdentity = identity; handSha256 = action.payload.sha256 || null;
+      knownRounds.set(identity, signature);
     }
     const previous = seen.get(action.step);
     if (previous !== undefined) {
       if (previous !== signature) { fail('SOURCE_DEDUP_CONFLICT'); push({ kind: 'fault', code: 'SOURCE_DEDUP_CONFLICT' }); }
       return;
     }
+    if ((handEnded || matchEnded && !endsHand(action.name)) && action.name !== 'ActionNewRound') {
+      fail('ACTION_AFTER_HAND_END'); push({kind:'fault',code:'ACTION_AFTER_HAND_END'}); return;
+    }
     if (lastStep !== null && action.step !== lastStep + 1) fail('SOURCE_STEP_GAP');
     if (seen.size >= 1024) { fail('SOURCE_DEDUP_CAPACITY'); return; }
     seen.set(action.step, signature); lastStep = action.step;
     if (action.name === 'ActionNewRound') { roundSignature = signature; handEnded = false; lastClientWin = null; lastOwnWin = null; lastAutoWinReadback=null; winningOffer=null; }
-    if (['ActionHule','ActionNoTile','ActionLiuJu'].includes(action.name)) handEnded = true;
+    if (endsHand(action.name)) { handEnded = true; closeWindow(); if (action.payload.gameend) matchEnded = true; }
     if (action.name === 'ActionHule' && action.payload.hules?.some(h => h.seat === ownSeat)) {
       stats.authoritativeOwnWins++;
       const win = action.payload.hules.find(h => h.seat === ownSeat);
@@ -146,11 +169,20 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
         clientWinRequestId:matches?lastClientWin.requestId:null };
     }
     const receivedAt = iso(), receivedMonoMs = performance.now();
-    operation = action.payload.operation ? { step: lastStep, receivedMonoMs, value: clone(action.payload.operation) } : null;
+    operation = !handEnded && !matchEnded && action.payload.operation ? { step: lastStep, receivedMonoMs, value: clone(action.payload.operation) } : null;
     observeWinningOffer();
     operationTiming = null;
     tokens.clear();
-    push({ kind: 'action', ...action, receivedAt, receivedMonoMs, sourceStream: actionStream });
+    push({ kind: 'action', ...action, receivedAt, receivedMonoMs, sourceStream: actionStream, gameUuid, handSha256 });
+  }
+  function observeMatchEnd(value) {
+    const payload = { result: { players: (value.result?.players || []).map(p => pick(p,['seat','part_point_1'])) } };
+    if (matchResult) {
+      if (!same(matchResult,payload)) { fail('MATCH_RESULT_CONFLICT'); push({kind:'fault',code:'MATCH_RESULT_CONFLICT'}); }
+      return;
+    }
+    closeWindow(); matchEnded = true; matchResult = payload;
+    push({kind:'match-end',name:'NotifyGameEndResult',payload,receivedAt:iso(),gameUuid,handSha256,sourceStream:actionStream});
   }
   function allocate(flow) {
     if (flow.pending.size >= 512) { fail('RPC_PENDING_OVERFLOW'); throw Error('RPC_PENDING_OVERFLOW'); }
@@ -162,26 +194,31 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
   }
   function attach(socket, fresh = false) {
     if (flows.has(socket)) return flows.get(socket);
-    const flow = { fresh, pending: new Map(), nextId: 0, message: null, close: null };
+    const flow = { fresh, retired:false, pending: new Map(), nextId: 0, message: null, close: null };
     flow.message = event => {
       if (replayed.has(event) || restored) return;
       let packet;
       try { packet = envelope(event.data); }
-      catch { fail('FRAME_DECODE_FAILED'); return; }
+      catch { if (!flow.retired) fail('FRAME_DECODE_FAILED'); return; }
       if (!packet) return;
       if (packet.type === 1) {
+        if (flow.retired || gameSocket && socket !== gameSocket) return;
         if (packet.name === '.lq.ActionPrototype') {
           gameSocket = socket;
           try { observeAction(body('lq.ActionPrototype', packet.data)); } catch { fail('ACTION_DECODE_FAILED'); }
+        } else if (packet.name === '.lq.NotifyGameEndResult') {
+          try { observeMatchEnd(body('lq.NotifyGameEndResult',packet.data)); } catch { fail('MATCH_RESULT_DECODE_FAILED'); }
+        } else if (packet.name === '.lq.NotifyGameTerminate') {
+          closeWindow(); fail('GAME_TERMINATED'); push({kind:'fault',code:'GAME_TERMINATED'});
         }
         return;
       }
       if (packet.type !== 3) return;
       const request = flow.pending.get(packet.id);
-      if (!request) { if (flow.fresh) fail('UNEXPECTED_RPC_RESPONSE'); return; }
+      if (!request) { if (flow.fresh && !flow.retired) fail('UNEXPECTED_RPC_RESPONSE'); return; }
       flow.pending.delete(packet.id);
       if (request.timer) clearTimeout(request.timer);
-      if (request.method === '.lq.FastTest.authGame') {
+      if (request.method === '.lq.FastTest.authGame' && socket === gameSocket && !flow.retired) {
         try {
           const decoded = body(rpcMap[request.method].resp, packet.data);
           if (flow.authAccount !== undefined) ownSeat = decoded.seat_list?.indexOf(flow.authAccount);
@@ -210,7 +247,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       if (request.bridge) {
         let response;
         try { response = body(rpcMap[request.method].resp, packet.data); }
-        catch { request.reject(Error('RPC_RESPONSE_DECODE_FAILED')); fail('RPC_RESPONSE_DECODE_FAILED'); return; }
+        catch { request.reject(Error('RPC_RESPONSE_DECODE_FAILED')); if (!flow.retired) fail('RPC_RESPONSE_DECODE_FAILED'); return; }
         request.resolve({ response, requestId: packet.id });
         return;
       }
@@ -235,20 +272,36 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
   function send(raw) {
     const flow = attach(this);
     let packet;
-    try { packet = envelope(raw); } catch { fail('FRAME_DECODE_FAILED'); return originalSend.call(this, raw); }
+    try { packet = envelope(raw); } catch { if (!flow.retired) fail('FRAME_DECODE_FAILED'); return originalSend.call(this, raw); }
     // Unknown client methods still share the wire allocator. Passing through their
     // original IDs could collide with an in-flight bridge request after schema drift.
     if (!packet || packet.type !== 2) return originalSend.call(this, raw);
-    if (packet.name.startsWith('.lq.FastTest.')) gameSocket = this;
-    if (packet.name === '.lq.FastTest.authGame') {
+    if (!gameSocket && packet.name.startsWith('.lq.FastTest.')) gameSocket = this;
+    if (packet.name === '.lq.FastTest.authGame' && !flow.retired) {
       // This transient correlation value is discarded on its response; never returned or queued.
       const request = body(rpcMap[packet.name].req, packet.data);
+      if (gameSocket && gameSocket !== this) {
+        flows.get(gameSocket).retired = true;
+        fail('CONNECTION_CHANGED'); closeWindow(); lastSync = null;
+      } else if (authSummary) {
+        fail('CONNECTION_CHANGED'); closeWindow(); lastSync = null;
+      }
+      // An OPEN socket is not an authenticated game connection. Recovery must
+      // wait for this socket's response, never reuse the previous room proof.
+      authSummary = null;
+      if (gameUuid !== null && gameUuid !== request.game_uuid) {
+        fail('MATCH_CHANGED'); closeWindow(); lastSync = null;
+        knownRounds.clear(); seen.clear(); lastStep = null; actionStream = 0;
+        roundSignature = null; roundIdentity = null; handSha256 = null; handEnded = false;
+        matchEnded = false; matchResult = null; lastClientWin = null; lastOwnWin = null;
+      }
+      gameSocket = this; flow.retired = false;
       flow.authAccount = request.account_id; gameUuid = request.game_uuid;
     }
     // Legacy sockets predate interception: preserve client operation, deny bridge RPCs.
     if (!flow.fresh) { const result = originalSend.call(this, raw); stats.clientRequests++; return result; }
     let clientWinType = null, winRecord = null;
-    if (packet.name === '.lq.FastTest.inputOperation' || packet.name === '.lq.FastTest.inputChiPengGang') {
+    if (!flow.retired && this === gameSocket && (packet.name === '.lq.FastTest.inputOperation' || packet.name === '.lq.FastTest.inputChiPengGang')) {
       tokens.clear(); generation++; // manual/client action revokes prepared program commands
       if (packet.name === '.lq.FastTest.inputOperation') {
         try {
@@ -297,6 +350,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     requireThat(command && intent && snapshot && action && expected, 'BRIDGE_PREPARE_INVALID');
     requireThat(!restored && !overflow && !reason, 'BRIDGE_UNTRUSTED');
     requireThat(!paused, 'EXECUTION_PAUSED');
+    requireThat(!handEnded && !matchEnded, 'GAME_FINISHED');
     requireThat(records.length === 0 && expected.generation === generation && expected.pageEpoch === pageEpoch && expected.step === lastStep, 'INGRESS_PENDING');
     requireThat(command.attemptId === intent.id && intent.status === 'dispatching', 'DURABLE_INTENT_REQUIRED');
     const f = command.fence;
@@ -335,6 +389,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
   }
   const api = {
     read: () => ({ schemaVersion: 1, pageEpoch, generation, lastStep, sourceStream: actionStream, ownSeat,
+      connected:gameSocket?.readyState===1,handSha256,handEnded,matchEnded,matchResult:matchResult?clone(matchResult):null,
       paused, controlEpoch, reason, overflow, queued: records.length, freshConnection: !!flows.get(gameSocket)?.fresh,
       pendingRpcCount: [...flows.values()].reduce((count, flow) => count + flow.pending.size, 0),
       operation: operation ? clone(operation) : null, authSummary: authSummary ? clone(authSummary) : null,
@@ -381,32 +436,56 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     async sync() {
       paused = true; tokens.clear();
       autoWin = null; operationTiming = null;
+      const socketAtRequest = gameSocket, epochAtRequest = pageEpoch, gameAtRequest = gameUuid;
       const requestedMonoMs = performance.now(), startGeneration = generation;
       const result = await rpc('.lq.FastTest.syncGame', { round_id: '', step: 0 }).work;
       const receivedMonoMs = performance.now(), receivedAt = iso();
       const response = result.response;
-      requireThat(!response.error && !response.is_end && response.game_restore, 'SYNC_RESPONSE_INCOMPLETE');
-      const actions = response.game_restore.actions.map(a => decodedAction(a, false));
+      requireThat(socketAtRequest===gameSocket && epochAtRequest===pageEpoch && gameAtRequest===gameUuid, 'SYNC_CONNECTION_CHANGED');
+      requireThat(!response.error && (response.game_restore || response.is_end), 'SYNC_RESPONSE_INCOMPLETE');
+      if (response.is_end) { closeWindow(); matchEnded = true; }
+      const restore = response.game_restore;
+      if (!restore?.actions?.length) {
+        lastSync = null;
+        return {schemaVersion:1,pageEpoch,generation,startGeneration,requestedMonoMs,receivedMonoMs,receivedAt,
+          ownSeat,gameUuid,step:response.step,is_end:response.is_end,matchResult:matchResult?clone(matchResult):null,game_restore:restore?{actions:[]}:null};
+      }
+      const actions = restore.actions.map(a => decodedAction(a, false));
       const firstHandIndex = actions.findIndex(a => a.name === 'ActionNewRound');
       requireThat(actions.length > 0 && (firstHandIndex === 0 || firstHandIndex === 1 && actions[0].name === 'ActionMJStart'), 'SYNC_HISTORY_INCOMPLETE');
       for (let i = 1; i < actions.length; i++) requireThat(actions[i].step === actions[i - 1].step + 1, 'SYNC_HISTORY_GAP');
       requireThat(response.step === actions.at(-1).step + 1, 'SYNC_NEXT_STEP_MISMATCH');
+      const opening = actions[firstHandIndex], identity = opening.payload.sha256 || opening.fingerprint;
+      requireThat(identity===roundIdentity || !knownRounds.has(identity), 'STALE_HAND_HISTORY');
+      requireThat(identity!==roundIdentity || roundSignature===opening.fingerprint, 'SOURCE_DEDUP_CONFLICT');
+      if (identity===roundIdentity) {
+        requireThat(lastStep===null || response.step-1>=lastStep, 'SYNC_HISTORY_REGRESSION');
+        requireThat(!handEnded || endsHand(actions.at(-1).name), 'SYNC_TERMINAL_REGRESSION');
+      }
       lastSync = { generation, startGeneration, step: response.step - 1, actions, requestedMonoMs, receivedMonoMs, receivedAt,
-        passedWaitingTime:response.game_restore.passed_waiting_time, gameState:response.game_restore.game_state,
-        lastPauseTimeMs:response.game_restore.last_pause_time_ms };
+        identity,isEnd:response.is_end,matchResult:matchResult?clone(matchResult):null,
+        passedWaitingTime:restore.passed_waiting_time, gameState:restore.game_state,
+        lastPauseTimeMs:restore.last_pause_time_ms };
       return { schemaVersion: 1, pageEpoch, generation, startGeneration, requestId: result.requestId, requestedMonoMs, receivedMonoMs, receivedAt,
-        ownSeat, gameUuid, authSummary: authSummary ? clone(authSummary) : null, step: response.step, is_end: false,
-        game_restore: { actions, passed_waiting_time: response.game_restore.passed_waiting_time,
-          game_state:response.game_restore.game_state,last_pause_time_ms:response.game_restore.last_pause_time_ms } };
+        ownSeat, gameUuid, authSummary: authSummary ? clone(authSummary) : null, step: response.step, is_end: response.is_end,
+        matchResult:matchResult?clone(matchResult):null,
+        game_restore: { actions, passed_waiting_time: restore.passed_waiting_time,
+          game_state:restore.game_state,last_pause_time_ms:restore.last_pause_time_ms } };
     },
     ackSync(expected) {
       requireThat(lastSync && expected.generation === generation && expected.generation === lastSync.generation && expected.step === lastSync.step, 'SYNC_STALE');
       requireThat(lastSync.startGeneration === lastSync.generation, 'SYNC_INGRESS_RACE');
       seen.clear(); for (const action of lastSync.actions) seen.set(action.step, action.fingerprint);
-      roundSignature = lastSync.actions.find(a => a.name === 'ActionNewRound').fingerprint; handEnded = false;
+      const opening = lastSync.actions.find(a => a.name === 'ActionNewRound');
+      requireThat(knownRounds.has(lastSync.identity) || knownRounds.size < 1024, 'HAND_HISTORY_CAPACITY');
+      if (roundIdentity && roundIdentity!==lastSync.identity) actionStream++;
+      roundSignature = opening.fingerprint; roundIdentity = lastSync.identity; handSha256 = opening.payload.sha256 || null;
+      knownRounds.set(roundIdentity,roundSignature);
       lastStep = lastSync.step;
       const last = lastSync.actions.at(-1), offered = last.payload.operation;
-      operation = offered ? { step:lastStep,receivedMonoMs:lastSync.receivedMonoMs,receivedAt:lastSync.receivedAt,
+      handEnded = endsHand(last.name);
+      matchEnded = matchEnded || lastSync.isEnd || handEnded && !!last.payload.gameend;
+      operation = !handEnded && !matchEnded && offered ? { step:lastStep,receivedMonoMs:lastSync.receivedMonoMs,receivedAt:lastSync.receivedAt,
         requestedMonoMs:lastSync.requestedMonoMs,passedWaitingTime:lastSync.passedWaitingTime,
         gameState:lastSync.gameState,lastPauseTimeMs:lastSync.lastPauseTimeMs,value:clone(offered) } : null;
       observeWinningOffer();

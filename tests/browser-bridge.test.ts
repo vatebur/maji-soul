@@ -24,11 +24,14 @@ message ActionPrototype { uint32 step=1; string name=2; bytes data=3; }
 message ActionMJStart {}
 message OptionalOperation { uint32 type=1; repeated string combination=2; }
 message OptionalOperationList { uint32 seat=1; repeated OptionalOperation operation_list=2; uint32 time_fixed=3; uint32 time_add=4; }
-message ActionNewRound { uint32 chang=1; uint32 ju=2; uint32 ben=3; repeated string tiles=4; repeated int32 scores=5; repeated string doras=6; uint32 left_tile_count=7; string md5=8; OptionalOperationList operation=9; }
+message ActionNewRound { uint32 chang=1; uint32 ju=2; uint32 ben=3; repeated string tiles=4; repeated int32 scores=5; repeated string doras=6; uint32 left_tile_count=7; string md5=8; OptionalOperationList operation=9; string sha256=10; }
 message ActionDealTile { uint32 seat=1; string tile=2; uint32 left_tile_count=3; OptionalOperationList operation=4; }
 message ActionDiscardTile { uint32 seat=1; string tile=2; bool moqie=3; bool is_liqi=4; bool is_wliqi=5; OptionalOperationList operation=6; }
 message HuleInfo { uint32 seat=1; bool zimo=2; }
 message ActionHule { repeated HuleInfo hules=1; }
+message EndPlayer { uint32 seat=1; int32 part_point_1=2; uint32 account_id=3; string nickname=4; }
+message GameResult { repeated EndPlayer players=1; }
+message NotifyGameEndResult { GameResult result=1; }
 `;
 const rpcMap: Record<string, { req: string; resp: string }> = {
   '.lq.FastTest.authGame': { req: 'lq.ReqAuthGame', resp: 'lq.ResAuthGame' },
@@ -42,6 +45,9 @@ const encode = (name: string, value: unknown) => schema.lookupType(name).encode(
 const responseFrame = (id: number, method: string, value = {}) => new Uint8Array([3, id & 255, id >> 8, ...encode('lq.Wrapper', { data: encode(rpcMap[method]!.resp, value) })]);
 const requestFrame = (id: number, method: string, value = {}) => new Uint8Array([2, id & 255, id >> 8, ...encode('lq.Wrapper', { name: method, data: encode(rpcMap[method]!.req, value) })]);
 const packetId = (packet: Uint8Array) => packet[1]! + packet[2]! * 256;
+const notificationFrame = (name:string,value:unknown) => new Uint8Array([1,...encode('lq.Wrapper',{
+  name:`.lq.${name}`,data:encode(`lq.${name}`,value),
+})]);
 const source = readFileSync('src/adapters/majsoul/browser-bridge.js', 'utf8').replace('export function', 'function');
 const phase2Filler:TileCode[]=['1p','2p','3p','4p','5p','6p','7p','8p','9p','1s','2s','3s','4s','6s'];
 function phase2State(owned:TileCode[],called?:TileCode):GameState {
@@ -498,4 +504,102 @@ test('an unknown switch readback revokes the previous enabled proof and trigger 
   f.socket.send(requestFrame(23,'.lq.FastTest.inputOperation',{type:8}));
   f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.inputOperation'));
   assert.equal(f.bridge.read().lastClientWin.priorAutoWinReadback,null);f.bridge.restore();
+});
+
+test('hand settlement revokes prepared sends and distinct commitments separate dealer repeats with reset or continuous steps',async()=>{
+  for (const nextStep of [0,3]) {
+    const f=fixture(),input=await f.opened(),prepared=f.bridge.prepare(input);
+    const before=f.socket.sent.length,stream=f.bridge.read().sourceStream;
+    f.action('ActionHule',2,{hules:[{seat:1,zimo:true}]});
+    assert.equal(f.bridge.read().handEnded,true);assert.equal(f.bridge.read().paused,true);
+    assert.equal(f.bridge.read().operation,null);assert.equal(f.bridge.read().autoWin,null);
+    const next={tiles:['1m'],md5:'next-hand',sha256:'b'.repeat(64),chang:0,ju:0,ben:1};
+    f.action('ActionNewRound',nextStep,next);
+    const read=f.bridge.read();assert.equal(read.reason,null);assert.equal(read.handEnded,false);
+    assert.equal(read.sourceStream,stream+1);assert.equal(read.handSha256,next.sha256);assert.equal(read.paused,true);
+    f.action('ActionNewRound',nextStep,next);assert.equal(f.bridge.read().generation,read.generation);
+    assert.equal((await f.bridge.dispatch({command:input.command,token:prepared.token})).delivery,'not-sent');
+    assert.equal(f.socket.sent.length,before);
+    f.action('ActionHule',nextStep+1,{hules:[{seat:2,zimo:true}]});
+    f.action('ActionNewRound',0,{tiles:['1m'],md5:'first-hand'});
+    assert.equal(f.bridge.read().reason,'STALE_HAND_HISTORY');f.bridge.restore();
+  }
+});
+
+const openingHistory=()=>[
+  {name:'ActionNewRound',step:0,data:encode('lq.ActionNewRound',{tiles:['1m'],md5:'first-hand'})},
+  {name:'ActionDealTile',step:1,data:encode('lq.ActionDealTile',{seat:0,tile:'2m',left_tile_count:68,
+    operation:{seat:0,operation_list:[{type:1}],time_fixed:300000}})},
+];
+
+test('terminal sync preserves the closed hand and refuses an older playing restore',async()=>{
+  const f=fixture();await f.opened();
+  f.action('ActionHule',2,{hules:[{seat:1,zimo:true}]});
+  const stale=f.bridge.sync();
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.syncGame',{
+    step:2,game_restore:{actions:openingHistory()},
+  }));
+  await assert.rejects(stale,/SYNC_HISTORY_REGRESSION/);
+  const sync=f.bridge.sync();
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.syncGame',{
+    step:3,game_restore:{actions:[...openingHistory(),{name:'ActionHule',step:2,
+      data:encode('lq.ActionHule',{hules:[{seat:1,zimo:true}]})}]},
+  }));
+  const raw=await sync;f.bridge.ackSync({generation:raw.generation,step:2});
+  assert.equal(f.bridge.read().handEnded,true);assert.equal(f.bridge.read().operation,null);
+  f.action('ActionNewRound',3,{tiles:['1m'],sha256:'b'.repeat(64)});
+  assert.equal(f.bridge.read().reason,null);assert.equal(f.bridge.read().sourceStream,1);f.bridge.restore();
+});
+
+test('end-only sync closes execution without fabricating a missing hand history',async()=>{
+  const f=fixture(),input=await f.opened(),prepared=f.bridge.prepare(input),sync=f.bridge.sync();
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.syncGame',{is_end:true,step:0}));
+  const raw=await sync;
+  assert.equal(raw.is_end,true);assert.equal(raw.game_restore,null);assert.equal(f.bridge.read().matchEnded,true);
+  assert.throws(()=>f.bridge.ackSync({generation:raw.generation,step:-1}),/SYNC_STALE/);
+  assert.equal((await f.bridge.dispatch({command:input.command,token:prepared.token})).delivery,'not-sent');
+  f.action('ActionNewRound',0,{tiles:['1m'],sha256:'b'.repeat(64)});
+  assert.equal(f.bridge.read().reason,'HAND_BOUNDARY_UNVERIFIED');f.bridge.restore();
+});
+
+test('final result is redacted, idempotent and immediately closes permits before settlement arrives',async()=>{
+  const f=fixture(),input=await f.opened(),prepared=f.bridge.prepare(input);
+  const result={result:{players:[0,1,2,3].map(seat=>({seat,part_point_1:25000,account_id:100+seat,nickname:'DO_NOT_RETAIN'}))}};
+  f.socket.receive(notificationFrame('NotifyGameEndResult',result));
+  const first=f.bridge.read();assert.equal(first.matchEnded,true);assert.equal(first.handEnded,false);assert.equal(first.paused,true);
+  assert.equal(JSON.stringify(first).includes('DO_NOT_RETAIN'),false);assert.equal(JSON.stringify(first).includes('account_id'),false);
+  f.socket.receive(notificationFrame('NotifyGameEndResult',result));assert.equal(f.bridge.read().generation,first.generation);
+  assert.equal((await f.bridge.dispatch({command:input.command,token:prepared.token})).delivery,'not-sent');
+  f.action('ActionHule',2,{hules:[{seat:1,zimo:true}]});
+  assert.equal(f.bridge.read().reason,null);assert.equal(f.bridge.read().handEnded,true);
+  result.result.players[0]!.part_point_1=26000;f.socket.receive(notificationFrame('NotifyGameEndResult',result));
+  assert.equal(f.bridge.read().reason,'MATCH_RESULT_CONFLICT');assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+});
+
+test('new socket authentication clears the old proof and retired traffic cannot corrupt the recovered connection',async()=>{
+  const f=fixture();
+  const auth={account_id:42,game_uuid:'same-match'};
+  f.socket.send(requestFrame(90,'.lq.FastTest.authGame',auth));
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.authGame',{seat_list:[42,1,2,3]}));
+  await f.opened();assert.ok(f.bridge.read().authSummary);
+  const oldSync=f.bridge.sync(),oldSyncId=packetId(f.socket.sent.at(-1)!);
+  const replacement=new f.window.WebSocket('replacement');replacement.send(requestFrame(80,'.lq.FastTest.authGame',auth));
+  assert.equal(f.bridge.read().connected,true);assert.equal(f.bridge.read().authSummary,null);
+  assert.equal(f.bridge.read().reason,'CONNECTION_CHANGED');
+  f.socket.receive(responseFrame(oldSyncId,'.lq.FastTest.syncGame',{step:2,game_restore:{actions:openingHistory()}}));
+  await assert.rejects(oldSync,/SYNC_CONNECTION_CHANGED/);
+  replacement.receive(responseFrame(packetId(replacement.sent.at(-1)),'.lq.FastTest.authGame',{seat_list:[42,1,2,3]}));
+  const current=f.bridge.read();assert.ok(current.authSummary);
+  f.action('ActionHule',2,{hules:[{seat:1,zimo:true}]});
+  f.socket.receive(new Uint8Array([3,0,0,0xff]));
+  f.socket.receive(responseFrame(65000,'.lq.FastTest.heartBeat'));
+  f.socket.send(requestFrame(91,'.lq.FastTest.inputOperation',{type:8}));
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.inputOperation'));
+  const after=f.bridge.read();assert.equal(after.generation,current.generation);assert.equal(after.pageEpoch,current.pageEpoch);
+  assert.equal(after.handEnded,false);assert.equal(after.stats.clientWinRequests,0);
+  const sync=f.bridge.sync();replacement.receive(responseFrame(packetId(replacement.sent.at(-1)),'.lq.FastTest.syncGame',{
+    step:2,game_restore:{actions:openingHistory()},
+  }));
+  const raw=await sync;f.bridge.ackSync({generation:raw.generation,step:1});
+  assert.equal(f.bridge.read().reason,null);assert.equal(f.bridge.read().gameUuid,'same-match');f.bridge.restore();
 });

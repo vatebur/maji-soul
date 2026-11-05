@@ -2,7 +2,7 @@ import type { AuthoritativeSync, FriendRoom, GameObservation, HandInitialView, O
 import { initialProjection, reduceObservation } from '../../domain/game/reducer.ts';
 import { digest, requireThat } from '../../domain/game/value.ts';
 import { integer, parseObservation, parseSync, string, timestamp, validateRoom } from '../../schemas/game.ts';
-import { normalizeAction, normalizeNewRound, type NormalizeContext, type VerifiedOperationTiming } from './normalize.ts';
+import { normalizeAction, normalizeNewRound, normalizeMatchEnd, type NormalizeContext, type VerifiedOperationTiming } from './normalize.ts';
 
 export interface SyncGameContext {
   sessionId: string; room: FriendRoom; gameMatchKey: string; gameHandKey: string; ownSeat: Seat; handOrdinal: number;
@@ -24,11 +24,15 @@ export function handSourceStream(gameMatchKey: string, gameHandKey: string): str
  * the requested action's origin, nor rebuild physical own-tile references.
  */
 export function normalizeSyncGame(value: unknown, context: SyncGameContext): AuthoritativeSync {
-  const response = record(value), restore = record(response.game_restore);
+  const response = record(value);
+  requireThat(!response.is_end || response.game_restore !== undefined && response.game_restore !== null, 'SYNC_TERMINAL_EVIDENCE_REQUIRED');
+  const restore = record(response.game_restore);
   validateRoom(context.room); string(context.sessionId); string(context.gameMatchKey); string(context.gameHandKey); string(context.syncId);
   integer(context.connectionEpoch, 1); integer(context.handOrdinal, 1, 1000); integer(context.ownSeat, 0, 3); timestamp(context.receivedAt);
   requireThat(response.error === undefined || response.error === null, 'SYNC_RPC_REJECTED');
-  requireThat(response.is_end === false, 'SYNC_GAME_ENDED'); integer(response.step, 1, 999_999_999);
+  requireThat(typeof response.is_end === 'boolean', 'SYNC_END_FLAG_REQUIRED');
+  requireThat(!response.is_end || Array.isArray(restore.actions) && restore.actions.length > 0, 'SYNC_TERMINAL_EVIDENCE_REQUIRED');
+  integer(response.step, 1, 999_999_999);
   if (context.timing?.source === 'protocol-operation') {
     integer(restore.passed_waiting_time, 0, 1_200);
     requireThat(restore.game_state === 1 && restore.last_pause_time_ms === 0, 'TIMING_GAME_NOT_RUNNING');
@@ -47,7 +51,11 @@ export function normalizeSyncGame(value: unknown, context: SyncGameContext): Aut
   const payloadFor = (action: Record<string, unknown>) => record(action.data ?? action.payload);
   const opening = payloadFor(actions[first]!);
   requireThat(Array.isArray(opening.scores) && opening.scores.length === 4, 'INVALID_PROTOCOL_SCORES');
-  let projection = initialProjection(context.sessionId); projection.connectionEpoch = context.connectionEpoch;
+  // This reducer verifies historical facts; its sequence is not the live ledger's
+  // sequence. Keep temporary river/evidence ids in a separate sync namespace so
+  // new live events cannot reuse them after reduceSync increments the ledger once.
+  const restoreSessionId = `restore-${digest([context.sessionId, context.gameMatchKey, context.gameHandKey, context.syncId]).slice(0, 32)}`;
+  let projection = initialProjection(restoreSessionId); projection.connectionEpoch = context.connectionEpoch;
   const base = { schemaVersion: 1, connectionEpoch: context.connectionEpoch, source: 'majsoul-sync', receivedAt: context.receivedAt };
   const seed = (type: string, payload: unknown): GameObservation => parseObservation({ ...base, type, payload,
     observationId: `restore-seed-${type}`, sourceDedupKey: `restore-seed-${type}` });
@@ -63,18 +71,28 @@ export function normalizeSyncGame(value: unknown, context: SyncGameContext): Aut
     const events = action.name === 'ActionNewRound'
       ? normalizeNewRound(payloadFor(action), { ...normalization, ownSeat: context.ownSeat, gameHandKey: context.gameHandKey, handOrdinal: 1 })
       : normalizeAction(action.name as string, payloadFor(action), normalization);
+    if (last && response.is_end) for (const event of events) if (event.type === 'HandEnded') event.payload.matchEnded = true;
     for (const event of events) { projection = reduceObservation(projection, event); handHistory.push(event); }
   }
-  requireThat(projection.state?.trust === 'trusted' && projection.handStatus === 'playing', 'SYNC_UNKNOWN_STATE');
+  requireThat(projection.state?.trust === 'trusted' && ['playing','finished'].includes(projection.handStatus), 'SYNC_UNKNOWN_STATE');
+  requireThat(!response.is_end || projection.handStatus === 'finished', 'SYNC_TERMINAL_EVIDENCE_REQUIRED');
+  requireThat(projection.handStatus !== 'finished' || !context.timing, 'TIMING_TERMINAL_WINDOW');
+  if (response.matchResult !== undefined && response.matchResult !== null) {
+    for (const event of normalizeMatchEnd(response.matchResult,{projection,receivedAt:context.receivedAt,connectionEpoch:context.connectionEpoch,source:'majsoul-sync'})) {
+      projection = reduceObservation(projection,event);
+    }
+  }
+  requireThat(projection.state, 'SYNC_UNKNOWN_STATE');
   const { sessionId: _session, matchId: _match, handId: _hand, connectionEpoch: _epoch, stateVersion: _version,
     trust: _trust, trustIssues: _issues, latestAction: _latest, operationWindow, ...view } = structuredClone(projection.state);
   const currentView: HandInitialView & { operationWindow?: OperationWindow } = view;
-  if (operationWindow?.status === 'open') currentView.operationWindow = operationWindow;
+  if (projection.handStatus === 'playing' && operationWindow?.status === 'open') currentView.operationWindow = operationWindow;
   // The temporary reducer starts at ordinal 1; authoritative identity comes from the caller's verified hand boundary.
   const firstEvent = handHistory[0]!; requireThat(firstEvent.type === 'HandStarted', 'SYNC_HAND_START_REQUIRED'); firstEvent.payload.ordinal = context.handOrdinal;
   const result = parseSync({ syncId: context.syncId, connectionEpoch: context.connectionEpoch, receivedAt: context.receivedAt,
     coverage: 'complete-current-state', room: context.room, gameMatchKey: context.gameMatchKey, gameHandKey: context.gameHandKey,
     handOrdinal: context.handOrdinal, currentView, missingFields: [], historyCoverage: 'complete-hand', handHistory,
-    observedActions: handHistory.filter(o => o.type === 'TileDiscarded' || o.type === 'MeldDeclared'), sourceCursor: `${sourceStream}:${response.step - 1}` });
+    observedActions: handHistory.filter(o => o.type === 'TileDiscarded' || o.type === 'MeldDeclared'), sourceCursor: `${sourceStream}:${response.step - 1}`,
+    ...(projection.handResult ? { terminal:{hand:projection.handResult,...(projection.matchResult ? {match:projection.matchResult} : {})} } : {}) });
   return result;
 }

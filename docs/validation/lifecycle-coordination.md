@@ -1,0 +1,43 @@
+# 跨小局与恢复协调
+
+2026-11-05（Asia/Shanghai）。本批使用合成协议、受控时序以及真实 SQLite worker／Node 子进程验证，未进行新的游戏服务器实场操作。原有[实场记录](./phase1-live.md)范围不变，持续自动运行仍关闭。
+
+## 已实现
+
+`ActionHule`、`ActionNoTile`、`ActionLiuJu` 分别归约为和牌、荒牌流局、途中流局，校验完整分数变化并关闭操作窗口。整场结束标志先阻止进入新小局，`NotifyGameEndResult` 再记录终分和顺位；顺位采用固定上游约定的 `result.players` 次序，未按分数自行推断。通知先于最后结算时先暂停、等待结算；缺少任一证据时保留等待状态。
+
+整场使用认证返回的游戏 UUID，小局使用开局 `sha256` 承诺建立稳定身份。连庄也创建新 handId，既支持步号重置也支持连续编号。重复开局幂等，旧小局重现、冲突终分和缺失边界均拒绝。换局立即撤销内存决策、许可、计时证明及页面 token，先发布暂停再等待 SQLite 提交；旧同步结果也不能覆盖新小局。
+
+`GameCoordinator` 从原事件台账解析小局序号；`inspectMatch` 跨 session 检查最近小局、结算和未决动作。`reserveAction`、`markDispatching` 和页面 prepare 返回后的再次校验共同阻止旧会话沿用旧动作，页面在实际发送的同步回合中继续校验最终许可。确定未发送的旧准备记录转为 `not-dispatched` 并保留槽位；可能已发送的记录仍须用同整场／小局的精确权威事实对账，不能借新局清空。
+
+断线时保持同一 Actor 和 SQLite 台账，等待新 socket 的认证响应再做完整同步。旧 socket 的动作、未知响应和解码失败不改变当前会话；原客户端请求仍按原 ID 路由。完整终局历史可恢复结束状态；只有 `is_end` 而缺少必要历史时保持暂停。若原台账已有最终排名，但新桥接同步缺少最终结果通知，本批也保持 blocked，不把旧排名包装为本次新接收证据。同步后不自动恢复发送。
+
+脱敏采集可覆盖多个小局和自家副露，重连后生成独立片段。片段从本地小局 1 回放，`manifest.originHandOrdinal` 保存原台账序号；自家物理牌引用按红五／普通五重建，操作窗口与许可全部剥离。事件保留原接收时间、按因果顺序入账，回放执行时钟不会因先到的终局通知而倒退。
+
+## 验证入口与覆盖
+
+```sh
+vfox exec nodejs@24.22.1 -- npm run verify
+```
+
+| 场景 | 证据 |
+| --- | --- |
+| 自摸／多家荣和、荒牌及流局满贯、途中流局、终局分数与排名 | `tests/hand-lifecycle.test.ts`，固定协议契约与 reducer |
+| 连庄新身份、边界提交前撤销许可、旧决策／旧同步拒绝 | `tests/coordinator.test.ts`，真实 Actor／SQLite 与受控 Promise |
+| 新 session 不能绕过旧未决动作或篡改结算 | `tests/coordinator.test.ts`，同库多会话和最终发送前复验 |
+| 步号重置／连续、终局同步、旧连接、提前终局通知 | `tests/browser-bridge.test.ts`，protobuf 编解码和页面桥接沙箱 |
+| 多小局观察、认证等待、断线恢复、终局停机 | `tests/live-lifecycle.test.ts`，脚本化页面端口与生产 Node 子进程／SQLite／回放链路 |
+| 带红五的自家副露、加杠后继续弃牌、从中途小局导出 | `tests/live-capture.test.ts`，严格归档与真实 SQLite replay |
+
+`npm run verify` 通过 TypeScript 检查及 205 项测试，失败／跳过均为 0。完整测试结果与未覆盖范围见[证据摘要](./lifecycle-coordination-evidence.json)。这些测试不计为真实整场或真实网络重连验收。
+
+## 用户实场验收
+
+使用已授权友人房、当前客户端和原 `data/live/state.sqlite`，按[本机说明](../USAGE.md#跨小局观察)运行 `live-observe`。每次使用新的输出目录，保留同一个数据库。
+
+1. 覆盖小局结算、连庄和换庄，核对 `lifecycle` 计数、稳定小局身份及终分；重复结算不得增加台账记录或确认。
+2. 在观察期间让客户端重连，确认认证完成后才同步、`reconnects` 增加、session 和数据库延续；旧许可不恢复，程序发送计数不增加。
+3. 覆盖整场结束，要求 `handStatus=finished`、`matchStatus=finished`、`matchEndPending=false`、`awaitingSettlement=false`。通知或历史缺失应 blocked，不用猜测结果通过验收。
+4. 对报告中每个 `captureDirectories` 片段执行 `replay`；核对原台账未决动作和确认数。超时只说明本次观察结束，`status=passed` 也不代表已经观测整场。
+
+该命令默认观察 30 秒，可配置至 300 秒，始终暂停程序执行器。客户端自动和牌和人工操作仍可能继续。真实跨局／终局／重连组合、两种决策模式整场及同房续局仍由后续实场验收补齐。

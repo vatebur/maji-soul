@@ -60,10 +60,22 @@ export class ActionExecutor {
         return await store.markSimulated(attempt.id);
       }
       const intent = await store.markDispatching(attempt.id);
-      if (!intent.transitioned) return intent.attempt;
+      if (!intent.transitioned) {
+        if (intent.rejectionCode && intent.rejectionCode !== 'ATTEMPT_SCOPE_STALE') actor.failClosed('DISPATCH_LEDGER_STALE');
+        return intent.attempt;
+      }
       const command = actor.issuePermit(decisionId, actionId, attempt.id);
       const transport = this.#transport!;
       const send = await this.#bounded(transport.kind === 'live' ? transport.prepare(command, snapshot, intent.attempt) : transport.prepare(command));
+      // Another session can advance the same authoritative hand while Page
+      // preparation is awaiting. Recheck the original ledger after that wait.
+      try { await store.assertDispatchCurrent(attempt.id); }
+      catch (error) {
+        // Locally committed ingress already invalidates the prior scope. Its
+        // new authoritative state does not need another sync merely to cancel.
+        if (!(error instanceof Error && error.message === 'ATTEMPT_SCOPE_STALE')) actor.failClosed('DISPATCH_LEDGER_STALE');
+        throw error;
+      }
       const action = actor.consumePermit(command);
       // Final authorization and invocation share this synchronous JS turn. prepare cannot send.
       invoked = true;

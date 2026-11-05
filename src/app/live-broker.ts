@@ -22,7 +22,8 @@ export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptan
       void bridgeCall(page, 'pause').catch(() => {});
       reject(Error(code));
     };
-    const timer = setTimeout(() => abort('LIVE_CHILD_TIMEOUT'), 45_000);
+    const observeMs = Number.isInteger(options.observeMs) && options.observeMs! > 0 ? Math.min(options.observeMs!,300_000) : 0;
+    const timer = setTimeout(() => abort('LIVE_CHILD_TIMEOUT'), 45_000+observeMs);
     child.on('error', () => abort('LIVE_NODE_UNAVAILABLE'));
     lines.on('line', line => {
       chain = chain.then(async () => {

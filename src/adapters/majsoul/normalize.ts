@@ -4,6 +4,8 @@ import { canonical, cursorParts, digest, requireThat } from '../../domain/game/v
 import { integer, parseObservation, timestamp } from '../../schemas/game.ts';
 import type { VerifiedOperationTiming } from './operation-timing.ts';
 import { legalOperationActions, type OfferedOperations } from './actions.ts';
+import { normalizeHandEnd } from './lifecycle.ts';
+export { normalizeHandEnd, normalizeMatchEnd } from './lifecycle.ts';
 export type { VerifiedOperationTiming } from './operation-timing.ts';
 
 export interface NormalizeContext {
@@ -122,6 +124,7 @@ export function majsoulTile(value: unknown): TileCode {
  * insufficient. Decoders materialize protobuf's declared scalar defaults.
  */
 export function normalizeAction(name: string, payload: unknown, context: NormalizeContext): GameObservation[] {
+  if (['ActionHule','ActionNoTile','ActionLiuJu'].includes(name)) return normalizeHandEnd(name,payload,context);
   requireThat(['ActionDealTile', 'ActionDiscardTile', 'ActionChiPengGang', 'ActionAnGangAddGang'].includes(name), 'UNSUPPORTED_PROTOCOL_ACTION');
   const input = record(payload), { projection } = context, state = projection.state;
   integer(context.step, 0, 999_999_999); integer(context.connectionEpoch); timestamp(context.receivedAt);

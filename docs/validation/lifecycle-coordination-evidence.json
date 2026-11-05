@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-11-05",
+  "timezone": "Asia/Shanghai",
+  "scope": "cross-hand lifecycle and original-ledger recovery coordination",
+  "evidenceKind": "synthetic-contract-and-fault-injection",
+  "runtime": "Node.js 24.22.1",
+  "validation": {
+    "command": "vfox exec nodejs@24.22.1 -- npm run verify",
+    "typecheck": "passed",
+    "tests": 205,
+    "passed": 205,
+    "failed": 0,
+    "skipped": 0
+  },
+  "validated": [
+    "win, exhaustive draw and abortive draw settlement with score validation",
+    "dealer repeat and next dealer use distinct authoritative hand identities",
+    "hand and match boundaries revoke prior decisions, permits and pending sync tokens",
+    "global ledger rejects prior-hand revival, conflicting results and unresolved-action bypass across sessions",
+    "dispatch intent and post-prepare ledger revalidation reject stale attempts before any send",
+    "socket authentication must complete before recovery; retired socket traffic cannot corrupt current state",
+    "terminal notification and settlement can arrive in either order without premature completion",
+    "bounded production observer retains one Actor and database through reconnect",
+    "restored river identifiers do not collide with new ledger events",
+    "own red-aware melds and later-hand capture segments replay independently"
+  ],
+  "testFiles": [
+    "tests/hand-lifecycle.test.ts",
+    "tests/coordinator.test.ts",
+    "tests/browser-bridge.test.ts",
+    "tests/live-lifecycle.test.ts",
+    "tests/live-capture.test.ts",
+    "tests/sync-adapter.test.ts",
+    "tests/phase2-actions.test.ts"
+  ],
+  "realClientValidationPerformedInThisBatch": false,
+  "automationEnabled": false,
+  "notAccepted": [
+    "current-client live cross-hand, final-match and reconnect combinations",
+    "is_end-only restoration without complete terminal hand history",
+    "restoring prior final standings when a new bridge lacks the final result notification",
+    "both decision modes completing a real match",
+    "automatic same-room next-match continuation"
+  ]
+}

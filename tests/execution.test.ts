@@ -170,6 +170,7 @@ test('an unknown storage reservation outcome closes execution without attempting
 test('live execution passes only durable dispatch intent and preserves live audit provenance', async () => {
   const h = await actorHarness();
   try {
+    const initialControlEpoch=h.actor.control.controlEpoch;
     let sends = 0;
     const controls: number[] = [];
     const transport: ProductionTransport = { kind: 'live', invalidate: control => { controls.push(control.controlEpoch); },
@@ -188,7 +189,7 @@ test('live execution passes only durable dispatch intent and preserves live audi
     assert.equal((await h.store.inspect(FIXTURE_SESSION)).counts.confirmations, 0);
     await h.ingest(h.fixture.events[4]!);
     assert.equal((await h.store.getAttempt(result.id))?.status, 'confirmed'); assert.equal(sends, 1);
-    assert.deepEqual(controls, [0, 1]);
+    assert.deepEqual(controls, [initialControlEpoch, initialControlEpoch+1]);
   } finally { await h.cleanup(); }
 });
 

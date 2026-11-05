@@ -9,7 +9,7 @@ export async function collectAutomaticTiming(page: EgoPagePort) {
   const samples: AutomaticCountdownSample[] = [];
   let raw = await bridgeCall(page, 'sync');
   const current = raw.game_restore?.actions?.at(-1)?.payload;
-  if (!current?.operation?.operation_list?.length) return { raw, evidence: null };
+  if (raw.is_end || ['ActionHule','ActionNoTile','ActionLiuJu'].includes(raw.game_restore?.actions?.at(-1)?.name) || !current?.operation?.operation_list?.length) return { raw, evidence: null };
   for (let i = 0; i < 2; i++) {
     if (i) {
       // A bounded wait establishes the elapsed unit through a measured difference.

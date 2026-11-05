@@ -83,6 +83,18 @@ vfox exec nodejs@24.22.1 -- npm start -- live-once 15 p1 /absolute/path/live-opt
 
 ego helper 只负责页面 RPC，Actor 和 SQLite worker 在启动 CLI 的固定 Node 子进程运行，不依赖 ego helper 的 worker_threads。live-* 保留页面以便人工接管；验收任务结束时先等待 pendingRpcCount=0，调用 `__majiBridge.restore()`，再按技能 `TaskSpace.finish` 交还页面。
 
+## 跨小局观察
+
+安装桥接并取得新连接后，使用同一份房间配置和原 live 台账：
+
+```sh
+vfox exec nodejs@24.22.1 -- npm start -- live-observe 15 p1 /absolute/path/live-options.json
+```
+
+`live-observe` 默认观察 30 秒，配置可增加 `"observeMs": 300000`，最多 5 分钟；输出目录仍须全新。它保持程序暂停，不创建弃牌决策，也不采集倒计时或操作自动和牌开关。客户端和人工动作仍会被记录。小局结束、新局、连庄和终局沿用当前 Actor 与原数据库；断线后等待新连接认证完成再完整同步，不自动恢复程序发送。
+
+报告新增 `lifecycle`（边界计数、台账小局序号、当前结束／恢复状态）及 `captureDirectories`。重连后的完整当前小局另存片段，片段序号从 1 重放，manifest 的 `originHandOrdinal` 保留原序号。对每个片段运行 `replay`。结束观察时仍断线、只收到终局标志或只收到最终排名而缺结算时返回 blocked；缺少完整同步历史也不推断状态。`passed` 仅表示本次有时限观察通过，要验证完整整场需另核对最终状态和实际覆盖。详细步骤见[跨小局验证](./validation/lifecycle-coordination.md)。
+
 ## 本机与服务探测
 
 ```sh

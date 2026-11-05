@@ -68,7 +68,7 @@ export type ObservationPayloads = {
   DoraRevealed: { indicators: TileCode[]; doraTiles: TileCode[] };
   OperationOffered: { window: OperationWindow };
   OperationClosed: { windowId: string; reason: 'completed' | 'superseded' | 'expired' | 'hand-ended' };
-  HandEnded: { scores: Scores; reason: 'win' | 'draw' | 'abortive-draw'; winners: Seat[]; resultLabel: string };
+  HandEnded: { scores: Scores; reason: 'win' | 'draw' | 'abortive-draw'; winners: Seat[]; resultLabel: string; matchEnded?: true };
   MatchEnded: { scores: Scores; ranks: Scores };
   Disconnected: { code: string; recoverable: boolean };
 };
@@ -79,6 +79,10 @@ export interface GameProjection {
   matchOwnSeat: Seat | null; initialScores: Scores | null;
   gameHandKey: string | null; handOrdinal: number; activeMode: DecisionMode; pendingMode: DecisionMode;
   matchStatus: 'none' | 'playing' | 'finished'; handStatus: 'none' | 'playing' | 'finished';
+  /** A terminal protocol marker closes play while final standings are still unavailable. */
+  matchEndPending?: true;
+  handResult?: ObservationPayloads['HandEnded'];
+  matchResult?: ObservationPayloads['MatchEnded'];
   sourceCursor: string | null; contextEventIds: string[]; state: GameState | null;
 }
 export interface AuthoritativeSync {
@@ -88,6 +92,8 @@ export interface AuthoritativeSync {
   currentView?: HandInitialView & { operationWindow?: OperationWindow };
   missingFields: string[]; historyCoverage: 'complete-hand' | 'partial' | 'none';
   handHistory: GameObservation[]; observedActions: GameObservation[]; sourceCursor: string;
+  /** Only complete hand history can establish terminal state during recovery. */
+  terminal?: { hand: ObservationPayloads['HandEnded']; match?: ObservationPayloads['MatchEnded'] };
 }
 export interface DecisionSnapshot {
   schemaVersion: 1; id: string; scope: { sessionId: string; matchId: string; handId: string; decisionId: string };

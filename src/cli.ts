@@ -16,9 +16,9 @@ try {
     const path = await saveEvidence(evidence);
     console.log(JSON.stringify({ ...evidence, evidencePath: path }, null, 2));
     if (evidence.status === 'blocked') process.exitCode = 2;
-  } else if (['live-install', 'live-reconnect', 'live-sync', 'live-once'].includes(command ?? '') && probe &&
+  } else if (['live-install', 'live-reconnect', 'live-sync', 'live-once', 'live-observe'].includes(command ?? '') && probe &&
     options.length === (['live-install', 'live-reconnect'].includes(command ?? '') ? 1 : 2)) {
-    const result = runEgoCommand(command as 'live-install' | 'live-reconnect' | 'live-sync' | 'live-once', probe, options[0]!, options[1]);
+    const result = runEgoCommand(command as 'live-install' | 'live-reconnect' | 'live-sync' | 'live-once' | 'live-observe', probe, options[0]!, options[1]);
     process.stdout.write(result);
     if (result.includes('"status": "blocked"')) process.exitCode = 2;
   } else if ((command === 'replay' || command === 'dry-run') && probe) {
@@ -35,7 +35,7 @@ try {
   } else if (command === 'inspect' && probe && options.length === 1) {
     console.log(JSON.stringify(await inspectDatabase(probe, options[0]!), null, 2));
   } else {
-    console.log('maji-soul\n  doctor\n  spike storage|model|speech [--play]\n  replay <fixture-directory> [--out <new-directory>]\n  dry-run <fixture-directory> [--candidate <index>] [--out <new-directory>]\n  inspect <database> <session-id>\n  live-install <active-ego-space-id> <page-label>\n  live-reconnect <active-ego-space-id> <page-label>\n  live-sync <active-ego-space-id> <page-label> <absolute-options-json>\n  live-once <active-ego-space-id> <page-label> <absolute-options-json>\n实场自动读回倒计时与和牌开关，仅同步或一次显式摸切；持续自动运行保持关闭。');
+    console.log('maji-soul\n  doctor\n  spike storage|model|speech [--play]\n  replay <fixture-directory> [--out <new-directory>]\n  dry-run <fixture-directory> [--candidate <index>] [--out <new-directory>]\n  inspect <database> <session-id>\n  live-install <active-ego-space-id> <page-label>\n  live-reconnect <active-ego-space-id> <page-label>\n  live-sync <active-ego-space-id> <page-label> <absolute-options-json>\n  live-once <active-ego-space-id> <page-label> <absolute-options-json>\n  live-observe <active-ego-space-id> <page-label> <absolute-options-json>\n实场自动读回倒计时与和牌开关，仅同步或一次显式摸切；持续自动运行保持关闭。');
     if (command && command !== 'help') process.exitCode = 1;
   }
 } catch (error) {

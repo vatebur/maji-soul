@@ -138,6 +138,8 @@ test('complete reconnect history rebuilds the current call source and rekeys con
   assertWindow(state,state.operationWindow!); assert.ok('consumed' in candidate.action);
   assert.ok(candidate.action.consumed.every(id=>state.ownConcealed.some(t=>t.instanceId===id)));
   assert.equal(state.latestAction?.actor,3); assert.equal(state.latestAction?.tiles[0],'2m');
+  assert.equal(state.latestAction?.eventId,state.players[3].river.at(-1)!.eventId);
+  assert.equal(p.sequence,1);
 });
 
 test('restored pon and added-kan identities stay stable across session and connection generations', () => {

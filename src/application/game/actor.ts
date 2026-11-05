@@ -90,6 +90,11 @@ export class GameActor {
   pause(): void {
     this.#close('PAUSED'); this.#needsSync = true; this.#sync = null;
   }
+  /** Close execution immediately at a hand/match boundary while allowing its
+   * authoritative facts to finish committing. Resumption remains explicit. */
+  suspendForBoundary(): void {
+    this.#close('PAUSED'); this.#budgets.clear(); this.#sync = null;
+  }
   #close(reason: string): void {
     this.#paused = true; this.#controlEpoch++; this.#permits.clear(); this.#decisions.clear();
     if (reason !== 'PAUSED') this.#invalidated = reason;
@@ -129,6 +134,7 @@ export class GameActor {
     catch (error) { this.failClosed(error instanceof Error ? error.message : 'INVALID_OBSERVATION'); return Promise.reject(error); }
     if (observation.connectionEpoch < this.#projection.connectionEpoch) return Promise.resolve(this.projection);
     if (observation.type === 'Disconnected') { this.#close('DISCONNECTED'); this.#needsSync = true; }
+    if (['HandStarted', 'HandEnded', 'MatchEnded'].includes(observation.type)) this.suspendForBoundary();
     return this.#enqueue(async () => {
       try {
         requireThat(!this.#invalidated || observation.type === 'Disconnected', 'SYNC_REQUIRED');
@@ -170,11 +176,16 @@ export class GameActor {
     });
   }
   async resume(): Promise<void> {
+    const controlEpoch = this.#controlEpoch;
     await this.awaitControlBarrier();
     requireThat(!this.#needsSync && !this.#invalidated && this.#pendingIngress === 0 && this.#projection.state?.trust === 'trusted', 'SYNC_REQUIRED');
+    requireThat(this.#projection.matchStatus==='playing' && this.#projection.handStatus==='playing' && !this.#projection.matchEndPending, 'GAME_NOT_PLAYING');
     const inspection = await this.storage.inspect(this.#projection.sessionId);
     requireThat(!inspection.recoveryRequired && !inspection.attempts.some(a => ['prepared', 'dispatching', 'awaiting-confirmation', 'uncertain'].includes(a.status)), 'ACTION_RECONCILIATION_REQUIRED');
-    requireThat(!this.#needsSync && !this.#invalidated && this.#pendingIngress === 0, 'SYNC_REQUIRED');
+    const ledger = await this.storage.inspectMatch(this.#projection.gameMatchKey!);
+    requireThat(ledger.unresolvedAttempts.length===0, 'ACTION_RECONCILIATION_REQUIRED');
+    requireThat(ledger.matchStatus==='playing' && ledger.hands.at(-1)?.gameHandKey===this.#projection.gameHandKey && ledger.hands.at(-1)?.status==='playing', 'GAME_LEDGER_STALE');
+    requireThat(controlEpoch===this.#controlEpoch && !this.#needsSync && !this.#invalidated && this.#pendingIngress === 0, 'SYNC_REQUIRED');
     this.#controlEpoch++; this.#paused = false; this.#publishControl();
     await this.awaitControlBarrier();
     requireThat(!this.#paused && !this.#needsSync && !this.#invalidated, 'EXECUTION_PAUSED');
@@ -183,7 +194,7 @@ export class GameActor {
     requireThat(!this.#paused && !this.#needsSync && !this.#invalidated, 'EXECUTION_PAUSED');
     requireThat(!this.#controlFailed && this.#controlPending === 0, 'CONTROL_BARRIER_PENDING');
     requireThat(this.#pendingIngress === 0, 'INGRESS_PENDING');
-    requireThat(this.#projection.state?.trust === 'trusted' && this.#projection.handStatus === 'playing', 'STATE_NOT_TRUSTED');
+    requireThat(this.#projection.state?.trust === 'trusted' && this.#projection.handStatus === 'playing' && this.#projection.matchStatus === 'playing' && !this.#projection.matchEndPending, 'STATE_NOT_TRUSTED');
     requireThat(this.#projection.room?.autoWin === 'verified-on', 'AUTO_WIN_UNVERIFIED');
   }
   #budget(window: OperationWindow): number {

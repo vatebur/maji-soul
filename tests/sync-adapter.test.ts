@@ -50,6 +50,33 @@ test('complete decoded restore rebuilds current view and independently validates
   assert.equal(reconnected.state!.players[0].river.length, restored.state!.players[0].river.length);
 });
 
+test('fresh-session restore keeps historical river references separate from subsequent ledger events', () => {
+  const { context, response } = setup(), sync = normalizeSyncGame(response, context), before = digest(sync);
+  const restored = reduceSync(initialProjection(context.sessionId), sync);
+  assert.equal(restored.sequence, 1);
+  const restoredIds = Object.values(restored.state!.players).flatMap(player => player.river.map(discard => discard.eventId));
+  const another = normalizeSyncGame(response, { ...context, syncId: 'independent-sync' });
+  assert.notDeepEqual(Object.values(another.currentView!.players).flatMap(player => player.river.map(discard => discard.eventId)), restoredIds);
+  assert.deepEqual(another.observedActions.map(event => event.sourceDedupKey), sync.observedActions.map(event => event.sourceDedupKey));
+  let projection = restored;
+  const continuation = [
+    { name: 'ActionDiscardTile', payload: { seat: 0, tile: '5m', moqie: true, is_liqi: false, is_wliqi: false } },
+    { name: 'ActionDealTile', payload: { seat: 1, left_tile_count: 64 } },
+    { name: 'ActionDiscardTile', payload: { seat: 1, tile: '9s', moqie: true, is_liqi: false, is_wliqi: false } },
+  ];
+  for (const [index, action] of continuation.entries()) {
+    const events = normalizeAction(action.name, action.payload, { projection, sourceStream: handSourceStream(context.gameMatchKey, context.gameHandKey),
+      step: 10 + index, connectionEpoch: context.connectionEpoch, receivedAt: at });
+    projection = events.reduce(reduceObservation, projection);
+  }
+  const riverIds = Object.values(projection.state!.players).flatMap(player => player.river.map(discard => discard.eventId));
+  assert.equal(projection.sequence, 4);
+  assert.equal(riverIds.length, 6); assert.equal(new Set(riverIds).size, 6);
+  assert.equal(projection.state!.players[1].river.at(-1)!.eventId, `${context.sessionId}:event:4`);
+  assert.equal(projection.state!.latestAction!.eventId, projection.state!.players[1].river.at(-1)!.eventId);
+  assert.equal(digest(sync), before);
+});
+
 test('only a matching fresh client countdown gives a bounded deadline', () => {
   const { context, response } = setup();
   const timing = { source: 'client-countdown' as const, step: 9, sampledAt: at, remainingMs: 280000, uncertaintyMs: 1000 };
@@ -70,7 +97,7 @@ test('snapshot-only, history gaps, unknown actions and wrong next-step cannot cr
   const unknown = structuredClone(response); unknown.game_restore.actions[5]!.name = 'ActionUnknown';
   assert.throws(() => normalizeSyncGame(unknown, context), /UNSUPPORTED_PROTOCOL_ACTION/);
   assert.throws(() => normalizeSyncGame({ ...response, step: 9 }, context), /SYNC_NEXT_STEP_MISMATCH/);
-  assert.throws(() => normalizeSyncGame({ ...response, is_end: true }, context), /SYNC_GAME_ENDED/);
+  assert.throws(() => normalizeSyncGame({ ...response, is_end: true }, context), /SYNC_TERMINAL_EVIDENCE_REQUIRED/);
   assert.equal(digest(response), before);
 });
 

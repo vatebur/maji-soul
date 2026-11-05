@@ -63,10 +63,12 @@ export class StorageClient implements StoragePort {
   async saveDecision(snapshot: DecisionSnapshot, hash: string): Promise<void> { await this.#call('saveDecision', { snapshot, hash }); }
   reserveAction(input: ReserveActionInput) { return this.#call('reserveAction', input); }
   markDispatching(attemptId: string) { return this.#call('markDispatching', { attemptId }); }
+  async assertDispatchCurrent(attemptId: string): Promise<void> { await this.#call('assertDispatchCurrent', { attemptId }); }
   recordReceipt(attemptId: string, receipt: CallReceipt) { return this.#call('recordReceipt', { attemptId, receipt }); }
   markSimulated(attemptId: string) { return this.#call('markSimulated', { attemptId }); }
   getAttempt(attemptId: string): Promise<ActionAttempt | null> { return this.#call('getAttempt', { attemptId }); }
   inspect(sessionId: string) { return this.#call('inspect', { sessionId }); }
+  inspectMatch(gameMatchKey: string) { return this.#call('inspectMatch', { gameMatchKey }); }
   async recordFault(sessionId: string, code: string, at: string): Promise<void> { await this.#call('recordFault', { sessionId, code, at }); }
   async close(): Promise<void> {
     if (this.#closing || this.#unavailable) return;

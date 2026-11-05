@@ -28,3 +28,5 @@
 修复的关键竞态：持久化 `dispatching` 只证明准备发送，不能证明已经发生发送。此前若准备期间人工恰好打出同牌，便会过早确认。现在该阶段只归档动作事实，随后 `sent`／`accepted`／`unknown` 才允许精确对账；`not-sent`／`rejected` 不借用该事实。崩溃后确实可能已经发送的记录仍按 uncertain 处理。
 
 测试入口为 [`actor.test.ts`](../../tests/actor.test.ts)、[`execution.test.ts`](../../tests/execution.test.ts)、[`storage.test.ts`](../../tests/storage.test.ts)、[`browser-bridge.test.ts`](../../tests/browser-bridge.test.ts) 和 [`live-broker.test.ts`](../../tests/live-broker.test.ts)。远端控制屏障有界超时且失败关闸；共享 live 台账防止新运行绕过旧 uncertain 动作。真实跨进程最终暂停与当前完整同步已有实场证据，丢确认／崩溃／罕见动作的全部实场组合尚未覆盖。
+
+后续批次已补[跨小局与恢复协调](./lifecycle-coordination.md)：结束／连庄／终局状态、同库跨 session 的历史与结算校验、prepared 后及 prepare 等待中的旧动作撤销、认证等待和终局恢复。相关测试在 `coordinator.test.ts`、`hand-lifecycle.test.ts` 和 `live-lifecycle.test.ts`；均为契约／故障注入证据，未扩大原实场验收范围。

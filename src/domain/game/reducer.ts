@@ -163,21 +163,23 @@ export function reduceObservation(current: GameProjection, observation: GameObse
     requireThat(p.room?.roomId === o.payload.roomId && p.matchStatus !== 'playing' && p.gameMatchKey !== o.payload.gameMatchKey, 'MATCH_BOUNDARY_INVALID');
     p.matchId = localId('match', [p.sessionId, o.payload.gameMatchKey]); p.gameMatchKey = o.payload.gameMatchKey;
     p.matchOwnSeat = o.payload.ownSeat; p.initialScores = structuredClone(o.payload.initialScores);
+    delete p.matchEndPending; delete p.handResult; delete p.matchResult;
     p.gameHandKey = null; p.handOrdinal = 0; p.matchStatus = 'playing'; p.handStatus = 'none'; p.sourceCursor = null; p.contextEventIds = []; p.state = null;
   } else if (o.type === 'HandStarted') {
-    requireThat(p.matchStatus === 'playing' && p.handStatus !== 'playing' && o.payload.ordinal === p.handOrdinal + 1 && o.payload.gameHandKey !== p.gameHandKey, 'HAND_BOUNDARY_INVALID');
+    requireThat(p.matchStatus === 'playing' && !p.matchEndPending && p.handStatus !== 'playing' && o.payload.ordinal === p.handOrdinal + 1 && o.payload.gameHandKey !== p.gameHandKey, 'HAND_BOUNDARY_INVALID');
     requireThat(o.payload.initialView.ownSeat === p.matchOwnSeat, 'OWN_SEAT_CHANGED');
     requireThat(seats.every(s => o.payload.initialView.players[s].river.length === 0 && o.payload.initialView.players[s].melds.length === 0 && o.payload.initialView.players[s].riichi === 'none'), 'HAND_INITIAL_HISTORY_PRESENT');
     requireThat(o.payload.initialView.currentActor.known && o.payload.initialView.currentActor.value === o.payload.initialView.dealer, 'HAND_INITIAL_ACTOR_MISMATCH');
     if (p.handOrdinal === 0) requireThat(seats.every(s => o.payload.initialView.players[s].score === p.initialScores![s]), 'INITIAL_SCORE_MISMATCH');
     else requireThat(seats.every(s => o.payload.initialView.players[s].score === p.state!.players[s].score), 'HAND_SCORE_MISMATCH');
     p.gameHandKey = o.payload.gameHandKey; p.handOrdinal = o.payload.ordinal; p.activeMode = p.pendingMode; p.handStatus = 'playing'; p.contextEventIds = [];
+    delete p.handResult;
     p.state = stateFromView(p, o.payload.initialView);
   } else if (o.type === 'Disconnected' && !p.state) {
     // Lobby/connection failures still belong in the durable observation stream. The actor
     // closes its control gate at ingress; there is no hand projection to mark syncing yet.
   } else {
-    const s = p.state; requireThat(s && p.matchStatus === 'playing', 'EVENT_WITHOUT_GAME');
+    const s = p.state; requireThat(s && (p.matchStatus === 'playing' || o.type === 'Disconnected'), 'EVENT_WITHOUT_GAME');
     requireThat(p.handStatus === 'playing' || o.type === 'MatchEnded' || o.type === 'Disconnected', 'EVENT_AFTER_HAND');
     s.stateVersion++;
     if (o.type !== 'OperationOffered' && s.operationWindow) s.operationWindow.status = 'closed';
@@ -248,8 +250,13 @@ export function reduceObservation(current: GameProjection, observation: GameObse
         s.doraIndicators = [...o.payload.indicators]; s.doraTiles = [...o.payload.doraTiles]; break;
       case 'OperationOffered': requireThat(s.operationWindow?.id !== o.payload.window.id, 'WINDOW_ID_REUSED'); assertWindow(s, o.payload.window); s.operationWindow = structuredClone(o.payload.window); break;
       case 'OperationClosed': requireThat(s.operationWindow?.id === o.payload.windowId, 'UNKNOWN_WINDOW'); s.operationWindow.status = 'closed'; break;
-      case 'HandEnded': seats.forEach(seat => { s.players[seat].score = o.payload.scores[seat]; }); p.handStatus = 'finished'; s.currentActor = unknown('HAND_ENDED'); break;
-      case 'MatchEnded': requireThat(p.handStatus === 'finished', 'MATCH_WITH_ACTIVE_HAND'); seats.forEach(seat => { s.players[seat].score = o.payload.scores[seat]; }); p.matchStatus = 'finished'; break;
+      case 'HandEnded':
+        seats.forEach(seat => { s.players[seat].score = o.payload.scores[seat]; }); p.handStatus = 'finished';
+        p.handResult = structuredClone(o.payload); if (o.payload.matchEnded) p.matchEndPending = true;
+        s.currentActor = unknown('HAND_ENDED'); break;
+      case 'MatchEnded':
+        requireThat(p.handStatus === 'finished', 'MATCH_WITH_ACTIVE_HAND'); seats.forEach(seat => { s.players[seat].score = o.payload.scores[seat]; });
+        p.matchStatus = 'finished'; p.matchResult = structuredClone(o.payload); delete p.matchEndPending; break;
       case 'Disconnected': s.trust = 'syncing'; s.trustIssues = ['DISCONNECTED']; break;
     }
     assertView(s);
@@ -290,6 +297,14 @@ function assertSyncEvidence(sync: AuthoritativeSync): void {
       requireThat(observed.length === river.length && observed.every((o, i) => agreesWithRiver(o, river[i]!)), 'SYNC_HISTORY_RIVER_MISMATCH');
     }
   }
+  const handEnd = sync.handHistory.find(o => o.type === 'HandEnded');
+  if (sync.terminal) {
+    requireThat(sync.historyCoverage === 'complete-hand' && handEnd?.type === 'HandEnded' &&
+      handEnd.sourceCursor === sync.sourceCursor && canonical(handEnd.payload) === canonical(sync.terminal.hand), 'SYNC_TERMINAL_HISTORY_REQUIRED');
+    requireThat(!sync.currentView!.operationWindow, 'SYNC_TERMINAL_WINDOW');
+    const scores = sync.terminal.match?.scores ?? sync.terminal.hand.scores;
+    requireThat(seats.every(s => sync.currentView!.players[s].score === scores[s]), 'SYNC_TERMINAL_SCORES_MISMATCH');
+  } else requireThat(!handEnd, 'SYNC_TERMINAL_STATE_REQUIRED');
   for (const o of sync.observedActions) {
     requireThat((o.type === 'TileDiscarded' || o.type === 'MeldDeclared') && o.sourceCursor, 'INVALID_SYNC_ACTION');
     const cursor = cursorParts(o.sourceCursor);
@@ -312,7 +327,16 @@ export function reduceSync(current: GameProjection, sync: AuthoritativeSync): Ga
   const p = structuredClone(current), sameMatch = current.gameMatchKey === sync.gameMatchKey, sameHand = sameMatch && current.gameHandKey === sync.gameHandKey;
   requireThat(!current.gameMatchKey || sameMatch, 'SYNC_DIFFERENT_MATCH');
   requireThat(sameHand ? sync.handOrdinal === current.handOrdinal : sync.handOrdinal > current.handOrdinal, 'SYNC_HAND_MISMATCH');
-  requireThat(!sameHand || current.handStatus !== 'finished', 'SYNC_HAND_ALREADY_FINISHED');
+  requireThat(!sameHand || current.handStatus !== 'finished' || !!sync.terminal, 'SYNC_HAND_ALREADY_FINISHED');
+  requireThat(current.matchStatus !== 'finished' || !!sync.terminal?.match, 'SYNC_MATCH_ALREADY_FINISHED');
+  requireThat(!current.matchEndPending || !!sync.terminal && (!!sync.terminal.hand.matchEnded || !!sync.terminal.match), 'SYNC_MATCH_END_RETRACTED');
+  if (sameHand && current.handResult && sync.terminal) {
+    // A later is_end marker may add terminal certainty; settlement itself cannot change.
+    const { matchEnded: _beforeEnd, ...beforeResult } = current.handResult;
+    const { matchEnded: _afterEnd, ...afterResult } = sync.terminal.hand;
+    requireThat(canonical(beforeResult) === canonical(afterResult), 'SYNC_HAND_RESULT_CONFLICT');
+  }
+  if (current.matchResult) requireThat(canonical(current.matchResult) === canonical(sync.terminal?.match), 'SYNC_MATCH_RESULT_CONFLICT');
   if (current.sourceCursor) {
     const before = cursorParts(current.sourceCursor), after = cursorParts(sync.sourceCursor);
     requireThat(sameHand ? before.stream === after.stream && after.step >= before.step : before.stream !== after.stream, 'SYNC_CURSOR_MISMATCH');
@@ -322,7 +346,14 @@ export function reduceSync(current: GameProjection, sync: AuthoritativeSync): Ga
   p.connectionEpoch = sync.connectionEpoch; p.room = structuredClone(sync.room); p.gameMatchKey = sync.gameMatchKey;
   p.matchId = localId('match', [p.sessionId, sync.gameMatchKey]); p.matchOwnSeat = sync.currentView.ownSeat;
   if (sameHand) requireThat(sync.currentView.ownSeat === current.state?.ownSeat, 'SYNC_SEAT_MISMATCH');
-  p.gameHandKey = sync.gameHandKey; p.handOrdinal = sync.handOrdinal; p.matchStatus = 'playing'; p.handStatus = 'playing';
+  p.gameHandKey = sync.gameHandKey; p.handOrdinal = sync.handOrdinal;
+  p.matchStatus = sync.terminal?.match ? 'finished' : 'playing'; p.handStatus = sync.terminal ? 'finished' : 'playing';
+  delete p.matchEndPending; delete p.handResult; delete p.matchResult;
+  if (sync.terminal) {
+    p.handResult = structuredClone(sync.terminal.hand);
+    if (sync.terminal.match) p.matchResult = structuredClone(sync.terminal.match);
+    else if (sync.terminal.hand.matchEnded) p.matchEndPending = true;
+  }
   if (!sameHand) { p.activeMode = p.pendingMode; p.contextEventIds = []; }
   const latest = sync.historyCoverage === 'complete-hand' ? sync.handHistory.filter(o => o.sourceCursor).at(-1) : undefined;
   p.sourceCursor = sync.sourceCursor; p.state = stateFromView(p, sync.currentView, latest?.type === 'TileDiscarded' && latest.sourceCursor === sync.sourceCursor ? latest : undefined); requireThat(p.state.trust === 'trusted', 'SYNC_UNKNOWN_STATE');

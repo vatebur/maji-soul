@@ -62,4 +62,4 @@ package-lock.json          npm 依赖锁定
 
 模型服务字段见 [.env.example](./.env.example)。实际密钥由本机 `.env` 管理，不提交到仓库；后续运行数据和脱敏回放放入被忽略的 `data/`。
 
-当前先完成[自动化门槛实场验收](./docs/validation/automation-gates.md)；[阶段 2 动作映射](./docs/validation/phase2-actions.md)已有离线实现。后续仍需跨小局协调、双模式真实整场与同房续局。控制台、OBS 页面和完整自动对局尚未交付。受控实场命令与固定 live 台账用法见[本机说明](./docs/USAGE.md)。
+当前先完成[自动化门槛实场验收](./docs/validation/automation-gates.md)；[阶段 2 动作映射](./docs/validation/phase2-actions.md)和[跨小局与恢复协调](./docs/validation/lifecycle-coordination.md)已有离线实现，提供 `live-observe` 供实场观察。双模式真实整场与同房续局仍待完成。控制台、OBS 页面和完整自动对局尚未交付。受控实场命令与固定 live 台账用法见[本机说明](./docs/USAGE.md)。

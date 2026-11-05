@@ -6,6 +6,8 @@
 
 当前落地类型见 [`types.ts`](../../src/domain/game/types.ts) 与 [`StoragePort`](../../src/ports/storage.ts)。[阶段 1 实现范围](../validation/state-foundation.md#相对目标契约的实现子集)记录源键、游标、候选及同步子集。执行模式为 dry-run／contract-test／live；[ProductionTransport](../../src/application/game/executor.ts) 经持久化 dispatching、Actor 许可和浏览器最终栅栏发送，暂停需等待 `awaitControlBarrier()`。SQLite schema v2 保留两种真实／契约确认来源。[实场限制](../validation/phase1-live.md)仍适用；下文未实现的方法继续作为目标，不能直接当成生产入口。
 
+已落地的生命周期扩展：`HandEnded.matchEnded` 表示等待整场结果，`AuthoritativeSync.terminal` 保存完整小局／可选整场结算；投影保留 `handResult`、`matchResult` 和 `matchEndPending`。`GameCoordinator` 串行应用边界／同步，边界入队前调用 `suspendForBoundary()` 撤销旧许可；`StoragePort.inspectMatch` 跨会话读原台账，`markDispatching` 与 `assertDispatchCurrent` 在发送意图及异步准备后复核最新小局与未决动作。这些方法不创建新整场。证据和观察入口见[跨小局协调](../validation/lifecycle-coordination.md)。
+
 ## 目录
 
 - [1. 共同规则](#1-共同规则)

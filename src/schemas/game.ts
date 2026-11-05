@@ -120,7 +120,8 @@ export function parseObservation(value: unknown): GameObservation {
     case 'OperationClosed':
       p = object(o.payload, ['windowId', 'reason']); string(p.windowId); oneOf(p.reason, ['completed', 'superseded', 'expired', 'hand-ended']); break;
     case 'HandEnded':
-      p = object(o.payload, ['scores', 'reason', 'winners', 'resultLabel']); scores(p.scores); oneOf(p.reason, ['win', 'draw', 'abortive-draw']); array(p.winners, seat, 3); string(p.resultLabel);
+      p = object(o.payload, ['scores', 'reason', 'winners', 'resultLabel'], ['matchEnded']); scores(p.scores); oneOf(p.reason, ['win', 'draw', 'abortive-draw']); array(p.winners, seat, 3); string(p.resultLabel);
+      if (p.matchEnded !== undefined) oneOf(p.matchEnded, [true]);
       requireThat(new Set(p.winners).size === p.winners.length && (p.reason === 'win' ? p.winners.length > 0 : p.winners.length === 0), 'INVALID_HAND_RESULT'); break;
     case 'MatchEnded': p = object(o.payload, ['scores', 'ranks']); scores(p.scores); scores(p.ranks); requireThat(new Set(Object.values(p.ranks as object)).size === 4 && Object.values(p.ranks as object).every(v => [1,2,3,4].includes(v)), 'INVALID_RANKS'); break;
     case 'Disconnected': p = object(o.payload, ['code', 'recoverable']); string(p.code); boolean(p.recoverable); break;
@@ -129,12 +130,20 @@ export function parseObservation(value: unknown): GameObservation {
   return structuredClone(value) as GameObservation;
 }
 export function parseSync(value: unknown): AuthoritativeSync {
-  const s = object(value, ['syncId', 'connectionEpoch', 'receivedAt', 'coverage', 'room', 'gameMatchKey', 'gameHandKey', 'handOrdinal', 'missingFields', 'historyCoverage', 'handHistory', 'observedActions', 'sourceCursor'], ['currentView']);
+  const s = object(value, ['syncId', 'connectionEpoch', 'receivedAt', 'coverage', 'room', 'gameMatchKey', 'gameHandKey', 'handOrdinal', 'missingFields', 'historyCoverage', 'handHistory', 'observedActions', 'sourceCursor'], ['currentView', 'terminal']);
   string(s.syncId); integer(s.connectionEpoch); timestamp(s.receivedAt); oneOf(s.coverage, ['complete-current-state', 'partial']); validateRoom(s.room);
   string(s.gameMatchKey); string(s.gameHandKey); integer(s.handOrdinal, 1, 1000); string(s.sourceCursor); cursorParts(s.sourceCursor);
   array(s.missingFields, v => string(v), 64); oneOf(s.historyCoverage, ['complete-hand', 'partial', 'none']);
   if (s.currentView !== undefined) validateView(s.currentView, true);
   array(s.handHistory, parseObservation, 1024); array(s.observedActions, v => { const o = parseObservation(v); requireThat((o.type === 'TileDiscarded' || o.type === 'MeldDeclared') && o.sourceCursor, 'INVALID_SYNC_ACTION'); }, 256);
+  if (s.terminal !== undefined) {
+    const terminal = object(s.terminal, ['hand'], ['match']);
+    const base = { schemaVersion: 1, observationId: 'terminal-schema', connectionEpoch: s.connectionEpoch,
+      source: 'majsoul-sync', sourceDedupKey: 'terminal-schema', receivedAt: s.receivedAt };
+    parseObservation({ ...base, type: 'HandEnded', payload: terminal.hand });
+    if (terminal.match !== undefined) parseObservation({ ...base, type: 'MatchEnded', payload: terminal.match });
+    requireThat(s.historyCoverage === 'complete-hand', 'SYNC_TERMINAL_HISTORY_REQUIRED');
+  }
   const sync = value as AuthoritativeSync;
   for (const o of [...sync.handHistory, ...sync.observedActions]) {
     requireThat(o.source === 'majsoul-sync' && o.connectionEpoch === sync.connectionEpoch, 'SYNC_EVIDENCE_EPOCH_MISMATCH');

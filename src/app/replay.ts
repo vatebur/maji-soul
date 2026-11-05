@@ -18,7 +18,8 @@ export async function loadReplay(directory: string) {
   const [manifestText, eventsText, expectedText] = await Promise.all([
     boundedRead(join(path, 'manifest.json'), 64 * 1024), boundedRead(join(path, 'events.jsonl'), 8 * 1024 * 1024), boundedRead(join(path, 'expected.json'), 64 * 1024),
   ]);
-  const manifest = object(JSON.parse(manifestText), ['schemaVersion', 'reducerVersion', 'fixtureId', 'evidenceKind', 'sourceVersion', 'sessionId', 'virtualNow', 'description', 'redaction', 'eventCount', 'eventsSha256']);
+  const manifest = object(JSON.parse(manifestText), ['schemaVersion', 'reducerVersion', 'fixtureId', 'evidenceKind', 'sourceVersion', 'sessionId', 'virtualNow', 'description', 'redaction', 'eventCount', 'eventsSha256'], ['originHandOrdinal']);
+  if (manifest.originHandOrdinal !== undefined) integer(manifest.originHandOrdinal,1,1000);
   oneOf(manifest.schemaVersion, [1]); oneOf(manifest.reducerVersion, [REDUCER_VERSION]);
   // Live assets use this same strict visible-domain-event contract. Diagnostic summaries
   // cannot satisfy it: every event must parse and reproduce the complete expected state.
@@ -42,7 +43,12 @@ export async function replay(directory: string, options: { outputDirectory?: str
   try {
     const clock = new ReplayClock(fixture.manifest.virtualNow as string), sessionId = fixture.manifest.sessionId as string;
     const actor = await GameActor.open(storage, sessionId, randomUUID(), { clock });
-    for (const observation of fixture.events) { clock.advanceTo(observation.receivedAt); await actor.ingest(observation); }
+    for (const observation of fixture.events) {
+      // Facts keep their original receipt time and causal order. A buffered
+      // match result can precede its settlement in wall time, not in the ledger.
+      clock.advanceTo(new Date(Math.max(clock.wallTimeMs(),Date.parse(observation.receivedAt))).toISOString());
+      await actor.ingest(observation);
+    }
     const inspection = await storage.inspect(sessionId), state = actor.projection.state;
     const actual = { eventCount: fixture.events.length, finalStateHash: digest(state), ownDiscardFacts: inspection.counts.outbox,
       finalSequence: actor.projection.sequence, finalHandOrdinal: actor.projection.handOrdinal, finalOwnTiles: state?.ownConcealed.map(t => t.code) ?? [] };

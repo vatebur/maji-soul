@@ -6,10 +6,14 @@ import { eventIdFor, initialProjection, reduceObservation, reduceSync } from '..
 import { canonical, cursorParts, digest, nextCursor, observationFingerprint, requireThat } from '../../domain/game/value.ts';
 import { array, integer, object, oneOf, parseObservation, parseSync, string, timestamp, validateView, validateWindow } from '../../schemas/game.ts';
 import { expectedActionFor } from '../majsoul/actions.ts';
-import type { CommitResult, ReserveActionInput, StorageInspection } from '../../ports/storage.ts';
+import type { CommitResult, DispatchIntentResult, MatchInspection, ReserveActionInput, StorageInspection } from '../../ports/storage.ts';
 
 const APP_ID = 0x4d414a49;
 const parse = <T>(value: unknown): T => { requireThat(typeof value === 'string', 'STORAGE_DATA_INVALID'); return JSON.parse(value) as T; };
+const handSettlement = (result: NonNullable<GameProjection['handResult']>): string => {
+  const { matchEnded: _terminal, ...settlement } = result;
+  return canonical(settlement);
+};
 
 function validateSnapshot(value: unknown): asserts value is DecisionSnapshot {
   const s = object(value, ['schemaVersion', 'id', 'scope', 'windowId', 'stateVersion', 'connectionEpoch', 'controlEpoch', 'createdAt', 'actionDeadline', 'activeMode', 'state', 'legalActions', 'unknownFields', 'contextEventIds', 'sourceCursor']);
@@ -121,6 +125,7 @@ export class StorageDatabase {
       if (existing) { requireThat(existing.fingerprint === fingerprint, 'SOURCE_DEDUP_CONFLICT'); return { projection: this.#projection(sessionId), duplicate: true }; }
       const current = this.#projection(sessionId); requireThat(current.sequence === expectedSequence, 'VERSION_CONFLICT');
       const projection = reduceObservation(current, observation);
+      if (['HandStarted', 'HandEnded', 'MatchEnded'].includes(observation.type)) this.#assertLedgerProgress(projection);
       this.#insertEvent(projection, observation.connectionEpoch, observation.sourceDedupKey, fingerprint, observation.type, observation);
       this.#recordFact(projection, observation, 'authoritative-event');
       this.#putProjection(projection);
@@ -134,6 +139,7 @@ export class StorageDatabase {
       if (existing) { requireThat(existing.fingerprint === fingerprint, 'SYNC_ID_CONFLICT'); return { projection: this.#projection(sessionId), duplicate: true }; }
       const current = this.#projection(sessionId); requireThat(current.sequence === expectedSequence, 'VERSION_CONFLICT');
       const projection = reduceSync(current, sync);
+      this.#assertLedgerProgress(projection);
       const limit = cursorParts(sync.sourceCursor);
       for (const action of sync.observedActions) {
         requireThat(action.connectionEpoch === sync.connectionEpoch && action.sourceCursor, 'SYNC_ACTION_SCOPE_MISMATCH');
@@ -229,6 +235,7 @@ export class StorageDatabase {
         requireThat(existing.decisionId === input.decisionId && existing.actionId === input.actionId && existing.processInstanceId === input.processInstanceId && existing.executionMode === input.executionMode, 'ATTEMPT_ID_CONFLICT');
         return { attempt: existing, created: false };
       }
+      this.#assertLedgerProgress(p);
       requireThat(p.sequence === row.sequence && p.state && canonical(p.state) === canonical(snapshot.state), 'VERSION_CONFLICT');
       requireThat(this.#db.prepare('SELECT recovery_required FROM sessions WHERE session_id=?').get(p.sessionId)?.recovery_required === 0, 'RECOVERY_SYNC_REQUIRED');
       const candidate = snapshot.legalActions.find(a => a.id === input.actionId);
@@ -256,13 +263,42 @@ export class StorageDatabase {
       return { attempt, created: true };
     });
   }
-  markDispatching(attemptId: string): { attempt: ActionAttempt; transitioned: boolean } {
+  markDispatching(attemptId: string): DispatchIntentResult {
     return this.#transaction(() => {
       const attempt = this.#getAttempt(attemptId); requireThat(attempt, 'ATTEMPT_NOT_FOUND'); this.#owned(attempt.sessionId);
       requireThat(attempt.processInstanceId === this.#owners.get(attempt.sessionId), 'STALE_PROCESS');
       if (attempt.status !== 'prepared') return { attempt, transitioned: false };
       requireThat(attempt.executionMode !== 'dry-run', 'DRY_RUN_CANNOT_DISPATCH');
+      try { this.#assertAttemptCurrent(attempt); }
+      catch (error) {
+        // This transition has not granted dispatch intent, so an already stale
+        // reservation is provably unsent. Preserve its slots and cancellation.
+        const code=error instanceof Error ? error.message : '';
+        if (!['HAND_LEDGER_STALE','HAND_LEDGER_TERMINAL','MATCH_LEDGER_TERMINAL','ATTEMPT_SCOPE_STALE','RECOVERY_SYNC_REQUIRED'].includes(code)) throw error;
+        attempt.status='not-dispatched';
+        attempt.receipt={callId:`ledger-fence:${attempt.id}`,delivery:'not-sent',observedAt:new Date().toISOString()};
+        this.#putAttempt(attempt); return {attempt,transitioned:false,rejectionCode:code};
+      }
       attempt.status = 'dispatching'; this.#putAttempt(attempt); return { attempt, transitioned: true };
+    });
+  }
+  #assertAttemptCurrent(attempt: ActionAttempt): void {
+    const p=this.#projection(attempt.sessionId);
+    this.#assertLedgerProgress(p);
+    requireThat(p.gameMatchKey===attempt.gameMatchKey && p.gameHandKey===attempt.gameHandKey && p.state?.handId===attempt.handId &&
+      p.state.stateVersion===attempt.stateVersion && p.connectionEpoch===attempt.connectionEpoch &&
+      p.state.operationWindow?.id===attempt.windowId && p.state.operationWindow.status==='open' &&
+      p.handStatus==='playing' && p.matchStatus==='playing' && !p.matchEndPending, 'ATTEMPT_SCOPE_STALE');
+    requireThat(this.#db.prepare('SELECT recovery_required FROM sessions WHERE session_id=?').get(attempt.sessionId)?.recovery_required===0,'RECOVERY_SYNC_REQUIRED');
+    const pending=this.#db.prepare("SELECT attempt_id FROM action_attempts WHERE game_match_key=? AND attempt_id<>? AND execution_mode IN ('contract-test','live') AND status IN ('prepared','dispatching','awaiting-confirmation','uncertain') LIMIT 1").get(attempt.gameMatchKey,attempt.id);
+    requireThat(!pending,'ACTION_RECONCILIATION_REQUIRED');
+  }
+  assertDispatchCurrent(attemptId: string): void {
+    this.#transaction(()=>{
+      const attempt=this.#getAttempt(attemptId);requireThat(attempt,'ATTEMPT_NOT_FOUND');this.#owned(attempt.sessionId);
+      requireThat(attempt.processInstanceId===this.#owners.get(attempt.sessionId),'STALE_PROCESS');
+      requireThat(attempt.status==='dispatching','DISPATCH_INTENT_REQUIRED');
+      this.#assertAttemptCurrent(attempt);
     });
   }
   recordReceipt(attemptId: string, receipt: CallReceipt): ActionAttempt {
@@ -294,13 +330,80 @@ export class StorageDatabase {
         confirmations: count('SELECT count(*) AS n FROM action_confirmations c JOIN action_attempts a ON a.attempt_id=c.attempt_id WHERE a.session_id=?'), faults: count('SELECT count(*) AS n FROM storage_faults WHERE session_id=?') },
       recoveryRequired: this.#db.prepare('SELECT recovery_required FROM sessions WHERE session_id=?').get(sessionId)?.recovery_required === 1 };
   }
+  /** Read the original authoritative event ledger across sessions. No new database
+   * or caller-supplied hand counter can erase an earlier hand or unresolved send. */
+  inspectMatch(gameMatchKey: string): MatchInspection {
+    const contexts = new Map<string, { match: string; hand: string | null }>();
+    const hands = new Map<string, MatchInspection['hands'][number]>();
+    let matchStatus: MatchInspection['matchStatus'] = 'unknown';
+    let matchResult: MatchInspection['matchResult'];
+    const remember = (key: string, ordinal: number, result?: NonNullable<GameProjection['handResult']>) => {
+      const previous = hands.get(key);
+      requireThat(!previous || previous.ordinal === ordinal, 'HAND_LEDGER_CONFLICT');
+      requireThat(![...hands.values()].some(h => h.gameHandKey !== key && h.ordinal === ordinal), 'HAND_LEDGER_CONFLICT');
+      requireThat(!previous?.result || !result || handSettlement(previous.result)===handSettlement(result), 'HAND_LEDGER_RESULT_CONFLICT');
+      const settlement=result ?? previous?.result;
+      hands.set(key, { gameHandKey:key, ordinal, status:settlement ? 'finished' : 'playing',
+        ...(settlement ? {result:{...settlement,...(previous?.result?.matchEnded ? {matchEnded:true as const} : {})}} : {}) });
+      if (matchStatus === 'unknown') matchStatus = 'playing';
+    };
+    const rememberMatchResult = (result: NonNullable<GameProjection['matchResult']>) => {
+      requireThat(!matchResult || canonical(matchResult)===canonical(result),'MATCH_LEDGER_RESULT_CONFLICT');
+      matchResult=result; matchStatus='finished';
+    };
+    // Lifecycle rows are small compared with full action history and retain the
+    // hand identities even when a session's checkpoint has advanced to another game.
+    const rows = this.#db.prepare("SELECT session_id,type,payload FROM game_events WHERE type IN ('MatchStarted','HandStarted','HandEnded','MatchEnded','SyncApplied') ORDER BY rowid").all();
+    for (const row of rows) {
+      const session = String(row.session_id), type = String(row.type);
+      if (type === 'SyncApplied') {
+        const sync = parse<AuthoritativeSync>(row.payload);
+        contexts.set(session,{match:sync.gameMatchKey,hand:sync.gameHandKey});
+        if (sync.gameMatchKey !== gameMatchKey) continue;
+        const terminal = sync.terminal;
+        remember(sync.gameHandKey,sync.handOrdinal,terminal?.hand);
+        if (terminal?.match) rememberMatchResult(terminal.match);
+        else if (terminal?.hand.matchEnded && !matchResult) matchStatus = 'pending-result';
+        continue;
+      }
+      const observation = parse<GameObservation>(row.payload);
+      if (observation.type === 'MatchStarted') {
+        contexts.set(session,{match:observation.payload.gameMatchKey,hand:null});
+        if (observation.payload.gameMatchKey === gameMatchKey && matchStatus === 'unknown') matchStatus='playing';
+      } else {
+        const context=contexts.get(session);
+        if (observation.type === 'HandStarted' && context) context.hand=observation.payload.gameHandKey;
+        if (context?.match !== gameMatchKey) continue;
+        if (observation.type === 'HandStarted') remember(observation.payload.gameHandKey,observation.payload.ordinal);
+        else if (observation.type === 'HandEnded') {
+          const hand=context.hand && hands.get(context.hand); requireThat(hand,'HAND_LEDGER_CONTEXT_MISSING');
+          remember(hand.gameHandKey,hand.ordinal,observation.payload);
+          if (observation.payload.matchEnded && !matchResult) matchStatus='pending-result';
+        } else if (observation.type === 'MatchEnded') rememberMatchResult(observation.payload);
+      }
+    }
+    const unresolvedAttempts=this.#db.prepare("SELECT body FROM action_attempts WHERE game_match_key=? AND execution_mode IN ('contract-test','live') AND status IN ('prepared','dispatching','awaiting-confirmation','uncertain') ORDER BY rowid").all(gameMatchKey).map(row=>parse<ActionAttempt>(row.body));
+    return {gameMatchKey,hands:[...hands.values()].sort((a,b)=>a.ordinal-b.ordinal),matchStatus,...(matchResult ? {matchResult} : {}),unresolvedAttempts};
+  }
+  #assertLedgerProgress(projection: GameProjection): void {
+    if (!projection.gameMatchKey || !projection.gameHandKey) return;
+    const ledger=this.inspectMatch(projection.gameMatchKey), existing=ledger.hands.find(h=>h.gameHandKey===projection.gameHandKey), latest=ledger.hands.at(-1);
+    if (existing) {
+      requireThat(existing.ordinal===projection.handOrdinal && (!latest || existing.ordinal===latest.ordinal), 'HAND_LEDGER_STALE');
+      requireThat(existing.status!=='finished' || projection.handStatus==='finished', 'HAND_LEDGER_TERMINAL');
+      requireThat(!existing.result || !!projection.handResult && handSettlement(existing.result)===handSettlement(projection.handResult), 'HAND_LEDGER_RESULT_CONFLICT');
+    } else requireThat(projection.handOrdinal===(latest?.ordinal ?? 0)+1, 'HAND_LEDGER_ORDINAL');
+    requireThat(ledger.matchStatus!=='finished' || projection.matchStatus==='finished','MATCH_LEDGER_TERMINAL');
+    requireThat(ledger.matchStatus!=='pending-result' || projection.matchEndPending || projection.matchStatus==='finished','MATCH_LEDGER_TERMINAL');
+    requireThat(!ledger.matchResult || canonical(ledger.matchResult)===canonical(projection.matchResult),'MATCH_LEDGER_RESULT_CONFLICT');
+  }
   recordFault(sessionId: string, code: string, at: string): void {
     this.#transaction(() => { this.#owned(sessionId); this.#db.prepare('INSERT INTO storage_faults (session_id, code, occurred_at) VALUES (?, ?, ?)').run(sessionId, code, at); this.#db.prepare('UPDATE sessions SET recovery_required=1 WHERE session_id=?').run(sessionId); });
   }
   close(): void { this.#db.close(); }
 
   dispatch(method: unknown, payload: unknown): unknown {
-    requireThat(!this.#readOnly || ['findObservation', 'getAttempt', 'inspect', 'close'].includes(String(method)), 'STORAGE_READ_ONLY');
+    requireThat(!this.#readOnly || ['findObservation', 'getAttempt', 'inspect', 'inspectMatch', 'close'].includes(String(method)), 'STORAGE_READ_ONLY');
     switch (method) {
       case 'openSession': { const p = object(payload, ['sessionId', 'processInstanceId', 'startedAt']); string(p.sessionId); string(p.processInstanceId); timestamp(p.startedAt); return this.openSession(p.sessionId, p.processInstanceId, p.startedAt); }
       case 'findObservation': { const p = object(payload, ['sessionId', 'epoch', 'dedupKey']); string(p.sessionId); integer(p.epoch); string(p.dedupKey, 256); return this.findObservation(p.sessionId, p.epoch, p.dedupKey); }
@@ -310,8 +413,10 @@ export class StorageDatabase {
       case 'saveDecision': { const p = object(payload, ['snapshot', 'hash']); string(p.hash, 64); validateSnapshot(p.snapshot); this.saveDecision(p.snapshot, p.hash); return null; }
       case 'reserveAction': { const p = object(payload, ['attemptId', 'decisionId', 'actionId', 'processInstanceId', 'executionMode', 'preparedAt']); for (const key of ['attemptId', 'decisionId', 'processInstanceId']) string(p[key]); string(p.actionId, 512); oneOf(p.executionMode, ['dry-run', 'contract-test', 'live']); timestamp(p.preparedAt); return this.reserveAction(p as unknown as ReserveActionInput); }
       case 'markDispatching': case 'markSimulated': case 'getAttempt': { const p = object(payload, ['attemptId']); string(p.attemptId); return this[method](p.attemptId); }
+      case 'assertDispatchCurrent': { const p=object(payload,['attemptId']); string(p.attemptId);this.assertDispatchCurrent(p.attemptId);return null; }
       case 'recordReceipt': { const p = object(payload, ['attemptId', 'receipt']); string(p.attemptId); validateReceipt(p.receipt); return this.recordReceipt(p.attemptId, p.receipt); }
       case 'inspect': { const p = object(payload, ['sessionId']); string(p.sessionId); return this.inspect(p.sessionId); }
+      case 'inspectMatch': { const p = object(payload, ['gameMatchKey']); string(p.gameMatchKey); return this.inspectMatch(p.gameMatchKey); }
       case 'recordFault': { const p = object(payload, ['sessionId', 'code', 'at']); string(p.sessionId); string(p.code, 80); requireThat(/^[A-Z][A-Z0-9_]*$/.test(p.code), 'INVALID_FAULT_CODE'); timestamp(p.at); this.recordFault(p.sessionId, p.code, p.at); return null; }
       case 'close': object(payload, []); this.close(); return null;
       default: throw new Error('STORAGE_METHOD_UNSUPPORTED');
