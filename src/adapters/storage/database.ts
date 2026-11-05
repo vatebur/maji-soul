@@ -53,7 +53,19 @@ export class StorageDatabase {
           this.#db.exec(readFileSync(new URL('./migrations/001-state.sql', import.meta.url), 'utf8'));
           this.#db.exec(`PRAGMA application_id=${APP_ID}; PRAGMA user_version=1;`);
         });
-      } else requireThat(version === 1 && appId === APP_ID, 'STORAGE_VERSION_UNSUPPORTED');
+      } else requireThat((version === 1 || version === 2) && appId === APP_ID, 'STORAGE_VERSION_UNSUPPORTED');
+      if (!readOnly && this.#db.prepare('PRAGMA user_version').get()?.user_version === 1) {
+        // Rebuild CHECK-constrained tables without changing the references from slot/fact tables.
+        // Foreign keys must be disabled before opening the migration transaction.
+        this.#db.exec('PRAGMA foreign_keys=OFF;');
+        try {
+          this.#transaction(() => {
+            this.#db.exec(readFileSync(new URL('./migrations/002-live-execution.sql', import.meta.url), 'utf8'));
+            requireThat(this.#db.prepare('PRAGMA foreign_key_check').all().length === 0, 'STORAGE_MIGRATION_REFERENCE_INVALID');
+            this.#db.exec('PRAGMA user_version=2;');
+          });
+        } finally { this.#db.exec('PRAGMA foreign_keys=ON;'); }
+      }
     } catch (error) { this.#db.close(); throw error; }
   }
   #transaction<T>(work: () => T): T {
@@ -147,7 +159,7 @@ export class StorageDatabase {
     }
     // A durable dispatch intent precedes asynchronous bridge preparation. A matching manual
     // action can arrive during that preparation, so intent alone cannot establish submission.
-    const rows = this.#db.prepare("SELECT body FROM action_attempts WHERE game_match_key=? AND game_hand_key=? AND expected_cursor=? AND execution_mode='contract-test' AND status IN ('awaiting-confirmation','uncertain')").all(p.gameMatchKey, p.gameHandKey, o.sourceCursor);
+    const rows = this.#db.prepare("SELECT body FROM action_attempts WHERE game_match_key=? AND game_hand_key=? AND expected_cursor=? AND execution_mode IN ('contract-test','live') AND status IN ('awaiting-confirmation','uncertain')").all(p.gameMatchKey, p.gameHandKey, o.sourceCursor);
     for (const row of rows) {
       const attempt = parse<ActionAttempt>(row.body);
       if (attempt.actor !== o.payload.actor || attempt.tile !== o.payload.tile || !o.payload.tsumogiri.known || attempt.tsumogiri !== o.payload.tsumogiri.value) continue;
@@ -155,10 +167,10 @@ export class StorageDatabase {
     }
   }
   #confirm(attempt: ActionAttempt, factKey: string, eventId: string, matchedBy: 'authoritative-event' | 'authoritative-sync'): void {
-    requireThat(attempt.executionMode === 'contract-test' && (attempt.status === 'awaiting-confirmation' || attempt.status === 'uncertain'), 'CONFIRMATION_WITHOUT_POSSIBLE_SEND');
+    requireThat(attempt.executionMode !== 'dry-run' && (attempt.status === 'awaiting-confirmation' || attempt.status === 'uncertain'), 'CONFIRMATION_WITHOUT_POSSIBLE_SEND');
     requireThat(!this.#db.prepare('SELECT attempt_id FROM action_confirmations WHERE fact_key=?').get(factKey), 'FACT_ALREADY_CONFIRMED');
     attempt.status = 'confirmed'; attempt.confirmationEventId = eventId; this.#putAttempt(attempt);
-    this.#db.prepare('INSERT INTO action_confirmations VALUES (?, ?, ?, ?, ?)').run(attempt.id, factKey, eventId, matchedBy, 'contract-test');
+    this.#db.prepare('INSERT INTO action_confirmations VALUES (?, ?, ?, ?, ?)').run(attempt.id, factKey, eventId, matchedBy, attempt.executionMode);
   }
   #reconcileArchivedFact(attempt: ActionAttempt): void {
     const row = this.#db.prepare('SELECT fact_key, event_id, body FROM observed_actions WHERE game_match_key=? AND game_hand_key=? AND source_cursor=?').get(attempt.gameMatchKey, attempt.gameHandKey, attempt.expectedCursor);
@@ -211,8 +223,8 @@ export class StorageDatabase {
       requireThat(candidate?.authority === 'executor' && candidate.action.kind === 'discard', 'ACTION_NOT_LEGAL');
       const action = candidate.action;
       const tile = p.state.ownConcealed.find(t => t.instanceId === action.tile); requireThat(tile, 'ACTION_NOT_LEGAL');
-      if (input.executionMode === 'contract-test') {
-        const pending = this.#db.prepare("SELECT attempt_id FROM action_attempts WHERE game_match_key=? AND execution_mode='contract-test' AND status IN ('prepared','dispatching','awaiting-confirmation','uncertain') LIMIT 1").get(row.game_match_key as string);
+      if (input.executionMode !== 'dry-run') {
+        const pending = this.#db.prepare("SELECT attempt_id FROM action_attempts WHERE game_match_key=? AND execution_mode IN ('contract-test','live') AND status IN ('prepared','dispatching','awaiting-confirmation','uncertain') LIMIT 1").get(row.game_match_key as string);
         requireThat(!pending, 'ACTION_RECONCILIATION_REQUIRED');
         const slot = this.#db.prepare('SELECT attempt_id FROM action_slots WHERE session_id=? AND hand_id=? AND connection_epoch=? AND window_id=?').get(p.sessionId, snapshot.scope.handId, snapshot.connectionEpoch, snapshot.windowId);
         const sourceSlot = this.#db.prepare('SELECT attempt_id FROM source_action_slots WHERE game_match_key=? AND game_hand_key=? AND source_cursor=?').get(row.game_match_key as string, row.game_hand_key as string, snapshot.sourceCursor);
@@ -225,7 +237,7 @@ export class StorageDatabase {
         processInstanceId: input.processInstanceId, executionMode: input.executionMode, status: 'prepared', preparedAt: input.preparedAt,
         actor: p.state.ownSeat, tile: tile.code, tsumogiri: candidate.action.tsumogiri, expectedCursor: nextCursor(snapshot.sourceCursor) };
       this.#db.prepare('INSERT INTO action_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(attempt.id, p.sessionId, input.decisionId, attempt.gameMatchKey, attempt.gameHandKey, attempt.expectedCursor, attempt.status, attempt.executionMode, canonical(attempt));
-      if (attempt.executionMode === 'contract-test') {
+      if (attempt.executionMode !== 'dry-run') {
         this.#db.prepare('INSERT INTO action_slots VALUES (?, ?, ?, ?, ?)').run(p.sessionId, attempt.handId, attempt.connectionEpoch, attempt.windowId, attempt.id);
         this.#db.prepare('INSERT INTO source_action_slots VALUES (?, ?, ?, ?)').run(attempt.gameMatchKey, attempt.gameHandKey, snapshot.sourceCursor, attempt.id);
       }
@@ -237,7 +249,7 @@ export class StorageDatabase {
       const attempt = this.#getAttempt(attemptId); requireThat(attempt, 'ATTEMPT_NOT_FOUND'); this.#owned(attempt.sessionId);
       requireThat(attempt.processInstanceId === this.#owners.get(attempt.sessionId), 'STALE_PROCESS');
       if (attempt.status !== 'prepared') return { attempt, transitioned: false };
-      requireThat(attempt.executionMode === 'contract-test', 'DRY_RUN_CANNOT_DISPATCH');
+      requireThat(attempt.executionMode !== 'dry-run', 'DRY_RUN_CANNOT_DISPATCH');
       attempt.status = 'dispatching'; this.#putAttempt(attempt); return { attempt, transitioned: true };
     });
   }
@@ -284,7 +296,7 @@ export class StorageDatabase {
       case 'commitSync': { const p = object(payload, ['sessionId', 'expectedSequence', 'sync']); string(p.sessionId); integer(p.expectedSequence); return this.commitSync(p.sessionId, p.expectedSequence, parseSync(p.sync)); }
       case 'setPendingMode': { const p = object(payload, ['sessionId', 'mode']); string(p.sessionId); oneOf(p.mode, ['engine', 'llm']); return this.setPendingMode(p.sessionId, p.mode as DecisionMode); }
       case 'saveDecision': { const p = object(payload, ['snapshot', 'hash']); string(p.hash, 64); validateSnapshot(p.snapshot); this.saveDecision(p.snapshot, p.hash); return null; }
-      case 'reserveAction': { const p = object(payload, ['attemptId', 'decisionId', 'actionId', 'processInstanceId', 'executionMode', 'preparedAt']); for (const key of ['attemptId', 'decisionId', 'processInstanceId']) string(p[key]); string(p.actionId, 512); oneOf(p.executionMode, ['dry-run', 'contract-test']); timestamp(p.preparedAt); return this.reserveAction(p as unknown as ReserveActionInput); }
+      case 'reserveAction': { const p = object(payload, ['attemptId', 'decisionId', 'actionId', 'processInstanceId', 'executionMode', 'preparedAt']); for (const key of ['attemptId', 'decisionId', 'processInstanceId']) string(p[key]); string(p.actionId, 512); oneOf(p.executionMode, ['dry-run', 'contract-test', 'live']); timestamp(p.preparedAt); return this.reserveAction(p as unknown as ReserveActionInput); }
       case 'markDispatching': case 'markSimulated': case 'getAttempt': { const p = object(payload, ['attemptId']); string(p.attemptId); return this[method](p.attemptId); }
       case 'recordReceipt': { const p = object(payload, ['attemptId', 'receipt']); string(p.attemptId); validateReceipt(p.receipt); return this.recordReceipt(p.attemptId, p.receipt); }
       case 'inspect': { const p = object(payload, ['sessionId']); string(p.sessionId); return this.inspect(p.sessionId); }

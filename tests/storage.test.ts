@@ -4,6 +4,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
 import { StorageClient } from '../src/adapters/storage/client.ts';
 import { StorageDatabase } from '../src/adapters/storage/database.ts';
 import { buildPhase1Fixture, FIXTURE_SESSION, VIRTUAL_NOW } from '../scripts/build-phase1-fixtures.ts';
@@ -26,7 +27,7 @@ function snapshot(p: GameProjection, id = 'decision-test'): DecisionSnapshot {
     createdAt: window.openedAt, actionDeadline: window.deadline.value.at, activeMode: p.activeMode, state,
     legalActions: window.candidates.filter(c => c.authority === 'executor').map(c => ({ ...c, id: `${id}/${c.id}` })), unknownFields: [], contextEventIds: p.contextEventIds, sourceCursor: p.sourceCursor };
 }
-async function prepare(store: StorageClient, p: GameProjection, executionMode: 'contract-test' | 'dry-run' = 'contract-test') {
+async function prepare(store: StorageClient, p: GameProjection, executionMode: 'contract-test' | 'dry-run' | 'live' = 'contract-test') {
   const s = snapshot(p); await store.saveDecision(s, digest(s));
   const red = s.legalActions.find(a => { const action = a.action; return action.kind === 'discard' && s.state.ownConcealed.find(t => t.instanceId === action.tile)?.code === '5mr'; }); assert.ok(red);
   const input = { attemptId: 'attempt-test', decisionId: s.id, actionId: red.id, processInstanceId: 'process-1', executionMode, preparedAt: s.createdAt };
@@ -63,7 +64,7 @@ test('worker migration, strict ingress, atomic deduplication and rollback preser
     assert.equal(inspection.counts.events, 4); assert.equal(inspection.counts.outbox, 0); assert.deepEqual(inspection.projection, env.projection);
     assert.equal((await stat(env.path)).mode & 0o777, 0o600);
     const raw = new DatabaseSync(env.path, { readOnly: true });
-    try { assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 1); assert.equal(raw.prepare('PRAGMA journal_mode').get()?.journal_mode, 'wal'); }
+    try { assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 2); assert.equal(raw.prepare('PRAGMA journal_mode').get()?.journal_mode, 'wal'); }
     finally { raw.close(); }
   } finally { await env.cleanup(); }
 });
@@ -223,4 +224,51 @@ test('a new session cannot bypass an unresolved attempt in the same authoritativ
     await assert.rejects(newcomer.reserveAction({ attemptId: 'attempt-new-session', decisionId: decision.id, actionId: decision.legalActions[0]!.id,
       processInstanceId: 'process-new', executionMode: 'contract-test', preparedAt: decision.createdAt }), /ACTION_RECONCILIATION_REQUIRED/);
   } finally { await env.cleanup(); }
+});
+
+test('live claims share program slots and confirmations retain their evidence kind', async () => {
+  const env = await setup();
+  try {
+    const { attempt, input } = await prepare(env.store, env.projection, 'live');
+    await assert.rejects(env.store.reserveAction({ ...input, attemptId: 'contract-must-not-bypass-live', executionMode: 'contract-test' }), /ACTION_RECONCILIATION_REQUIRED/);
+    await env.store.markDispatching(attempt.id);
+    await env.store.recordReceipt(attempt.id, { callId: 'native-client-request-42', delivery: 'accepted', observedAt: VIRTUAL_NOW });
+    await env.store.commitGameEvent(FIXTURE_SESSION, 4, env.fixture.events[4]!);
+    assert.equal((await env.store.getAttempt(attempt.id))?.status, 'confirmed');
+    const raw = new DatabaseSync(env.path, { readOnly: true });
+    try { assert.equal(raw.prepare('SELECT evidence_kind FROM action_confirmations WHERE attempt_id=?').get(attempt.id)?.evidence_kind, 'live'); }
+    finally { raw.close(); }
+  } finally { await env.cleanup(); }
+});
+
+test('v1 migration preserves populated claims, references and contract evidence', async () => {
+  const env = await setup(), directory = await mkdtemp(join(tmpdir(), 'maji-legacy-storage-'));
+  const legacyPath = join(directory, 'legacy.sqlite');
+  try {
+    const { attempt } = await prepare(env.store, env.projection);
+    await env.store.markDispatching(attempt.id);
+    await env.store.recordReceipt(attempt.id, { callId: 'legacy-call', delivery: 'accepted', observedAt: VIRTUAL_NOW });
+    await env.store.commitGameEvent(FIXTURE_SESSION, 4, env.fixture.events[4]!);
+    const raw = new DatabaseSync(legacyPath);
+    try {
+      raw.exec(readFileSync(new URL('../src/adapters/storage/migrations/001-state.sql', import.meta.url), 'utf8'));
+      raw.exec('PRAGMA application_id=1296124489; PRAGMA user_version=1;');
+      raw.prepare('ATTACH DATABASE ? AS previous').run(env.path);
+      for (const table of ['sessions', 'checkpoints', 'game_events', 'decisions', 'action_attempts', 'action_slots', 'source_action_slots', 'observed_actions', 'action_confirmations', 'outbox', 'storage_faults']) {
+        raw.exec(`INSERT INTO main.${table} SELECT * FROM previous.${table}`);
+      }
+    } finally { raw.close(); }
+    const migrated = new StorageDatabase(legacyPath);
+    try {
+      const inspection = migrated.inspect(FIXTURE_SESSION);
+      assert.equal(inspection.attempts[0]?.status, 'confirmed'); assert.equal(inspection.counts.confirmations, 1);
+      assert.equal(inspection.counts.outbox, 1); assert.equal(inspection.projection.sequence, 5);
+    } finally { migrated.close(); }
+    const checked = new DatabaseSync(legacyPath, { readOnly: true });
+    try {
+      assert.equal(checked.prepare('PRAGMA user_version').get()?.user_version, 2);
+      assert.deepEqual(checked.prepare('PRAGMA foreign_key_check').all(), []);
+      assert.equal(checked.prepare('SELECT evidence_kind FROM action_confirmations').get()?.evidence_kind, 'contract-test');
+    } finally { checked.close(); }
+  } finally { await env.cleanup(); await rm(directory, { recursive: true, force: true }); }
 });

@@ -1,9 +1,9 @@
-import type { ActionAttempt, AuthoritativeSync, CallReceipt, DecisionMode, DecisionSnapshot, GameObservation, GameProjection } from '../domain/game/types.ts';
+import type { ActionAttempt, AuthoritativeSync, CallReceipt, DecisionMode, DecisionSnapshot, ExecutionMode, GameObservation, GameProjection } from '../domain/game/types.ts';
 
 export interface CommitResult { projection: GameProjection; duplicate: boolean }
 export interface ReserveActionInput {
   attemptId: string; decisionId: string; actionId: string; processInstanceId: string;
-  executionMode: 'dry-run' | 'contract-test'; preparedAt: string;
+  executionMode: ExecutionMode; preparedAt: string;
 }
 export interface StorageInspection {
   projection: GameProjection; attempts: ActionAttempt[];

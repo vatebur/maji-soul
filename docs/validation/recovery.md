@@ -2,7 +2,7 @@
 
 [文档导航](../README.md) · [阶段 1 范围](./state-foundation.md)
 
-2026-11-05。本页记录真实 Node worker／SQLite 上的合成事件与受控 Promise 时序，不代表浏览器最终发送点已验收。测试用假传输不访问雀魂。
+2026-11-05。本页主体记录真实 Node worker／SQLite 上的合成事件与受控 Promise 时序，假传输不访问雀魂。后续已补充[生产桥接实场验收](./phase1-live.md)：真实 dispatching／prepare 后暂停，旧许可返回 not-sent，动作发送计数 0→0。故障表的其他场景仍按各自证据类型理解。
 
 | 场景 | 验证结果 |
 | --- | --- |
@@ -27,4 +27,4 @@
 
 修复的关键竞态：持久化 `dispatching` 只证明准备发送，不能证明已经发生发送。此前若准备期间人工恰好打出同牌，便会过早确认。现在该阶段只归档动作事实，随后 `sent`／`accepted`／`unknown` 才允许精确对账；`not-sent`／`rejected` 不借用该事实。崩溃后确实可能已经发送的记录仍按 uncertain 处理。
 
-测试入口为 [`actor.test.ts`](../../tests/actor.test.ts)、[`execution.test.ts`](../../tests/execution.test.ts)、[`storage.test.ts`](../../tests/storage.test.ts) 和 [`replay.test.ts`](../../tests/replay.test.ts)。真实跨进程浏览器栅栏、断线期间持续采集和真实同步来源仍未完成，不能以这些测试代替当前客户端联调。
+测试入口为 [`actor.test.ts`](../../tests/actor.test.ts)、[`execution.test.ts`](../../tests/execution.test.ts)、[`storage.test.ts`](../../tests/storage.test.ts)、[`browser-bridge.test.ts`](../../tests/browser-bridge.test.ts) 和 [`live-broker.test.ts`](../../tests/live-broker.test.ts)。远端控制屏障有界超时且失败关闸；共享 live 台账防止新运行绕过旧 uncertain 动作。真实跨进程最终暂停与当前完整同步已有实场证据，丢确认／崩溃／罕见动作的全部实场组合尚未覆盖。

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ActionExecutor, type ContractTestTransport } from '../src/application/game/executor.ts';
+import { ActionExecutor, type ContractTestTransport, type ProductionTransport } from '../src/application/game/executor.ts';
 import { FIXTURE_SESSION } from '../scripts/build-phase1-fixtures.ts';
 import { reduceObservation } from '../src/domain/game/reducer.ts';
 import type { CallReceipt, FencedActionCommand, LegalAction } from '../src/domain/game/types.ts';
@@ -164,5 +164,49 @@ test('an unknown storage reservation outcome closes execution without attempting
     await assert.rejects(executor.executeContract(snapshot.id, redCandidate(snapshot).id), /STORAGE_OUTCOME_UNKNOWN/);
     assert.equal(transport.sends, 0); assert.equal(h.actor.control.paused, true); assert.equal(h.actor.control.needsSync, true);
     assert.equal((await h.store.inspect(FIXTURE_SESSION)).attempts.length, 1);
+  } finally { await h.cleanup(); }
+});
+
+test('live execution passes only durable dispatch intent and preserves live audit provenance', async () => {
+  const h = await actorHarness();
+  try {
+    let sends = 0;
+    const controls: number[] = [];
+    const transport: ProductionTransport = { kind: 'live', invalidate: control => { controls.push(control.controlEpoch); },
+      prepare: async (command, snapshot, intent) => {
+        assert.equal(intent.executionMode, 'live'); assert.equal(intent.status, 'dispatching');
+        assert.equal((await h.store.getAttempt(intent.id))?.status, 'dispatching');
+        assert.equal(command.attemptId, intent.id); assert.equal(command.fence.decisionId, snapshot.id);
+        assert.equal(command.fence.processInstanceId, intent.processInstanceId);
+        return async action => { assert.equal(action.id, intent.actionId); sends++; return receipt(); };
+      } };
+    const executor = new ActionExecutor(h.actor, { transport });
+    await h.actor.resume(); const snapshot = await h.actor.freezeDecision(), action = redCandidate(snapshot);
+    assert.throws(() => executor.executeContract(snapshot.id, action.id), /CONTRACT_TRANSPORT_REQUIRED/);
+    const result = await executor.executeLive(snapshot.id, action.id);
+    assert.equal(result.executionMode, 'live'); assert.equal(result.status, 'awaiting-confirmation');
+    assert.equal((await h.store.inspect(FIXTURE_SESSION)).counts.confirmations, 0);
+    await h.ingest(h.fixture.events[4]!);
+    assert.equal((await h.store.getAttempt(result.id))?.status, 'confirmed'); assert.equal(sends, 1);
+    assert.deepEqual(controls, [0, 1]);
+  } finally { await h.cleanup(); }
+});
+
+test('a page final fence can reject an already invoked cross-process dispatch after pause', async () => {
+  const h = await actorHarness();
+  try {
+    const invoked = deferred(), finalSend = deferred(); let pagePaused = true, sends = 0;
+    const transport: ProductionTransport = { kind: 'live', invalidate: control => { pagePaused = control.paused; },
+      prepare: async () => async () => {
+        invoked.resolve(); await finalSend.promise;
+        if (pagePaused) return receipt('not-sent');
+        sends++; return receipt();
+      } };
+    const executor = new ActionExecutor(h.actor, { transport }); await h.actor.resume();
+    const snapshot = await h.actor.freezeDecision();
+    const execution = executor.executeLive(snapshot.id, redCandidate(snapshot).id); await invoked.promise;
+    h.actor.pause(); await h.actor.awaitControlBarrier(); finalSend.resolve();
+    assert.equal((await execution).status, 'not-dispatched'); assert.equal(sends, 0);
+    assert.equal((await h.store.inspect(FIXTURE_SESSION)).counts.confirmations, 0);
   } finally { await h.cleanup(); }
 });

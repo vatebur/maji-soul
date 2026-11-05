@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "evidenceKind": "current-client-integration",
+  "date": "2026-11-05",
+  "timezone": "Asia/Shanghai",
+  "clientVersion": "4.0.51",
+  "protoSha256": "1c332959d97fc1e86cb2c3eb5df625dec25cc61129bce1f07e5db63d93413502",
+  "ordinaryDiscard": {
+    "preparedAt": "2026-11-05T13:33:50.888Z",
+    "receiptObservedAt": "2026-11-05T13:33:50.950Z",
+    "wireRequestId": 34,
+    "delivery": "accepted",
+    "status": "confirmed",
+    "executionMode": "live",
+    "actor": 0,
+    "tile": "4s",
+    "tsumogiri": true,
+    "authoritativeStep": 10,
+    "authoritativeConfirmations": 1,
+    "pausedAfterwards": true
+  },
+  "reconnectSync": {
+    "ownSeat": 0,
+    "lastActionStep": 17,
+    "nextStep": 18,
+    "sameAuthoritativeGame": true,
+    "sameOpeningFingerprint": true,
+    "oldActionResent": false,
+    "autoWinPersisted": false
+  },
+  "pauseBeforeFinalSend": {
+    "preparedAt": "2026-11-05T13:37:48.569Z",
+    "receiptObservedAt": "2026-11-05T13:37:48.575Z",
+    "executionMode": "live",
+    "delivery": "not-sent",
+    "status": "not-dispatched",
+    "bridgeActionSendsBefore": 0,
+    "bridgeActionSendsAfter": 0,
+    "authoritativeConfirmations": 0,
+    "pausedAfterwards": true
+  },
+  "capture": {
+    "path": "tests/fixtures/phase1-live-discard",
+    "eventCount": 12,
+    "eventsSha256": "b64eb9f2ccf53a295d3cca3b20a4dca753989f02cde7b4d2bdd62bca544df8a0",
+    "finalStateHash": "4c8aa1f95062ebb98ec3acbdc74c52ca946dc595d8316ef397f77b3ea416310c",
+    "ownDiscardFacts": 2,
+    "replayStatus": "passed"
+  },
+  "cleanup": {
+    "pendingRpcCount": 0,
+    "bridgeRemoved": true,
+    "legacyProbesRemoved": true,
+    "pageReturnedToUser": true
+  },
+  "verification": { "typecheck": "passed", "nodeTests": 107, "failed": 0, "skipped": 0 },
+  "countdownSource": "manual-screenshot-readback",
+  "automationEnabled": false,
+  "limitations": [
+    "Unattended countdown and automatic-win readback are not implemented.",
+    "Only an explicitly selected ordinary discard is executable; no continuous decision loop.",
+    "Complete game, engine/LLM strategy and uncommon action branches are not accepted by this evidence."
+  ]
+}

@@ -2,7 +2,7 @@
 
 [项目概览](../README.md)
 
-更新日期：2026-11-05（Asia/Shanghai）。已建立设计基线、基础工程、阶段 0 探测入口和阶段 1 离线状态／执行链路；阶段 0、1 的实场门槛仍有未完成项。运行方式见[USAGE.md](./USAGE.md)，证据见[阶段 0](./validation/technical-spikes.md)、[阶段 1](./validation/state-foundation.md)与[恢复验证](./validation/recovery.md)。详细需求和契约仍由各专题维护。
+更新日期：2026-11-05（Asia/Shanghai）。已建立设计基线和阶段 1 生产桥接；普通弃牌、重连同步、发送前暂停已[实场验收](./validation/phase1-live.md)，持续自动运行仍关闭。运行方式见[USAGE.md](./USAGE.md)，范围见[阶段 0](./validation/technical-spikes.md)、[阶段 1](./validation/state-foundation.md)与[恢复验证](./validation/recovery.md)。详细需求和契约仍由各专题维护。
 
 ## 按任务阅读
 

@@ -1,0 +1,22 @@
+{
+  "eventCount": 12,
+  "finalStateHash": "4c8aa1f95062ebb98ec3acbdc74c52ca946dc595d8316ef397f77b3ea416310c",
+  "ownDiscardFacts": 2,
+  "finalSequence": 12,
+  "finalHandOrdinal": 1,
+  "finalOwnTiles": [
+    "8m",
+    "4s",
+    "4p",
+    "1m",
+    "7s",
+    "9m",
+    "2s",
+    "4p",
+    "1p",
+    "7p",
+    "6p",
+    "8m",
+    "5p"
+  ]
+}

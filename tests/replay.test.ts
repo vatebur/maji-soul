@@ -13,6 +13,20 @@ import { actorHarness, redCandidate } from './helpers.ts';
 
 const fixtureDirectory = fileURLToPath(new URL('./fixtures/phase1-discard/', import.meta.url));
 
+test('tracked current-client friend-room capture replays public pon and confirmed own discard deterministically', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'maji-live-replay-'));
+  try {
+    const live = fileURLToPath(new URL('./fixtures/phase1-live-discard/', import.meta.url));
+    const fixture = await loadReplay(live), result = await replay(live, { outputDirectory: join(directory, 'run') });
+    assert.equal(fixture.manifest.evidenceKind, 'live-capture');
+    assert.ok(fixture.events.some(e => e.type === 'MeldDeclared' && e.payload.meld.kind === 'pon'));
+    assert.ok(fixture.events.some(e => e.type === 'TileDiscarded' && e.payload.actor === 0 && e.payload.tile === '4s' && e.payload.tsumogiri.known && e.payload.tsumogiri.value));
+    assert.equal(result.finalStateHash, '4c8aa1f95062ebb98ec3acbdc74c52ca946dc595d8316ef397f77b3ea416310c');
+    assert.equal(result.ownDiscardFacts, 2);
+    assert.equal(result.eventCount, 12);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('replay rejects schema drift, mislabeled evidence, and mismatched event hashes before execution', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'maji-replay-validation-'));
   try {

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "reducerVersion": "1.0.0",
+  "fixtureId": "live-b64eb9f2ccf53a29",
+  "evidenceKind": "live-capture",
+  "sourceVersion": "majsoul-4.0.51/proto-1c332959d97f",
+  "sessionId": "live-0a0e5c8b-964a-4793-b401-8fad07be5977",
+  "virtualNow": "2026-11-05T13:33:50.876Z",
+  "description": "Current-client robot friend-room capture through production sync and event adapters; ordinary discard scope.",
+  "redaction": "Strict domain event whitelist: own visible hand and public facts only; no account, authentication, raw frames or hidden opponent tiles.",
+  "eventCount": 12,
+  "eventsSha256": "b64eb9f2ccf53a295d3cca3b20a4dca753989f02cde7b4d2bdd62bca544df8a0"
+}

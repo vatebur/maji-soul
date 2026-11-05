@@ -20,8 +20,9 @@ export async function loadReplay(directory: string) {
   ]);
   const manifest = object(JSON.parse(manifestText), ['schemaVersion', 'reducerVersion', 'fixtureId', 'evidenceKind', 'sourceVersion', 'sessionId', 'virtualNow', 'description', 'redaction', 'eventCount', 'eventsSha256']);
   oneOf(manifest.schemaVersion, [1]); oneOf(manifest.reducerVersion, [REDUCER_VERSION]);
-  // Real capture imports need a new, reviewed manifest contract; the phase 0 summaries are incomplete.
-  oneOf(manifest.evidenceKind, ['synthetic']); string(manifest.fixtureId); string(manifest.sessionId); string(manifest.sourceVersion);
+  // Live assets use this same strict visible-domain-event contract. Diagnostic summaries
+  // cannot satisfy it: every event must parse and reproduce the complete expected state.
+  oneOf(manifest.evidenceKind, ['synthetic', 'live-capture']); string(manifest.fixtureId); string(manifest.sessionId); string(manifest.sourceVersion);
   string(manifest.description, 1024); string(manifest.redaction, 1024); timestamp(manifest.virtualNow); integer(manifest.eventCount, 1, 10_000); string(manifest.eventsSha256, 64);
   const lines = eventsText.trimEnd().split('\n'); requireThat(lines.length <= 10_000 && lines.every(line => Buffer.byteLength(line) <= 256 * 1024), 'REPLAY_EVENT_LIMIT');
   const events = lines.map(line => parseObservation(JSON.parse(line)));

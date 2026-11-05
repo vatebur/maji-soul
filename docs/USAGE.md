@@ -2,7 +2,7 @@
 
 [项目概览](../README.md) · [技术验证记录](./validation/technical-spikes.md)
 
-当前提供技术探针与阶段 1 离线重放、检查和预演。`npm start` 不会自动连接雀魂、开局或出牌；生产控制台／OBS 页面尚未实现。运行时使用 vfox，项目版本见 `.vfox.toml`。
+当前提供技术探针、阶段 1 重放／检查／预演和受控实场命令。`npm start` 不会自动开局或连续出牌；`live-once` 才会显式尝试一次摸切。生产控制台／OBS 页面尚未实现。运行时使用 vfox，项目版本见 `.vfox.toml`。
 
 ## 安装与检查
 
@@ -40,7 +40,50 @@ vfox exec nodejs@24.22.1 -- npm start -- inspect DATABASE_PATH fixture-phase1-di
 vfox exec nodejs@24.22.1 -- node scripts/build-phase1-fixtures.ts
 ```
 
-当前回放导入只接受明确标记 `synthetic` 的 v1 资产。阶段 0 的真实诊断摘要缺少完整鸣牌等字段，不能直接改名导入为完整实场回放。实现子集和下一步门槛见[状态基础](./validation/state-foundation.md)。
+当前回放导入接受明确标记 `synthetic` 或 `live-capture` 的严格 v1 领域资产。阶段 0 的诊断摘要缺少字段，不能直接改名导入。真实样本可运行 `npm start -- replay tests/fixtures/phase1-live-discard`；其中操作窗口和许可已剥离，不支持重新出牌。范围见[实场验收](./validation/phase1-live.md)。
+
+## 受控实场单步
+
+先按 ego-browser 技能取得已授权的活动 TaskSpace 与页面，当前支持 Unity WebGL 4.0.51。命令不创建／抢占用户空间，也不自动建房。只有四人东风、300＋0 秒、三电脑友人房可验收；自动和牌须人工开启并视觉读回。
+
+```sh
+# 示例空间号／页面标签须替换成实际已授权值。
+vfox exec nodejs@24.22.1 -- npm start -- live-install 15 p1
+# 安装后再开局，确保游戏连接从第一帧经过统一请求号分配。
+# 已有游戏连接或需要换执行进程时，受控重载并从新连接捕获：
+vfox exec nodejs@24.22.1 -- npm start -- live-reconnect 15 p1
+# 页面恢复后重新读回房型、自动和牌、源step及倒计时，再填本机JSON。
+vfox exec nodejs@24.22.1 -- npm start -- live-sync 15 p1 /absolute/path/readback.json
+# 新一次运行前重新取得桥接执行代际及新读回；下面命令显式尝试一次摸切：
+vfox exec nodejs@24.22.1 -- npm start -- live-once 15 p1 /absolute/path/readback.json
+```
+
+`readback.json` 最小结构如下，数值均需按当前页面实际填写；过期读回、错误 step、未验证自动和牌会拒发。`outputDirectory` 必须是尚不存在的绝对目录。
+
+```json
+{
+  "outputDirectory": "/absolute/path/new-run",
+  "room": {
+    "roomId": "redacted-friend-room",
+    "rules": {
+      "players": 4, "length": "east", "displayTimeSetting": "300+0", "computerSeats": 3,
+      "verifiedOptions": {"doraRule": "standard-riichi"}, "protocolVersion": "4.0.51"
+    },
+    "autoWin": "verified-on"
+  },
+  "countdown": {
+    "source": "client-countdown", "step": 9,
+    "sampledAt": "2026-11-05T13:33:50.000Z", "remainingMs": 120000, "uncertaintyMs": 5000
+  },
+  "sourceVersion": "majsoul-4.0.51/proto-1c332959d97f"
+}
+```
+
+手动截图读回时间经过后须扣除已耗时间，并用当前 `sampledAt` 记录保守剩余值；采样与同步响应相差须小于 5 秒。页面发出许可后最长 1 秒有效，人工单步预算最多 30 秒。开局首弃没有可验证摸牌实例，不开放执行；等待独立 ActionDealTile。`pauseBeforeDispatch:true` 可在受控验收中准备后暂停，期望 not-dispatched 且发送计数不增。
+
+所有运行默认共用 `data/live/state.sqlite`，报告／脱敏 capture 存入新的 outputDirectory。`databasePath` 仅供隔离测试或明确管理同一持久台账；不要为重试另建数据库。旧 uncertain／未决动作须保留原台账并同步对账；新 session 不能绕过。任一阻塞返回 `status:blocked`，CLI 退出码 2；不会自动重试。普通单步结束及异常路径会暂停；远端控制失败关闸。
+
+ego helper 只负责页面 RPC，Actor 和 SQLite worker 在启动 CLI 的固定 Node 子进程运行，不依赖 ego helper 的 worker_threads。live-* 保留页面以便人工接管；验收任务结束时先等待 pendingRpcCount=0，调用 `__majiBridge.restore()`，再按技能 `TaskSpace.finish` 交还页面。
 
 ## 本机与服务探测
 

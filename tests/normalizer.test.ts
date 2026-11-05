@@ -77,7 +77,7 @@ test('unknown operations, restrictions, critical fields and unsupported transiti
   }
   assert.throws(() => normalizeAction('ActionDealTile', { seat: 0, left_tile_count: 65 }, context(current, 9)), /INVALID_PROTOCOL_TILE/);
   assert.throws(() => normalizeAction('ActionDealTile', { seat: 0, tile: '5m' }, context(current, 9)), /INVALID_INTEGER/);
-  assert.throws(() => normalizeAction('ActionDealTile', { ...base, liqi: { seat: 1, score: 24000 } }, context(current, 9)), /UNSUPPORTED_PROTOCOL_TRANSITION/);
+  assert.throws(() => normalizeAction('ActionDealTile', { ...base, liqi: { seat: 1, score: 24000 } }, context(current, 9)), /INVALID_INTEGER/);
   assert.throws(() => normalizeAction('ActionNewRound', { tiles: ['1m'] }, context(current, 9)), /UNSUPPORTED_PROTOCOL_ACTION/);
   assert.throws(() => normalizeAction('ActionDealTile', base, context(current, 10)), /SOURCE_GAP/);
   assert.throws(() => normalizeAction('ActionDealTile', base, { ...context(current, 9), connectionEpoch: 1 }), /NORMALIZER_STATE_UNTRUSTED/);

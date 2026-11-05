@@ -101,11 +101,12 @@ export interface CallReceipt {
   callId: string; delivery: 'not-sent' | 'sent' | 'accepted' | 'rejected' | 'unknown'; observedAt: string;
 }
 export type AttemptStatus = 'prepared' | 'dispatching' | 'awaiting-confirmation' | 'confirmed' | 'rejected' | 'uncertain' | 'not-dispatched' | 'simulated';
+export type ExecutionMode = 'dry-run' | 'contract-test' | 'live';
 export interface ActionAttempt {
   id: string; decisionId: string; sessionId: string; matchId: string; handId: string;
   gameMatchKey: string; gameHandKey: string; windowId: string; actionId: string;
   stateVersion: number; connectionEpoch: number; controlEpoch: number; processInstanceId: string;
-  executionMode: 'dry-run' | 'contract-test'; status: AttemptStatus; preparedAt: string;
+  executionMode: ExecutionMode; status: AttemptStatus; preparedAt: string;
   actor: Seat; tile: TileCode; tsumogiri: boolean; expectedCursor: string;
   receipt?: CallReceipt; confirmationEventId?: string;
 }

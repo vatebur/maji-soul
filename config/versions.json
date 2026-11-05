@@ -16,7 +16,8 @@
   "probeEvidenceSchema": 1,
   "replaySchema": 1,
   "reducerVersion": "1.0.0",
-  "storageSchema": 1,
+  "storageSchema": 2,
+  "browserBridge": "wire-multiplexer-v1",
   "ttsVoice": "Tingting",
   "audioFormat": "WAV PCM S16LE mono 24000Hz",
   "automationEnabled": false

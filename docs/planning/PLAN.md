@@ -2,9 +2,9 @@
 
 [文档导航](../README.md) · 规划与验收
 
-更新日期：2026-11-05（Asia/Shanghai）。状态：当前需求基线，模型、架构和接口设计已建立，程序尚未重新实现。旧代码、依赖、临时运行环境和调试产物已按用户要求清理；下一步按实施计划重新建工程和验证。
+更新日期：2026-11-05（Asia/Shanghai）。状态：当前需求基线。重建工程已推进到阶段 1，普通弃牌、重连同步和发送前暂停已实场验收；持续自动运行与完整产品尚未交付，见[实施进度](./IMPLEMENTATION.md)与[当前实场范围](../validation/phase1-live.md)。
 
-调研依据见 [RESEARCH.md](../research/RESEARCH.md)。本文统一替代旧自动化方案；项目当前只保留文档和本机模型配置相关文件。程序模型见 [DOMAIN_MODEL.md](../design/DOMAIN_MODEL.md)，架构见 [ARCHITECTURE.md](../design/ARCHITECTURE.md)，实施与验收见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)，文档入口见 [README.md](../README.md)。这些设计尚未实现或实测，不改变本文的首版需求范围。
+调研依据见 [RESEARCH.md](../research/RESEARCH.md)。本文统一替代旧自动化方案并维护首版需求；实际实现状态由验收记录说明。程序模型见 [DOMAIN_MODEL.md](../design/DOMAIN_MODEL.md)，架构见 [ARCHITECTURE.md](../design/ARCHITECTURE.md)，实施与验收见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)，文档入口见 [README.md](../README.md)。阶段 1 的实现不改变本文的完整首版需求范围。
 
 ## 目录
 

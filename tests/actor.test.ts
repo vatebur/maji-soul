@@ -3,7 +3,37 @@ import assert from 'node:assert/strict';
 import { GameActor } from '../src/application/game/actor.ts';
 import { digest } from '../src/domain/game/value.ts';
 import { FIXTURE_SESSION } from '../scripts/build-phase1-fixtures.ts';
-import { actorHarness, AdjustableClock, holdMethod, makeSync, redCandidate } from './helpers.ts';
+import { actorHarness, AdjustableClock, deferred, holdMethod, makeSync, redCandidate } from './helpers.ts';
+
+test('remote control barriers are explicit and a failed invalidation closes the actor', async () => {
+  const h = await actorHarness();
+  try {
+    const invalidated = deferred(); let fail = false, called = 0;
+    h.actor.attachControlSink(control => {
+      called++; assert.equal(control.processInstanceId, h.actor.processInstanceId);
+      if (fail) throw new Error('remote-unavailable');
+      if (called === 1) return invalidated.promise;
+    });
+    const resume = h.actor.resume(); assert.equal(h.actor.control.controlPending, 1);
+    assert.equal(h.actor.control.paused, true); invalidated.resolve(); await resume;
+    assert.equal(h.actor.control.paused, false); assert.equal(h.actor.control.controlPending, 0);
+    fail = true; h.actor.pause(); assert.equal(h.actor.control.paused, true);
+    await assert.rejects(h.actor.awaitControlBarrier(), /CONTROL_BARRIER_FAILED/);
+    assert.equal(h.actor.control.needsSync, true); assert.equal(h.actor.control.reason, 'CONTROL_BARRIER_FAILED');
+    await assert.rejects(h.actor.resume(), /CONTROL_BARRIER_FAILED/);
+  } finally { await h.cleanup(); }
+});
+
+test('an unavailable browser control channel times out and a late acknowledgement never reopens it', async () => {
+  const h = await actorHarness(4, { controlTimeoutMs: 20 });
+  try {
+    const response = deferred(); h.actor.attachControlSink(() => response.promise);
+    await assert.rejects(h.actor.awaitControlBarrier(), /CONTROL_BARRIER_FAILED/);
+    assert.equal(h.actor.control.paused, true); assert.equal(h.actor.control.needsSync, true);
+    response.resolve(); await Promise.resolve();
+    await assert.rejects(h.actor.resume(), /CONTROL_BARRIER_FAILED/);
+  } finally { await h.cleanup(); }
+});
 
 test('actor publishes only committed events; pause closes immediately while commit response is held', async () => {
   const h = await actorHarness(3);

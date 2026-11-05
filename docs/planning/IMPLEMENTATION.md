@@ -6,7 +6,7 @@
 
 接口实现以 [HTTP 与 SSE](../interfaces/API.md)、[内部模块契约](../interfaces/INTERNAL_INTERFACES.md) 和 [OpenAPI](../interfaces/openapi.json) 为基线，变更时同步文档与 schema。
 
-2026-11-05 实施进度：基础工程与阶段 0 探测入口已建立；本轮实测和未通过门槛见 [technical-spikes.md](../validation/technical-spikes.md)。阶段 1 的存储 worker、状态／同步、执行边界与离线 CLI 已实现，见[实现范围](../validation/state-foundation.md)与[恢复测试](../validation/recovery.md)。阶段 0 和阶段 1 均未全面实场验收；按下述失败出口推进离线实现，生产游戏执行仍关闭。下表继续描述目标阶段。
+2026-11-05 实施进度：阶段 1 的存储 worker、状态／同步、生产桥接及单执行器已实现；普通弃牌、重连同步、最终发送前暂停已通过当前客户端验收，见[实场记录](../validation/phase1-live.md)、[实现范围](../validation/state-foundation.md)与[恢复测试](../validation/recovery.md)。人工读回倒计时／自动和牌后可执行受控单步，持续自动运行仍关闭。阶段 0 其他门槛、阶段 2 完整动作与整场尚未通过。下表继续描述目标阶段。
 
 ## 目录
 

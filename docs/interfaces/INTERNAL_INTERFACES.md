@@ -4,7 +4,7 @@
 
 契约版本：v1，设计日期：2026-11-05。状态：目标设计，阶段 1 子集已实现。本文落实 [架构](../design/ARCHITECTURE.md) 中的 port、事件、Worker 和引擎进程边界；领域结构以 [DOMAIN_MODEL.md](../design/DOMAIN_MODEL.md) 为准，对外服务见 [API.md](./API.md)。这里定义的是本项目的接口，不声称上游已经提供这些方法或服务。
 
-当前落地类型见 [`types.ts`](../../src/domain/game/types.ts) 与 [`StoragePort`](../../src/ports/storage.ts)。[阶段 1 实现范围](../validation/state-foundation.md#相对目标契约的实现子集)明确记录必需源键、游标格式、候选子集、同步约束与预演／契约测试模式；下文尚未实现的方法仍是后续目标，不能直接当成生产调用入口。
+当前落地类型见 [`types.ts`](../../src/domain/game/types.ts) 与 [`StoragePort`](../../src/ports/storage.ts)。[阶段 1 实现范围](../validation/state-foundation.md#相对目标契约的实现子集)记录源键、游标、候选及同步子集。执行模式为 dry-run／contract-test／live；[ProductionTransport](../../src/application/game/executor.ts) 经持久化 dispatching、Actor 许可和浏览器最终栅栏发送，暂停需等待 `awaitControlBarrier()`。SQLite schema v2 保留两种真实／契约确认来源。[实场限制](../validation/phase1-live.md)仍适用；下文未实现的方法继续作为目标，不能直接当成生产入口。
 
 ## 目录
 

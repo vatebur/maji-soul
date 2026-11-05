@@ -7,7 +7,9 @@ import type { StoragePort } from '../../ports/storage.ts';
 import { isoNow, systemClock, type Clock } from './clock.ts';
 
 interface Permit { command: FencedActionCommand; deadlineMono: number; used: boolean }
-export interface ActorOptions { clock?: Clock; mailboxCapacity?: number; safetyMarginMs?: number; permitTtlMs?: number }
+export interface ActorControl { processInstanceId: string; controlEpoch: number; paused: boolean; reason: string | null }
+export type ControlSink = (control: ActorControl) => void | Promise<void>;
+export interface ActorOptions { clock?: Clock; mailboxCapacity?: number; safetyMarginMs?: number; permitTtlMs?: number; controlTimeoutMs?: number }
 export class GameActor {
   readonly processInstanceId: string;
   readonly storage: StoragePort;
@@ -28,13 +30,20 @@ export class GameActor {
   #budgets = new Map<string, number>();
   #decisions = new Map<string, { snapshot: DecisionSnapshot; hash: string }>();
   #permits = new Map<string, Permit>();
+  #controlSink: ControlSink | undefined;
+  #controlBarrier: Promise<void> = Promise.resolve();
+  #controlPending = 0;
+  #controlFailed = false;
+  #controlTimeout: number;
 
   private constructor(storage: StoragePort, processInstanceId: string, projection: GameProjection, options: ActorOptions) {
     this.storage = storage; this.processInstanceId = processInstanceId; this.#projection = immutable(projection);
     this.clock = options.clock ?? systemClock; this.#capacity = options.mailboxCapacity ?? 64;
     this.#margin = options.safetyMarginMs ?? 250; this.#permitTtl = options.permitTtlMs ?? 1_000;
+    this.#controlTimeout = options.controlTimeoutMs ?? 5_000;
     requireThat(Number.isInteger(this.#capacity) && this.#capacity > 0 && this.#capacity <= 1024, 'INVALID_MAILBOX_CAPACITY');
     requireThat(Number.isFinite(this.#margin) && this.#margin >= 0 && this.#permitTtl > 0 && this.#permitTtl <= 5_000, 'INVALID_EXECUTION_BUDGET');
+    requireThat(Number.isInteger(this.#controlTimeout) && this.#controlTimeout > 0 && this.#controlTimeout <= 30_000, 'INVALID_CONTROL_TIMEOUT');
     this.#nextConnectionEpoch = projection.connectionEpoch;
     if (projection.sequence > 0) { this.#needsSync = true; this.#invalidated = 'RECOVERY_REQUIRES_SYNC'; }
   }
@@ -48,13 +57,43 @@ export class GameActor {
     if (p.state && this.#invalidated) { p.state.trust = 'syncing'; p.state.trustIssues = [this.#invalidated]; }
     return immutable(p);
   }
-  get control() { return { paused: this.#paused, controlEpoch: this.#controlEpoch, needsSync: this.#needsSync, pendingIngress: this.#pendingIngress, reason: this.#invalidated }; }
+  get control() { return { processInstanceId: this.processInstanceId, paused: this.#paused, controlEpoch: this.#controlEpoch, needsSync: this.#needsSync, pendingIngress: this.#pendingIngress, controlPending: this.#controlPending, reason: this.#invalidated }; }
+  attachControlSink(sink: ControlSink): void {
+    requireThat(!this.#controlSink, 'CONTROL_SINK_ALREADY_ATTACHED');
+    this.#controlSink = sink; this.#publishControl();
+  }
+  async awaitControlBarrier(): Promise<void> {
+    // A concurrent pause may append another remote invalidation while one is awaited.
+    let current: Promise<void>;
+    do { current = this.#controlBarrier; await current; } while (current !== this.#controlBarrier);
+    requireThat(!this.#controlFailed, 'CONTROL_BARRIER_FAILED');
+  }
+  #publishControl(): void {
+    if (!this.#controlSink) return;
+    const control: ActorControl = { processInstanceId: this.processInstanceId, controlEpoch: this.#controlEpoch, paused: this.#paused, reason: this.#invalidated };
+    this.#controlPending++;
+    let work: void | Promise<void>;
+    try { work = this.#controlSink(control); }
+    catch { work = Promise.reject(new Error('CONTROL_BARRIER_FAILED')); }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bounded = Promise.race([Promise.resolve(work), new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('CONTROL_BARRIER_FAILED')), this.#controlTimeout);
+    })]);
+    const settled = bounded.catch(() => {
+      this.#controlFailed = true; this.#paused = true; this.#needsSync = true;
+      this.#invalidated = 'CONTROL_BARRIER_FAILED'; this.#controlEpoch++;
+      this.#permits.clear(); this.#decisions.clear();
+      void this.storage.recordFault(this.#projection.sessionId, 'CONTROL_BARRIER_FAILED', isoNow(this.clock)).catch(() => {});
+    }).finally(() => { if (timer) clearTimeout(timer); this.#controlPending--; });
+    this.#controlBarrier = Promise.all([this.#controlBarrier, settled]).then(() => {});
+  }
   pause(): void {
     this.#close('PAUSED'); this.#needsSync = true; this.#sync = null;
   }
   #close(reason: string): void {
     this.#paused = true; this.#controlEpoch++; this.#permits.clear(); this.#decisions.clear();
     if (reason !== 'PAUSED') this.#invalidated = reason;
+    this.#publishControl();
   }
   failClosed(code: string): void {
     const safe = /^[A-Z][A-Z0-9_]+$/.test(code) ? code : 'GAME_STATE_INVALID';
@@ -131,14 +170,18 @@ export class GameActor {
     });
   }
   async resume(): Promise<void> {
+    await this.awaitControlBarrier();
     requireThat(!this.#needsSync && !this.#invalidated && this.#pendingIngress === 0 && this.#projection.state?.trust === 'trusted', 'SYNC_REQUIRED');
     const inspection = await this.storage.inspect(this.#projection.sessionId);
     requireThat(!inspection.recoveryRequired && !inspection.attempts.some(a => ['prepared', 'dispatching', 'awaiting-confirmation', 'uncertain'].includes(a.status)), 'ACTION_RECONCILIATION_REQUIRED');
     requireThat(!this.#needsSync && !this.#invalidated && this.#pendingIngress === 0, 'SYNC_REQUIRED');
-    this.#controlEpoch++; this.#paused = false;
+    this.#controlEpoch++; this.#paused = false; this.#publishControl();
+    await this.awaitControlBarrier();
+    requireThat(!this.#paused && !this.#needsSync && !this.#invalidated, 'EXECUTION_PAUSED');
   }
   #checkState(): void {
     requireThat(!this.#paused && !this.#needsSync && !this.#invalidated, 'EXECUTION_PAUSED');
+    requireThat(!this.#controlFailed && this.#controlPending === 0, 'CONTROL_BARRIER_PENDING');
     requireThat(this.#pendingIngress === 0, 'INGRESS_PENDING');
     requireThat(this.#projection.state?.trust === 'trusted' && this.#projection.handStatus === 'playing', 'STATE_NOT_TRUSTED');
     requireThat(this.#projection.room?.autoWin === 'verified-on', 'AUTO_WIN_UNVERIFIED');
