@@ -81,6 +81,8 @@ vfox exec nodejs@24.22.1 -- npm start -- live-once 15 p1 /absolute/path/live-opt
 
 所有运行默认共用 `data/live/state.sqlite`，报告／脱敏 capture 存入新的 outputDirectory。`databasePath` 仅供隔离测试或明确管理同一持久台账；不要为重试另建数据库。旧 uncertain／未决动作须保留原台账并同步对账；新 session 不能绕过。任一阻塞返回 `status:blocked`，CLI 退出码 2；不会自动重试。普通单步结束及异常路径会暂停；远端控制失败关闸。
 
+桥接绑定一个执行进程；一次 `live-sync`、`live-once` 或 `live-observe` 结束后，下一次独立 CLI 运行前先执行 `live-reconnect` 重建桥，再使用原数据库与新的输出目录。旧进程不能直接接管新控制代际。失败报告的 `timingDiagnostics` 与发送计数可用于核对临近截止拒发；采样未完成时不会补造证据。
+
 ego helper 只负责页面 RPC，Actor 和 SQLite worker 在启动 CLI 的固定 Node 子进程运行，不依赖 ego helper 的 worker_threads。live-* 保留页面以便人工接管；验收任务结束时先等待 pendingRpcCount=0，调用 `__majiBridge.restore()`，再按技能 `TaskSpace.finish` 交还页面。
 
 ## 跨小局观察
@@ -94,6 +96,8 @@ vfox exec nodejs@24.22.1 -- npm start -- live-observe 15 p1 /absolute/path/live-
 `live-observe` 默认观察 30 秒，配置可增加 `"observeMs": 300000`，最多 5 分钟；输出目录仍须全新。它保持程序暂停，不创建弃牌决策，也不采集倒计时或操作自动和牌开关。客户端和人工动作仍会被记录。小局结束、新局、连庄和终局沿用当前 Actor 与原数据库；断线后等待新连接认证完成再完整同步，不自动恢复程序发送。
 
 报告新增 `lifecycle`（边界计数、台账小局序号、当前结束／恢复状态）及 `captureDirectories`。重连后的完整当前小局另存片段，片段序号从 1 重放，manifest 的 `originHandOrdinal` 保留原序号。对每个片段运行 `replay`。结束观察时仍断线、只收到终局标志或只收到最终排名而缺结算时返回 blocked；缺少完整同步历史也不推断状态。`passed` 仅表示本次有时限观察通过，要验证完整整场需另核对最终状态和实际覆盖。详细步骤见[跨小局验证](./validation/lifecycle-coordination.md)。
+
+`observationClosure.settled` 表示最后入账游标与最终页面读回一致，且没有排队事件、故障或断线；收尾期间出现新变化会使报告 blocked。
 
 ## 本机与服务探测
 

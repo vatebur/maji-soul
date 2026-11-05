@@ -134,7 +134,8 @@ export async function inspectAutoWin(page: EgoPagePort, profile: AutoWinProfile 
   requireThat(typeof screenshot?.data==='string' && screenshot.data.length<=12*1024*1024, 'AUTO_WIN_SCREENSHOT_INVALID');
   const result=classifyAutoWinPixels(decodeScreenshotPng(Buffer.from(screenshot.data,'base64')),profile);
   const after = await bridgeCall(page,'read');
-  requireThat(after.pageEpoch===before.pageEpoch && after.generation===before.generation && after.lastStep===before.lastStep && after.freshConnection && !after.reason && !after.overflow, 'AUTO_WIN_READBACK_STALE');
+  requireThat(after.pageEpoch===before.pageEpoch && after.generation===before.generation && after.lastStep===before.lastStep &&
+    after.connected && after.freshConnection && !after.handEnded && !after.matchEnded && !after.reason && !after.overflow, 'AUTO_WIN_READBACK_STALE');
   return { source:'unity-button-pixels-v1',state:result.state,observedAt,pageEpoch:after.pageEpoch,
     generation:after.generation,step:after.lastStep,rgbaSha256:result.rgbaSha256,profileVersion:`unity-${profile.clientVersion}/${profile.viewport.width}x${profile.viewport.height}` };
 }
@@ -149,16 +150,28 @@ export async function ensureAutoWin(page: EgoPagePort, profile: AutoWinProfile =
     throw Error('AUTO_WIN_READBACK_UNKNOWN');
   }
   if (readback.state!==desired) {
-    const current=await bridgeCall(page,'read');
-    requireThat(current.pageEpoch===readback.pageEpoch && current.generation===readback.generation && current.lastStep===readback.step && current.paused, 'AUTO_WIN_TOGGLE_REQUIRES_PAUSE');
+    const scope=await bridgeCall(page,'read');
+    const assertScope=(current:any,proof:AutoWinReadback) => {
+      requireThat(current.pageEpoch===scope.pageEpoch && current.sourceStream===scope.sourceStream && current.lastStep===scope.lastStep &&
+        current.controlEpoch===scope.controlEpoch && current.paused && current.connected && current.freshConnection &&
+        !current.handEnded && !current.matchEnded && !current.reason && !current.overflow &&
+        current.pageEpoch===proof.pageEpoch && current.generation===proof.generation && current.lastStep===proof.step,
+      'AUTO_WIN_TOGGLE_REQUIRES_PAUSE');
+    };
+    assertScope(scope,readback);
     const x=profile.button.x+profile.button.width/2,y=profile.button.y+profile.button.height/2;
     await page.cdp!('Input.dispatchMouseEvent',{type:'mouseMoved',x,y});
+    // Moving the pointer crosses an asynchronous CDP boundary. Recheck before
+    // pressing so an old disabled readback cannot toggle a replacement page.
+    // CDP input is not atomic with this check; post-click scope/readback still applies.
+    assertScope(await bridgeCall(page,'read'),readback);
     await page.cdp!('Input.dispatchMouseEvent',{type:'mousePressed',x,y,button:'left',clickCount:1});
     await page.cdp!('Input.dispatchMouseEvent',{type:'mouseReleased',x,y,button:'left',clickCount:1});
     clicked=true;
     for (let count=0;count<5;count++) {
       await new Promise(resolve=>setTimeout(resolve,100));
       readback=await inspectAutoWin(page,profile);
+      assertScope(await bridgeCall(page,'read'),readback);
       if (readback.state===desired) break;
     }
   }

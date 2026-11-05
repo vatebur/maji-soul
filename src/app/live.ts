@@ -9,7 +9,7 @@ import { bridgeCall, EgoProductionTransport, type EgoPagePort } from '../adapter
 import type { FriendRoom } from '../domain/game/types.ts';
 import { digest, requireThat } from '../domain/game/value.ts';
 import { exportLiveCapture } from './live-capture.ts';
-import { LiveGameSession } from './live-session.ts';
+import { LiveGameSession, summarizeBrowserStats } from './live-session.ts';
 
 export interface LiveAcceptanceOptions {
   outputDirectory: string; room: FriendRoom;
@@ -35,6 +35,7 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
   await mkdir(resolve(databasePath, '..'), { recursive: true, mode: 0o700 });
   const storage = new StorageClient(databasePath);
   let actor: GameActor | undefined;
+  let liveSession: LiveGameSession | undefined;
   try {
     actor = await GameActor.open(storage, sessionId, randomUUID());
     const transport = new EgoProductionTransport(page);
@@ -48,7 +49,7 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       } };
     const executor = new ActionExecutor(actor, { transport: guarded, receiptTimeoutMs: 10_000 });
     await actor.awaitControlBarrier();
-    const liveSession = new LiveGameSession(actor,page,options.room);
+    liveSession = new LiveGameSession(actor,page,options.room);
     const {cursor,timing,timingEvidence,autoWinReadback} = await liveSession.synchronize(observeMs===0 || options.discardOnce===true);
     let attemptId: string | null = null;
     if (options.discardOnce) {
@@ -72,6 +73,10 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       await new Promise(r=>setTimeout(r,100));
     }
     actor.pause(); await actor.awaitControlBarrier();
+    // Settle ingress that raced the observation deadline or final pause. This is
+    // a bounded drain; later changes make the report blocked rather than extend
+    // observation indefinitely or claim an unobserved boundary was accepted.
+    await liveSession.pump();
     const inspection = await storage.inspect(sessionId);
     const attempt = attemptId ? await storage.getAttempt(attemptId) : null;
     const captures = [];
@@ -79,8 +84,11 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       join(directory,index===0?'capture':`capture-${index+1}`),sessionId,segment.sync,segment.subsequent,options.sourceVersion));
     const capture = captures[0]!;
     const pageAfter = await bridgeCall(page, 'read');
+    const finalCursor = liveSession.cursor;
+    const settled = !!finalCursor && !pageAfter.reason && !pageAfter.overflow && !pageAfter.queued && pageAfter.connected !== false &&
+      pageAfter.generation === finalCursor.generation && pageAfter.pageEpoch === finalCursor.pageEpoch && pageAfter.lastStep === finalCursor.lastStep;
     const expectedStatus = options.pauseBeforeDispatch ? 'not-dispatched' : 'confirmed';
-    const passed = (!attempt || attempt.status === expectedStatus) && !liveSession.recovering && !liveSession.awaitingSettlement && !actor.projection.matchEndPending;
+    const passed = settled && (!attempt || attempt.status === expectedStatus) && !liveSession.recovering && !liveSession.awaitingSettlement && !actor.projection.matchEndPending;
     const report = { schemaVersion: 1, evidenceKind: 'current-client-integration', status: passed ? 'passed' : 'blocked',
       scope: observeMs>0 ? 'lifecycle-observation' : options.pauseBeforeDispatch ? 'pause-before-final-send' : options.discardOnce ? 'one-ordinary-discard' : 'complete-current-hand-sync', sessionId, databasePath,
       attempt, counts: inspection.counts, finalStateHash: digest(inspection.projection.state),
@@ -89,7 +97,10 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       clientAutoWinLastReadback: autoWinReadback?.state ?? 'unknown',
       clientAutoWinMayActAfterProgramPause: true,
       countdownSource: timing ? 'server-sync-and-client-pixels' : 'no-executable-window', timing: timing ?? null, timingEvidence, autoWinReadback,
-      browserStatsBefore: cursor.stats ?? null, browserStatsAfter: pageAfter.stats ?? null,
+      browserStatsBefore: summarizeBrowserStats(cursor.stats), browserStatsAfter: summarizeBrowserStats(pageAfter.stats),
+      observationClosure: {settled,drained:finalCursor,read:{generation:pageAfter.generation,pageEpoch:pageAfter.pageEpoch,
+        lastStep:pageAfter.lastStep,connected:pageAfter.connected ?? null,queued:pageAfter.queued ?? 0,
+        reason:pageAfter.reason ?? null,overflow:pageAfter.overflow ?? false}},
       clientWinDiagnostics: { request: pageAfter.lastClientWin ?? null, authority: pageAfter.lastOwnWin ?? null },
       lifecycle: { ...liveSession.counts, handOrdinal:actor.projection.handOrdinal,handStatus:actor.projection.handStatus,
         matchStatus:actor.projection.matchStatus,matchEndPending:actor.projection.matchEndPending ?? false,
@@ -101,8 +112,12 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
   } catch (error) {
     if (actor) { actor.pause(); await actor.awaitControlBarrier().catch(() => {}); }
     const code = error instanceof Error && /^[A-Z][A-Z0-9_]+$/.test(error.message) ? error.message : 'LIVE_ACCEPTANCE_FAILED';
+    const diagnostics=liveSession?.diagnostics;
+    const pageAfter=await bridgeCall(page,'read').catch(()=>null);
     const report = { schemaVersion: 1, evidenceKind: 'current-client-integration', status: 'blocked', code,
-      sessionId, databasePath, automationEnabled: false, reportPath: join(directory, 'report.json') };
+      sessionId, databasePath, timingDiagnostics:diagnostics?.timing ?? null,
+      browserStatsBefore:diagnostics?.browserStatsBefore ?? null,browserStatsAfter:summarizeBrowserStats(pageAfter?.stats),
+      automationEnabled: false, reportPath: join(directory, 'report.json') };
     await writeFile(report.reportPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
     return report;
   } finally {

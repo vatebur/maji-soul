@@ -167,3 +167,120 @@ test('a manual room claim cannot override a mismatched authoritative game config
     assert.equal(h.page.calls.includes('prepare'), false);
   } finally { await h.cleanup(); }
 });
+
+test('final read cannot pass when disconnect, unprocessed ingress or a cursor change races the last drain',async t=>{
+  for(const change of ['disconnect','pending-result','epoch','step'] as const) await t.test(change,async()=>{
+    const h=await scenario();
+    try {
+      const evaluate=h.page.evaluate.bind(h.page);let reads=0;
+      h.page.evaluate=async(source,argument)=>{
+        const value=await evaluate(source,argument);
+        if((argument as {method:string}).method==='read'&&++reads===2){
+          if(change==='disconnect') return {...value,connected:false,reason:'DISCONNECTED',queued:1,pageEpoch:2};
+          if(change==='pending-result') return {...value,reason:null,queued:1,generation:value.generation+1};
+          if(change==='epoch') return {...value,pageEpoch:2};
+          return {...value,lastStep:value.lastStep+1};
+        }
+        return value;
+      };
+      const report=await acceptLivePage(h.page,{...h.options,observeMs:1});
+      assert.equal(report.status,'blocked');assert.ok('observationClosure'in report);
+      assert.equal(report.observationClosure.settled,false);assert.equal(report.programPaused,true);
+      assert.equal(h.page.sends,0);assert.equal(h.page.calls.includes('prepare'),false);
+    }finally{await h.cleanup();}
+  });
+});
+
+test('a hand-end queued at final pause is committed before the acceptance report and capture',async()=>{
+  const h=await scenario();
+  try {
+    const evaluate=h.page.evaluate.bind(h.page);let drains=0;
+    h.page.evaluate=async(source,argument)=>{
+      const value=await evaluate(source,argument),method=(argument as {method:string}).method;
+      if(method==='drain'&&++drains===2) return {...value,generation:1,lastStep:3,records:[{
+        kind:'action',name:'ActionNoTile',step:3,receivedAt:h.page.at,
+        payload:{liujumanguan:false,gameend:false,scores:[]},
+      }]};
+      if(method==='read'&&drains>=2)return {...value,generation:1,lastStep:3};
+      return value;
+    };
+    const report=await acceptLivePage(h.page,h.options);
+    assert.equal(report.status,'passed',JSON.stringify(report));assert.ok('lifecycle'in report);
+    assert.equal(report.lifecycle.handEnds,1);assert.equal(report.lifecycle.handStatus,'finished');
+    assert.equal(report.observationClosure.settled,true);
+    assert.equal((await replay(report.captureDirectory,{outputDirectory:join(h.directory,'replay')})).status,'passed');
+    assert.equal(h.page.sends,0);
+  }finally{await h.cleanup();}
+});
+
+test('rejected automatic timing retains numeric evidence and final counters without raw protocol or sensitive extras',async t=>{
+  for(const failure of ['expired','mismatch'] as const) await t.test(failure,async()=>{
+    const h=await scenario();
+    try {
+      const evaluate=h.page.evaluate.bind(h.page),secret='DO_NOT_STORE_TIMING_SECRET';
+      h.page.evaluate=async(source,argument)=>{
+        const value=await evaluate(source,argument),method=(argument as {method:string}).method;
+        if(method==='automaticTiming') {
+          Object.assign(value,{token:secret,unknown:{authentication:secret}});
+          Object.assign(value.raw,{gameUuid:'contract-only-game-uuid',account_id:secret,authSummary:{token:secret}});
+          Object.assign(value.evidence,{cookie:secret});
+          for(const sample of value.evidence.samples) Object.assign(sample,{token:secret,gameUuid:secret,hiddenTile:secret});
+          if(failure==='expired') {
+            value.raw.game_restore.passed_waiting_time=298;
+            for(const sample of value.evidence.samples) {
+              sample.passedWaitingTime+=278;sample.displayedRemainingMs-=278000;
+            }
+          } else value.evidence.samples[1].displayedRemainingMs-=10000;
+        }
+        if(method==='read') return {...value,token:secret,stats:{clientRequests:12,bridgeSyncRequests:2,
+          bridgeActionSends:h.page.sends,clientWinRequests:3,authoritativeOwnWins:1,account_id:secret,unknown:{cookie:secret}}};
+        return value;
+      };
+      const report=await acceptLivePage(h.page,{...h.options,discardOnce:true});
+      assert.equal(report.status,'blocked');assert.ok('code'in report);
+      assert.equal(report.code,failure==='expired'?'COUNTDOWN_EXPIRED':'COUNTDOWN_PROTOCOL_MISMATCH');
+      const timing=report.timingDiagnostics;assert.ok(timing);
+      assert.equal(timing.verified,false);assert.equal(timing.sampleCount,2);
+      assert.equal(timing.sync.receivedAt,h.page.at);assert.equal(timing.sync.roundTripMs,100);
+      assert.equal(timing.sync.fixedMs,300000);assert.equal(timing.sync.addMs,0);
+      assert.equal(timing.sync.passedWaitingTime,failure==='expired'?298:20);
+      assert.deepEqual(timing.samples.map(sample=>sample.displayedRemainingMs),failure==='expired'?[5000,2000]:[283000,270000]);
+      assert.deepEqual(timing.samples.map(sample=>sample.roundTripMs),[100,100]);
+      assert.deepEqual(report.browserStatsBefore,{clientRequests:12,bridgeSyncRequests:2,bridgeActionSends:0,clientWinRequests:3,authoritativeOwnWins:1});
+      assert.deepEqual(report.browserStatsAfter,report.browserStatsBefore);
+      assert.equal(h.page.sends,0);assert.equal(h.page.calls.includes('prepare'),false);
+      assert.equal(h.page.calls.includes('ackSync'),false);assert.equal(h.page.controls.at(-1)?.paused,true);
+      const serialized=await readFile(report.reportPath,'utf8');
+      for(const excluded of [secret,'contract-only-game-uuid','authSummary','game_restore','handKey','account_id','hiddenTile'])
+        assert.equal(serialized.includes(excluded),false,excluded);
+      assert.deepEqual(JSON.parse(serialized),report);
+      const db=new DatabaseSync(h.page.databasePath,{readOnly:true});
+      try {assert.equal(db.prepare('SELECT count(*) AS n FROM action_attempts').get()!.n,0);}finally{db.close();}
+    }finally{await h.cleanup();}
+  });
+});
+
+test('collection failures do not invent timing evidence or replace unavailable browser counters with zero',async t=>{
+  for(const canRead of [true,false]) await t.test(canRead?'readable-page':'unavailable-page',async()=>{
+    const h=await scenario();
+    try {
+      const evaluate=h.page.evaluate.bind(h.page);
+      h.page.evaluate=async(source,argument)=>{
+        const method=(argument as {method:string}).method;
+        if(method==='automaticTiming')throw Error('COUNTDOWN_DIGITS_UNREADABLE');
+        if(method==='read') {
+          if(!canRead)throw Error('GAME_SOCKET_UNAVAILABLE');
+          return {...await evaluate(source,argument),stats:{bridgeActionSends:0}};
+        }
+        return evaluate(source,argument);
+      };
+      const report=await acceptLivePage(h.page,{...h.options,discardOnce:true});
+      assert.equal(report.status,'blocked');assert.ok('code'in report);
+      assert.equal(report.code,'COUNTDOWN_DIGITS_UNREADABLE');
+      assert.equal(report.timingDiagnostics,null);assert.equal(report.browserStatsBefore,null);
+      if(canRead) assert.equal(report.browserStatsAfter?.bridgeActionSends,0);
+      else assert.equal(report.browserStatsAfter,null);
+      assert.equal(h.page.sends,0);assert.equal(h.page.calls.includes('prepare'),false);
+    }finally{await h.cleanup();}
+  });
+});

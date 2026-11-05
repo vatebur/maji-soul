@@ -462,7 +462,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
         requireThat(lastStep===null || response.step-1>=lastStep, 'SYNC_HISTORY_REGRESSION');
         requireThat(!handEnded || endsHand(actions.at(-1).name), 'SYNC_TERMINAL_REGRESSION');
       }
-      lastSync = { generation, startGeneration, step: response.step - 1, actions, requestedMonoMs, receivedMonoMs, receivedAt,
+      lastSync = { pageEpoch, generation, startGeneration, step: response.step - 1, actions, requestedMonoMs, receivedMonoMs, receivedAt,
         identity,isEnd:response.is_end,matchResult:matchResult?clone(matchResult):null,
         passedWaitingTime:restore.passed_waiting_time, gameState:restore.game_state,
         lastPauseTimeMs:restore.last_pause_time_ms };
@@ -473,7 +473,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
           game_state:restore.game_state,last_pause_time_ms:restore.last_pause_time_ms } };
     },
     ackSync(expected) {
-      requireThat(lastSync && expected.generation === generation && expected.generation === lastSync.generation && expected.step === lastSync.step, 'SYNC_STALE');
+      requireThat(lastSync && lastSync.pageEpoch === pageEpoch && expected.generation === generation && expected.generation === lastSync.generation && expected.step === lastSync.step, 'SYNC_STALE');
       requireThat(lastSync.startGeneration === lastSync.generation, 'SYNC_INGRESS_RACE');
       seen.clear(); for (const action of lastSync.actions) seen.set(action.step, action.fingerprint);
       const opening = lastSync.actions.find(a => a.name === 'ActionNewRound');

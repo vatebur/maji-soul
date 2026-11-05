@@ -57,10 +57,14 @@ test('screenshot decoder restores every PNG row filter and rejects malformed ima
 
 class Page implements EgoPagePort {
   epoch=1;generation=2;step=1;paused=true;enabled=false;unknown=false;clicks=0;acknowledgements:any[]=[];
+  connected=true;handEnded=false;matchEnded=false;sourceStream=0;controlEpoch=1;
   viewport={...profile.viewport};changeDuringCapture=false;clickWorks=true;
+  onMouseMoved?:()=>void;onMouseReleased?:()=>void;
   images=[png(imageFor(fixture.samples[1])).toString('base64'),png(imageFor(fixture.samples[0])).toString('base64')];
   async evaluate(_source:unknown,input?:any):Promise<any>{
-    if(input?.method==='read')return {pageEpoch:this.epoch,generation:this.generation,lastStep:this.step,paused:this.paused,freshConnection:true,reason:null,overflow:false};
+    if(input?.method==='read')return {pageEpoch:this.epoch,generation:this.generation,lastStep:this.step,paused:this.paused,
+      connected:this.connected,handEnded:this.handEnded,matchEnded:this.matchEnded,sourceStream:this.sourceStream,controlEpoch:this.controlEpoch,
+      freshConnection:true,reason:null,overflow:false};
     if(input?.method==='ackAutoWin'){this.acknowledgements.push(input.argument);return {state:input.argument.state,pageEpoch:this.epoch};}
     return {...this.viewport,scrollX:0,scrollY:0,scripts:['https://example.invalid/WebGL-release-4.0.51(test).js']};
   }
@@ -70,7 +74,11 @@ class Page implements EgoPagePort {
       if(this.unknown){const image=imageFor();const a=profile.anchors[0]!;image.rgba.set([0,0,0,255],(a.y*image.width+a.x)*4);return {data:png(image).toString('base64')};}
       return {data:this.images[this.enabled?1:0]};
     }
-    if(method==='Input.dispatchMouseEvent'&&input.type==='mouseReleased'){this.clicks++;if(this.clickWorks)this.enabled=!this.enabled;}
+    if(method==='Input.dispatchMouseEvent') {
+      if(input.type==='mouseMoved')this.onMouseMoved?.();
+      if(input.type==='mousePressed')this.generation++; // Page pointerdown invalidates prior proofs.
+      if(input.type==='mouseReleased'){this.clicks++;if(this.clickWorks)this.enabled=!this.enabled;this.onMouseReleased?.();}
+    }
     return {};
   }
 }
@@ -95,4 +103,41 @@ test('final verification is read-only; failed re-enable never retries a click',a
   page.paused=true;page.clickWorks=false;await assert.rejects(ensureAutoWin(page),/AUTO_WIN_READBACK_FAILED/);
   assert.equal(page.clicks,1);assert.ok(page.acknowledgements.every(a=>a.state!=='enabled'));
   await assert.rejects(ensureAutoWin(page,profile,true,'pause-cleanup'),/AUTO_WIN_PURPOSE_INVALID/);
+});
+
+test('a boundary or resume while moving the pointer cancels the old toggle before pressing',async()=>{
+  for(const fault of ['reconnect','hand','resume']) {
+    const page=new Page();
+    page.onMouseMoved=()=>{
+      page.enabled=true;
+      if(fault==='reconnect'){page.epoch++;page.generation++;}
+      else if(fault==='hand'){page.sourceStream++;page.generation++;}
+      else{page.controlEpoch++;page.paused=false;}
+    };
+    await assert.rejects(ensureAutoWin(page),/AUTO_WIN_TOGGLE_REQUIRES_PAUSE/);
+    assert.equal(page.clicks,0);assert.equal(page.enabled,true);assert.equal(page.acknowledgements.length,0);
+  }
+});
+
+test('a post-click boundary cannot confirm a replacement connection or hand as the original toggle',async()=>{
+  for(const fault of ['reconnect','hand']) {
+    const page=new Page();
+    page.onMouseReleased=()=>{
+      if(fault==='reconnect')page.epoch++;
+      else page.sourceStream++;
+      page.generation++;
+    };
+    await assert.rejects(ensureAutoWin(page),/AUTO_WIN_TOGGLE_REQUIRES_PAUSE/);
+    assert.equal(page.clicks,1);assert.equal(page.acknowledgements.length,0);
+  }
+});
+
+test('terminal or disconnected pages cannot verify a residual enabled toolbar glyph',async()=>{
+  for(const fault of ['handEnded','matchEnded','disconnected']) {
+    const page=new Page();page.enabled=true;
+    if(fault==='disconnected')page.connected=false;
+    else page[fault as 'handEnded'|'matchEnded']=true;
+    await assert.rejects(verifyAutoWin(page),/AUTO_WIN_READBACK_STALE/);
+    assert.equal(page.clicks,0);assert.equal(page.acknowledgements.length,0);
+  }
 });

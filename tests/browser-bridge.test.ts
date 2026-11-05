@@ -562,6 +562,23 @@ test('end-only sync closes execution without fabricating a missing hand history'
   assert.equal(f.bridge.read().reason,'HAND_BOUNDARY_UNVERIFIED');f.bridge.restore();
 });
 
+test('a late acknowledgement cannot erase a page fault that occurred after its sync response',async()=>{
+  const f=fixture();await f.opened();
+  const sync=f.bridge.sync();
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.syncGame',{
+    step:2,game_restore:{actions:openingHistory()},
+  }));
+  const raw=await sync;
+  f.socket.receive(new Uint8Array([3,0,0,0xff]));
+  const fault=f.bridge.read();
+  assert.equal(fault.generation,raw.generation);assert.ok(fault.pageEpoch>raw.pageEpoch);
+  assert.equal(fault.reason,'FRAME_DECODE_FAILED');
+  assert.throws(()=>f.bridge.ackSync({generation:raw.generation,step:1}),/SYNC_STALE/);
+  assert.equal(f.bridge.read().reason,'FRAME_DECODE_FAILED');assert.equal(f.bridge.read().paused,true);
+  assert.equal(f.bridge.read().stats.bridgeActionSends,0);
+  f.bridge.restore();
+});
+
 test('final result is redacted, idempotent and immediately closes permits before settlement arrives',async()=>{
   const f=fixture(),input=await f.opened(),prepared=f.bridge.prepare(input);
   const result={result:{players:[0,1,2,3].map(seat=>({seat,part_point_1:25000,account_id:100+seat,nickname:'DO_NOT_RETAIN'}))}};
