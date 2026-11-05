@@ -17,7 +17,70 @@ export interface AutoWinProfile {
 export interface AutoWinReadback {
   source: 'unity-button-pixels-v1'; state: 'enabled' | 'disabled' | 'unknown';
   observedAt: string; pageEpoch: number; generation: number; step: number | null;
-  rgbaSha256: string; profileVersion: string;
+  nativeRestoreRevision:number;rgbaSha256: string; profileVersion: string;
+}
+
+export interface NativeRestoreProof {
+  pageEpoch:number; restoreMethod:'syncGame'|'enterGame'; hasRestore:boolean;authRequestedMonoMs:number;
+  authForwardedMonoMs:number;restoreRequestedMonoMs:number; restoreForwardedMonoMs:number;
+  finishRequestedMonoMs:number|null;finishForwardedMonoMs:number|null;
+}
+
+/** This is a version-scoped transport prerequisite, not proof that a Unity
+ * control is enabled. Only the client's completed restore cycle can satisfy it. */
+export function nativeRestoreProof(pageState:any):NativeRestoreProof|null {
+  if (!Number.isSafeInteger(pageState?.pageEpoch) || !Array.isArray(pageState?.nativeLifecycleTrace)) return null;
+  const events=pageState.nativeLifecycleTrace.filter((event:any)=>event?.owner==='client' && event.pageEpoch===pageState.pageEpoch);
+  const auth=events.findLastIndex((event:any)=>event.method==='authGame' && event.phase==='request');
+  if (auth<0) return null;
+  const cycle=events.slice(auth);
+  // A new or overlapping request, incomplete forwarding, failure, or an
+  // evicted prefix is deliberately not inferred to be a completed cycle.
+  const restoreMethod=cycle.find((event:any)=>['syncGame','enterGame'].includes(event.method))?.method;
+  if (!restoreMethod) return null;
+  const phases=['request','response','response-forwarded'];
+  const groups=['authGame',restoreMethod].map(method=>cycle.filter((event:any)=>event.method===method));
+  if (groups.some(group=>group.length!==3 || group.some((event:any,index:number)=>
+    event.phase!==phases[index] || index>0 && event.accepted!==true))) return null;
+  if (cycle.some((event:any,index:number)=>!Number.isFinite(event.observedMonoMs) || event.observedMonoMs<0 ||
+    index>0 && event.observedMonoMs<cycle[index-1].observedMonoMs)) return null;
+  const [authentication,restore]=groups;
+  const hasRestore=restore[1].hasRestore;
+  if (typeof hasRestore!=='boolean' || restore[2].hasRestore!==hasRestore || !hasRestore && restoreMethod!=='enterGame') return null;
+  const finish=cycle.filter((event:any)=>event.method==='finishSyncGame');
+  if (hasRestore ? cycle.length!==9 || finish.length!==3 || finish.some((event:any,index:number)=>
+    event.phase!==phases[index] || index>0 && event.accepted!==true) : cycle.length!==6) return null;
+  // A synchronous client response callback may issue its next request before
+  // dispatchEvent returns and the preceding response-forwarded is recorded.
+  // Require causal response order and every successful forwarding completion.
+  if (cycle.indexOf(restore[0])<cycle.indexOf(authentication[1]) || (hasRestore
+    ? cycle.indexOf(finish[0])<cycle.indexOf(restore[1]) || cycle.at(-1)!==finish[2]
+    : cycle.at(-1)!==restore[2])) return null;
+  return {pageEpoch:pageState.pageEpoch,restoreMethod,hasRestore,authRequestedMonoMs:authentication[0].observedMonoMs,
+    authForwardedMonoMs:authentication[2].observedMonoMs,restoreRequestedMonoMs:restore[0].observedMonoMs,
+    restoreForwardedMonoMs:restore[2].observedMonoMs,finishRequestedMonoMs:hasRestore?finish[0].observedMonoMs:null,
+    finishForwardedMonoMs:hasRestore?finish[2].observedMonoMs:null};
+}
+
+function assertRecoveryScope(current:any,original:any) {
+  requireThat(current.pageEpoch===original.pageEpoch && current.sourceStream===original.sourceStream &&
+    current.lastStep===original.lastStep && current.controlEpoch===original.controlEpoch && current.paused &&
+    current.connected && current.freshConnection && !current.handEnded && !current.matchEnded && !current.reason && !current.overflow,
+  'AUTO_WIN_RECOVERY_NOT_READY');
+}
+
+async function waitForNativeRestore(page:EgoPagePort,scope:any):Promise<NativeRestoreProof> {
+  const deadline=performance.now()+3000;
+  let current=scope;
+  for (;;) {
+    assertRecoveryScope(current,scope);
+    requireThat(current.generation===scope.generation && Array.isArray(current.nativeLifecycleTrace),'AUTO_WIN_RECOVERY_NOT_READY');
+    const proof=nativeRestoreProof(current);
+    if (proof) return proof;
+    requireThat(performance.now()<deadline,'AUTO_WIN_RECOVERY_NOT_READY');
+    await new Promise(resolve=>setTimeout(resolve,50));
+    current=await bridgeCall(page,'read');
+  }
 }
 
 /** Current Unity 4.0.51 toolbar, measured from the archived 2036×918 client images.
@@ -36,6 +99,18 @@ export const DEFAULT_AUTO_WIN_PROFILE: AutoWinProfile = {
   disabledHashes:['0c9a29c4dfd303e700513efcc64bebc6582d67957ff1dff29e5312871f3316b5'],
   glyphMaskBase64:'AAAAAAAAAAAAAAAAAAAAMAAAAAAfAAAA+AMAAOB/AAAA+AMAAAAAAAAAAAAAAAAYAAAAAAcAAADgDwAOAPwB8AfAP8D/AP5j/D/4H5z/x/+B4//4P/DYD/4HHviB/8ADHwD/eOAD4D8PPgD858EHwA84/AD4Af8/gD/g/wP4B/h/gOcA/wEwHMAHgIMDAAAAcAAAAAAOAAAAwAEAAAA4AAAAAAcAAADgAAAAABwAAACAAQAAAAAAAAA=',
 };
+
+/** Public centre-frame geometry in the pinned layout. This positively verifies
+ * the visible frame instead of accepting an unrecognised popup. The frame can
+ * also exist during an early empty-table restore, so this is NEVER sufficient
+ * without the current client's completed native restore cycle. */
+export function hasRecoveryTableAnchors(image:PixelImage):boolean {
+  if (image.width!==2036 || image.height!==918 || image.rgba.length!==image.width*image.height*4) return false;
+  return [[900,390],[1135,335],[945,440],[1080,280]].every(([x,y])=>{
+    const offset=(y!*image.width+x!)*4;
+    return image.rgba[offset+3]===255 && [69,67,78].every((value,index)=>Math.abs(image.rgba[offset+index]!-value)<=4);
+  });
+}
 
 /** Deliberately bounded CDP PNG reader: only noninterlaced 8-bit RGB/RGBA screenshots. */
 export function decodeScreenshotPng(input: Uint8Array): PixelImage {
@@ -122,9 +197,10 @@ export function classifyAutoWinPixels(image: PixelImage, profile: AutoWinProfile
 }
 
 /** Screenshot acquisition is automatic; no user-supplied enabled flag is accepted. */
-export async function inspectAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE): Promise<AutoWinReadback> {
+export async function inspectAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE, requireRecoveryTable=false): Promise<AutoWinReadback> {
   validProfile(profile); requireThat(page.cdp, 'AUTO_WIN_CDP_UNAVAILABLE');
   const before = await bridgeCall(page,'read');
+  requireThat(Number.isSafeInteger(before.nativeRestoreRevision) && before.nativeRestoreRevision>=0,'AUTO_WIN_READBACK_STALE');
   const layout = await page.evaluate(() => ({ width: innerWidth, height: innerHeight, devicePixelRatio,
     scrollX, scrollY, scripts: [...document.scripts].map(s=>s.src).filter(s=>s.includes('WebGL-release-')) }));
   requireThat(layout.width===profile.viewport.width && layout.height===profile.viewport.height && layout.devicePixelRatio===profile.viewport.devicePixelRatio && layout.scrollX===0 && layout.scrollY===0, 'AUTO_WIN_VIEWPORT_MISMATCH');
@@ -132,18 +208,55 @@ export async function inspectAutoWin(page: EgoPagePort, profile: AutoWinProfile 
   const observedAt=new Date().toISOString();
   const screenshot = await page.cdp('Page.captureScreenshot',{ format:'png', fromSurface:true, captureBeyondViewport:false });
   requireThat(typeof screenshot?.data==='string' && screenshot.data.length<=12*1024*1024, 'AUTO_WIN_SCREENSHOT_INVALID');
-  const result=classifyAutoWinPixels(decodeScreenshotPng(Buffer.from(screenshot.data,'base64')),profile);
+  const pixels=decodeScreenshotPng(Buffer.from(screenshot.data,'base64')),result=classifyAutoWinPixels(pixels,profile);
   const after = await bridgeCall(page,'read');
   requireThat(after.pageEpoch===before.pageEpoch && after.generation===before.generation && after.lastStep===before.lastStep &&
+    after.nativeRestoreRevision===before.nativeRestoreRevision &&
     after.connected && after.freshConnection && !after.handEnded && !after.matchEnded && !after.reason && !after.overflow, 'AUTO_WIN_READBACK_STALE');
+  requireThat(!requireRecoveryTable || hasRecoveryTableAnchors(pixels),'AUTO_WIN_RECOVERY_NOT_READY');
   return { source:'unity-button-pixels-v1',state:result.state,observedAt,pageEpoch:after.pageEpoch,
-    generation:after.generation,step:after.lastStep,rgbaSha256:result.rgbaSha256,profileVersion:`unity-${profile.clientVersion}/${profile.viewport.width}x${profile.viewport.height}` };
+    generation:after.generation,step:after.lastStep,nativeRestoreRevision:after.nativeRestoreRevision,
+    rgbaSha256:result.rgbaSha256,profileVersion:`unity-${profile.clientVersion}/${profile.viewport.width}x${profile.viewport.height}` };
+}
+
+async function waitForRecoveryTable(page:EgoPagePort,profile:AutoWinProfile,scope:any,proof:NativeRestoreProof):Promise<AutoWinReadback> {
+  const deadline=performance.now()+3000;
+  let previousState:AutoWinReadback['state']='unknown';
+  for (;;) {
+    let readback:AutoWinReadback|null=null;
+    try {readback=await inspectAutoWin(page,profile,true);}
+    catch(error) {if (!(error instanceof Error && error.message==='AUTO_WIN_RECOVERY_NOT_READY')) throw error;}
+    const current=await bridgeCall(page,'read');
+    assertRecoveryScope(current,scope);
+    requireThat(current.generation===scope.generation && JSON.stringify(nativeRestoreProof(current))===JSON.stringify(proof),'AUTO_WIN_RECOVERY_NOT_READY');
+    requireThat(!readback || current.nativeRestoreRevision===readback.nativeRestoreRevision,'AUTO_WIN_READBACK_STALE');
+    // Two actual positive samples with the same known switch state. Neither
+    // elapsed time nor the absence of a recognised modal counts as readiness.
+    if (readback && readback.state!=='unknown' && readback.state===previousState) return readback;
+    previousState=readback?.state ?? 'unknown';
+    requireThat(performance.now()<deadline,'AUTO_WIN_RECOVERY_NOT_READY');
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
 }
 
 /** One verified click at most; unknown UI, stale epochs and failed readback close the gate. */
-export async function ensureAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE, enabled = true, purpose: 'initialize'|'resume'|'pause-cleanup' = 'resume') {
+export async function ensureAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE, enabled = true, purpose: 'initialize'|'resume'|'pause-cleanup'|'reconnect' = 'resume') {
   requireThat(purpose!=='pause-cleanup' || !enabled, 'AUTO_WIN_PURPOSE_INVALID');
-  let readback=await inspectAutoWin(page,profile); let clicked=false;
+  let recoveryScope:any=null,nativeRestore:NativeRestoreProof|null=null;
+  if (purpose!=='pause-cleanup') {
+    recoveryScope=await bridgeCall(page,'read');
+    nativeRestore=await waitForNativeRestore(page,recoveryScope);
+  }
+  let readback=nativeRestore?await waitForRecoveryTable(page,profile,recoveryScope,nativeRestore):await inspectAutoWin(page,profile);
+  let clicked=false;
+  const assertNativeRestore=(current:any) => {
+    if (!nativeRestore) return;
+    assertRecoveryScope(current,recoveryScope);
+    requireThat((clicked || current.generation===recoveryScope.generation) &&
+      JSON.stringify(nativeRestoreProof(current))===JSON.stringify(nativeRestore),'AUTO_WIN_RECOVERY_NOT_READY');
+    requireThat(current.nativeRestoreRevision===readback.nativeRestoreRevision,'AUTO_WIN_READBACK_STALE');
+  };
+  if (nativeRestore) assertNativeRestore(await bridgeCall(page,'read'));
   const desired=enabled?'enabled':'disabled';
   if(readback.state==='unknown') {
     await bridgeCall(page,'ackAutoWin',readback);
@@ -152,10 +265,12 @@ export async function ensureAutoWin(page: EgoPagePort, profile: AutoWinProfile =
   if (readback.state!==desired) {
     const scope=await bridgeCall(page,'read');
     const assertScope=(current:any,proof:AutoWinReadback) => {
+      assertNativeRestore(current);
       requireThat(current.pageEpoch===scope.pageEpoch && current.sourceStream===scope.sourceStream && current.lastStep===scope.lastStep &&
         current.controlEpoch===scope.controlEpoch && current.paused && current.connected && current.freshConnection &&
         !current.handEnded && !current.matchEnded && !current.reason && !current.overflow &&
-        current.pageEpoch===proof.pageEpoch && current.generation===proof.generation && current.lastStep===proof.step,
+        current.pageEpoch===proof.pageEpoch && current.generation===proof.generation && current.lastStep===proof.step &&
+        current.nativeRestoreRevision===proof.nativeRestoreRevision,
       'AUTO_WIN_TOGGLE_REQUIRES_PAUSE');
     };
     assertScope(scope,readback);
@@ -170,14 +285,15 @@ export async function ensureAutoWin(page: EgoPagePort, profile: AutoWinProfile =
     clicked=true;
     for (let count=0;count<5;count++) {
       await new Promise(resolve=>setTimeout(resolve,100));
-      readback=await inspectAutoWin(page,profile);
+      readback=await inspectAutoWin(page,profile,!!nativeRestore);
       assertScope(await bridgeCall(page,'read'),readback);
       if (readback.state===desired) break;
     }
   }
   requireThat(readback.state===desired,'AUTO_WIN_READBACK_FAILED');
+  if (nativeRestore) assertNativeRestore(await bridgeCall(page,'read'));
   const verified=await bridgeCall(page,'ackAutoWin',readback);
-  return { ...readback, clicked, verified };
+  return { ...readback, clicked, verified,...(nativeRestore?{nativeRestore}:{}) };
 }
 
 /** Read only: final prepare checks cannot click or accidentally reopen paused control. */

@@ -186,7 +186,7 @@ test('notification without its final settlement stays blocked and cannot resume 
 
 class AutoWinRecoveryPage extends ScriptedPage {
   epoch=1;generation=0;lastStep=2;sourceStream=0;connected=true;reason:string|null=null;
-  records:any[]=[];ensureCalls=0;uiError:string|null=null;ingressDuringEnsure=false;inputAfterProof=false;lastReadback:any=null;
+  records:any[]=[];ensureCalls=0;ensureArguments:unknown[]=[];uiError:string|null=null;ingressDuringEnsure=false;inputAfterProof=false;lastReadback:any=null;
   constructor(path:string){super(path);this.autoWinNeedsEnable=true;this.autoWinState='disabled';}
   enqueueDiscard() {
     this.generation++;this.lastStep=3;
@@ -218,7 +218,7 @@ class AutoWinRecoveryPage extends ScriptedPage {
     }
     if(method==='ackSync') {this.records=[];this.reason=null;this.calls.push(method);return {};}
     if(method==='ensureAutoWin') {
-      this.calls.push(method);this.ensureCalls++;
+      this.calls.push(method);this.ensureCalls++;this.ensureArguments.push(input.argument);
       if(this.ingressDuringEnsure)this.enqueueDiscard();
       if(this.uiError)throw Error(this.uiError);
       const clicked=this.autoWinNeedsEnable;
@@ -244,12 +244,58 @@ test('an observer restores the switch once after initial sync and again after re
     page.disconnect();await live.pump();assert.equal(live.recovering,true);
     page.authenticate();await live.pump();
     assert.equal(page.ensureCalls,2);assert.equal(live.counts.reconnects,1);assert.equal(live.recovering,false);
+    assert.deepEqual(page.ensureArguments,[null,{purpose:'reconnect'}]);
     assert.equal(live.autoWinRecovery?.status,'verified');assert.equal(live.autoWinRecovery?.trigger,'reconnect');
     assert.equal(live.autoWinRecovery?.connectionEpoch,2);assert.equal(live.autoWinRecovery?.pageEpoch,2);
     assert.equal(live.autoWinRecovery?.readback?.clicked,true);assert.equal(live.autoWinRecoveries.length,2);
     assert.equal(actor.projection.sessionId,'same-session');assert.equal(actor.control.paused,true);
     assert.equal((await storage.inspect('same-session')).counts.faults,1); // The explicit disconnect only.
     assert.equal(page.sends,0);assert.equal(page.calls.includes('prepare'),false);assert.equal(page.calls.includes('automaticTiming'),false);
+  }finally{await storage.close();await rm(directory,{recursive:true,force:true});}
+});
+
+test('reconnect purpose crosses the real observer child process while retaining one actor and ledger',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'maji-auto-win-broker-reconnect-'));
+  class BrokerReconnectPage extends AutoWinRecoveryPage {
+    drains=0;
+    async evaluate(source:any,input?:any):Promise<any> {
+      if(input?.method==='drain') {
+        this.drains++;
+        if(this.drains===3)this.disconnect();
+        if(this.drains===4)this.authenticate();
+      }
+      return super.evaluate(source,input);
+    }
+  }
+  try {
+    const page=new BrokerReconnectPage(join(directory,'state.sqlite'));
+    const report=await acceptLiveViaNode(page,{outputDirectory:join(directory,'run'),databasePath:page.databasePath,
+      room:buildPhase1Fixture().projection.room!,sourceVersion:'synthetic-auto-win-broker-reconnect',observeMs:700},process.execPath);
+    assert.equal(report.status,'passed');assert.equal(report.lifecycle.reconnects,1);
+    assert.deepEqual(page.ensureArguments,[null,{purpose:'reconnect'}]);assert.equal(report.autoWinRecovery?.status,'verified');
+    assert.equal(page.sends,0);assert.equal(report.captureDirectories.length,2);
+    const db=new DatabaseSync(page.databasePath,{readOnly:true});
+    try {assert.equal(db.prepare('SELECT count(*) AS n FROM sessions').get()!.n,1);}
+    finally {db.close();}
+  }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+test('unfinished native recovery keeps the observer paused and ingests authority without another toggle',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'maji-auto-win-not-ready-')),storage=new StorageClient(join(directory,'state.sqlite'));
+  try {
+    const actor=await GameActor.open(storage,'not-ready-session','process'),page=new AutoWinRecoveryPage(join(directory,'state.sqlite'));
+    const live=new LiveGameSession(actor,page,buildPhase1Fixture().projection.room!);
+    await live.synchronize(false);
+    page.disconnect();await live.pump();
+    page.authenticate();page.uiError='AUTO_WIN_RECOVERY_NOT_READY';page.ingressDuringEnsure=true;
+    await live.pump();
+    assert.equal(live.counts.reconnects,1);assert.equal(live.recovering,false);
+    assert.equal(live.autoWinRecovery?.status,'unverified');assert.equal(live.autoWinRecovery?.code,'AUTO_WIN_RECOVERY_NOT_READY');
+    assert.equal(live.autoWinRecovery?.readback,null);assert.equal(actor.control.paused,true);
+    assert.equal(live.segments.at(-1)?.subsequent.filter(e=>e.type==='TileDiscarded').length,1);
+    assert.equal(live.cursor?.lastStep,3);assert.equal((await storage.inspect('not-ready-session')).counts.faults,1);
+    await live.pump();assert.equal(page.ensureCalls,2);assert.equal(page.sends,0);
+    assert.equal(page.calls.includes('prepare'),false);assert.equal(page.calls.includes('automaticTiming'),false);
   }finally{await storage.close();await rm(directory,{recursive:true,force:true});}
 });
 
@@ -322,14 +368,16 @@ test('unknown recovery failures cannot enter the full acceptance report',async()
   }finally{await rm(directory,{recursive:true,force:true});}
 });
 
-test('a newer disabled or unknown readback revokes the earlier enabled proof without a generation change',async t=>{
-  for (const state of ['disabled','unknown']) await t.test(state,async()=>{
+test('a revoked, replaced, disabled or unknown readback invalidates recovery without a generation change',async t=>{
+  for (const state of ['disabled','unknown','revoked','replaced']) await t.test(state,async()=>{
     const directory=await mkdtemp(join(tmpdir(),'maji-auto-win-negative-')),storage=new StorageClient(join(directory,'state.sqlite'));
     try {
       const page=new AutoWinRecoveryPage(join(directory,'state.sqlite'));
       const actor=await GameActor.open(storage,'negative-session','process'),live=new LiveGameSession(actor,page,buildPhase1Fixture().projection.room!);
       await live.synchronize(false);assert.equal(live.autoWinRecovery?.status,'verified');
-      const generation=page.generation;page.lastReadback={...page.lastReadback,state};await live.pump();
+      const generation=page.generation;
+      page.lastReadback=state==='revoked'?null:state==='replaced'?{...page.lastReadback,rgbaSha256:'b'.repeat(64)}:{...page.lastReadback,state};
+      await live.pump();
       assert.equal(page.generation,generation);assert.equal(live.autoWinRecovery?.status,'unverified');
       assert.equal(live.autoWinRecovery?.code,'AUTO_WIN_READBACK_STALE');assert.equal(page.ensureCalls,1);assert.equal(page.sends,0);
       assert.equal((await storage.inspect('negative-session')).counts.faults,0);

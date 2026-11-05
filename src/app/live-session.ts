@@ -12,7 +12,7 @@ const endNames = ['ActionHule','ActionNoTile','ActionLiuJu'];
 const recoverableReasons = ['DISCONNECTED','CONNECTION_CHANGED','RECONNECT_REQUESTED'];
 const recoverableAutoWinErrors = new Set(['AUTO_WIN_CDP_UNAVAILABLE','AUTO_WIN_PROFILE_UNVERIFIED','AUTO_WIN_VIEWPORT_MISMATCH',
   'AUTO_WIN_SCREENSHOT_INVALID','AUTO_WIN_SCREENSHOT_FORMAT','AUTO_WIN_SCREENSHOT_LIMIT','AUTO_WIN_READBACK_STALE',
-  'AUTO_WIN_READBACK_UNKNOWN','AUTO_WIN_READBACK_FAILED','AUTO_WIN_UNVERIFIED','AUTO_WIN_TOGGLE_REQUIRES_PAUSE']);
+  'AUTO_WIN_READBACK_UNKNOWN','AUTO_WIN_READBACK_FAILED','AUTO_WIN_UNVERIFIED','AUTO_WIN_TOGGLE_REQUIRES_PAUSE','AUTO_WIN_RECOVERY_NOT_READY']);
 const autoWinProtocolErrors = new Set(['BRIDGE_MISSING','BRIDGE_UNTRUSTED','BRIDGE_QUEUE_OVERFLOW','EGO_RPC_TIMEOUT','EGO_PAGE_FAILED',
   'CONTROL_BARRIER_FAILED','PROCESS_INSTANCE_STALE','FENCE_STALE','SOURCE_STEP_GAP','DISCONNECTED','CONNECTION_CHANGED','RECONNECT_REQUESTED']);
 
@@ -155,7 +155,7 @@ export class LiveGameSession {
     recovery.attempted=true;
     let fatal:unknown,failed=false;
     try {
-      const readback=await bridgeCall(this.#page,'ensureAutoWin');
+      const readback=await bridgeCall(this.#page,'ensureAutoWin',recovering?{purpose:'reconnect'}:undefined);
       recovery.readback={source:readback.source==='unity-button-pixels-v1'?'unity-button-pixels-v1':null,
         state:['enabled','disabled','unknown'].includes(readback.state)?readback.state:'unknown',observedAt:diagnosticTime(readback.observedAt),
         pageEpoch:diagnosticNumber(readback.pageEpoch),generation:diagnosticNumber(readback.generation),step:diagnosticNumber(readback.step),
@@ -186,7 +186,7 @@ export class LiveGameSession {
       batch.connected!==false && batch.freshConnection!==false && !batch.reason && !batch.overflow;
     const retained=batch.lastAutoWinReadback;
     const sameProof=retained?.state==='enabled' && ['pageEpoch','generation','step','observedAt','rgbaSha256'].every(key=>retained[key]===proof[key as keyof typeof proof]);
-    if (!sameScope || retained && retained.state!=='enabled' || batch.generation!==proof.generation && !sameProof) {
+    if (!sameScope || Object.hasOwn(batch,'lastAutoWinReadback') && !sameProof || batch.generation!==proof.generation && !sameProof) {
       recovery.status='unverified';recovery.code='AUTO_WIN_READBACK_STALE';
     }
   }

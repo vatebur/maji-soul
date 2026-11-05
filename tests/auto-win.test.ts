@@ -3,16 +3,18 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 import { classifyAutoWinPixels, decodeScreenshotPng, DEFAULT_AUTO_WIN_PROFILE as profile,
-  ensureAutoWin, verifyAutoWin, type PixelImage } from '../src/adapters/majsoul/auto-win.ts';
-import type { EgoPagePort } from '../src/adapters/majsoul/ego-transport.ts';
+  ensureAutoWin, verifyAutoWin, nativeRestoreProof, hasRecoveryTableAnchors, type PixelImage } from '../src/adapters/majsoul/auto-win.ts';
+import {bridgeCall, type EgoPagePort } from '../src/adapters/majsoul/ego-transport.ts';
 
 const fixture=JSON.parse(readFileSync('tests/fixtures/auto-win/glyphs.json','utf8'));
+const recoveryFixture=JSON.parse(readFileSync('tests/fixtures/auto-win/recovery-anchors.json','utf8'));
 function imageFor(sample=fixture.samples[0]):PixelImage {
   const width=profile.viewport.width,height=profile.viewport.height,rgba=new Uint8Array(width*height*4);
   for(let i=3;i<rgba.length;i+=4)rgba[i]=255;
   const bytes=Buffer.from(sample.rgba,'base64'),g=profile.glyph;
   for(let y=0;y<g.height;y++)rgba.set(bytes.subarray(y*g.width*4,(y+1)*g.width*4),((y+g.y)*width+g.x)*4);
   profile.anchors.forEach((a,i)=>rgba.set(sample.anchors[i],(a.y*width+a.x)*4));
+  for (const [x,y] of [[900,390],[1135,335],[945,440],[1080,280]])rgba.set([69,67,78,255],(y!*width+x!)*4);
   return {width,height,rgba};
 }
 function png(image:PixelImage, filter=0) {
@@ -58,20 +60,30 @@ test('screenshot decoder restores every PNG row filter and rejects malformed ima
 class Page implements EgoPagePort {
   epoch=1;generation=2;step=1;paused=true;enabled=false;unknown=false;clicks=0;acknowledgements:any[]=[];
   connected=true;handEnded=false;matchEnded=false;sourceStream=0;controlEpoch=1;
+  nativeRestoreRevision=0;onAck?:()=>void;
   viewport={...profile.viewport};changeDuringCapture=false;clickWorks=true;
   onMouseMoved?:()=>void;onMouseReleased?:()=>void;
+  nativeLifecycleTrace:any[]|undefined=nativeCycle();onRead?:()=>void;onCapture?:()=>void;reads=0;captures=0;captureRestoreProofs:any[]=[];
+  recoveryModal=false;
   images=[png(imageFor(fixture.samples[1])).toString('base64'),png(imageFor(fixture.samples[0])).toString('base64')];
   async evaluate(_source:unknown,input?:any):Promise<any>{
-    if(input?.method==='read')return {pageEpoch:this.epoch,generation:this.generation,lastStep:this.step,paused:this.paused,
+    if(input?.method==='read'){this.reads++;this.onRead?.();return {pageEpoch:this.epoch,generation:this.generation,lastStep:this.step,paused:this.paused,
       connected:this.connected,handEnded:this.handEnded,matchEnded:this.matchEnded,sourceStream:this.sourceStream,controlEpoch:this.controlEpoch,
-      freshConnection:true,reason:null,overflow:false};
-    if(input?.method==='ackAutoWin'){this.acknowledgements.push(input.argument);return {state:input.argument.state,pageEpoch:this.epoch};}
+      nativeLifecycleTrace:this.nativeLifecycleTrace,nativeRestoreRevision:this.nativeRestoreRevision,freshConnection:true,reason:null,overflow:false};}
+    if(input?.method==='ackAutoWin'){
+      this.onAck?.();
+      if(input.argument.nativeRestoreRevision!==this.nativeRestoreRevision)throw Error('AUTO_WIN_READBACK_STALE');
+      this.acknowledgements.push(input.argument);return {state:input.argument.state,pageEpoch:this.epoch};
+    }
     return {...this.viewport,scrollX:0,scrollY:0,scripts:['https://example.invalid/WebGL-release-4.0.51(test).js']};
   }
   async cdp(method:string,input?:any):Promise<any>{
     if(method==='Page.captureScreenshot') {
+      this.captures++;this.captureRestoreProofs.push(nativeRestoreProof({pageEpoch:this.epoch,nativeLifecycleTrace:this.nativeLifecycleTrace}));
+      this.onCapture?.();
       if(this.changeDuringCapture)this.generation++;
       if(this.unknown){const image=imageFor();const a=profile.anchors[0]!;image.rgba.set([0,0,0,255],(a.y*image.width+a.x)*4);return {data:png(image).toString('base64')};}
+      if(this.recoveryModal){const image=imageFor(fixture.samples[this.enabled?0:1]);image.rgba.set([25,33,55,255],(390*image.width+900)*4);return {data:png(image).toString('base64')};}
       return {data:this.images[this.enabled?1:0]};
     }
     if(method==='Input.dispatchMouseEvent') {
@@ -86,20 +98,20 @@ test('production CDP adapter reads, clicks once, confirms and restores after rec
   const page=new Page();const first=await ensureAutoWin(page);
   assert.equal(first.clicked,true);assert.equal(first.state,'enabled');assert.equal(page.clicks,1);
   await verifyAutoWin(page);assert.equal(page.clicks,1);
-  page.epoch=2;page.enabled=false;const restored=await ensureAutoWin(page);
+  page.epoch=2;page.nativeLifecycleTrace=nativeCycle(2);page.enabled=false;const restored=await ensureAutoWin(page);
   assert.equal(restored.pageEpoch,2);assert.equal(page.clicks,2);assert.equal(page.acknowledgements.at(-1).pageEpoch,2);
 });
 test('unknown UI, stale capture and unsupported viewport never click or verify',async()=>{
   for(const fault of ['unknown','stale','viewport']){
     const page=new Page();if(fault==='unknown')page.unknown=true;else if(fault==='stale')page.changeDuringCapture=true;else page.viewport.width--;
-    await assert.rejects(ensureAutoWin(page),/AUTO_WIN_(READBACK_UNKNOWN|READBACK_STALE|VIEWPORT_MISMATCH)/);
-    assert.equal(page.clicks,0);assert.equal(page.acknowledgements.length,fault==='unknown'?1:0);
+    await assert.rejects(ensureAutoWin(page),/AUTO_WIN_(RECOVERY_NOT_READY|READBACK_STALE|VIEWPORT_MISMATCH)/);
+    assert.equal(page.clicks,0);assert.equal(page.acknowledgements.length,0);
     assert.ok(page.acknowledgements.every(a=>a.state!=='enabled'));
   }
 });
 test('final verification is read-only; failed re-enable never retries a click',async()=>{
   const page=new Page();await assert.rejects(verifyAutoWin(page),/AUTO_WIN_UNVERIFIED/);assert.equal(page.clicks,0);
-  page.paused=false;await assert.rejects(ensureAutoWin(page),/AUTO_WIN_TOGGLE_REQUIRES_PAUSE/);assert.equal(page.clicks,0);
+  page.paused=false;await assert.rejects(ensureAutoWin(page),/AUTO_WIN_RECOVERY_NOT_READY/);assert.equal(page.clicks,0);
   page.paused=true;page.clickWorks=false;await assert.rejects(ensureAutoWin(page),/AUTO_WIN_READBACK_FAILED/);
   assert.equal(page.clicks,1);assert.ok(page.acknowledgements.every(a=>a.state!=='enabled'));
   await assert.rejects(ensureAutoWin(page,profile,true,'pause-cleanup'),/AUTO_WIN_PURPOSE_INVALID/);
@@ -114,7 +126,7 @@ test('a boundary or resume while moving the pointer cancels the old toggle befor
       else if(fault==='hand'){page.sourceStream++;page.generation++;}
       else{page.controlEpoch++;page.paused=false;}
     };
-    await assert.rejects(ensureAutoWin(page),/AUTO_WIN_TOGGLE_REQUIRES_PAUSE/);
+    await assert.rejects(ensureAutoWin(page),/AUTO_WIN_RECOVERY_NOT_READY/);
     assert.equal(page.clicks,0);assert.equal(page.enabled,true);assert.equal(page.acknowledgements.length,0);
   }
 });
@@ -127,7 +139,7 @@ test('a post-click boundary cannot confirm a replacement connection or hand as t
       else page.sourceStream++;
       page.generation++;
     };
-    await assert.rejects(ensureAutoWin(page),/AUTO_WIN_TOGGLE_REQUIRES_PAUSE/);
+    await assert.rejects(ensureAutoWin(page),/AUTO_WIN_RECOVERY_NOT_READY/);
     assert.equal(page.clicks,1);assert.equal(page.acknowledgements.length,0);
   }
 });
@@ -139,5 +151,190 @@ test('terminal or disconnected pages cannot verify a residual enabled toolbar gl
     else page[fault as 'handEnded'|'matchEnded']=true;
     await assert.rejects(verifyAutoWin(page),/AUTO_WIN_READBACK_STALE/);
     assert.equal(page.clicks,0);assert.equal(page.acknowledgements.length,0);
+  }
+});
+
+function nativeCycle(pageEpoch=1,restoreMethod='syncGame',owner='client',hasRestore=true) {
+  return ['authGame',restoreMethod,'finishSyncGame'].flatMap((method,index)=>
+    ['request','response','response-forwarded'].map((phase,offset)=>({method,owner,phase,pageEpoch,
+      observedMonoMs:100+index*10+offset,accepted:phase==='request'?'unknown':true,
+      ...(method===restoreMethod && phase!=='request'?{hasRestore}:{})})));
+}
+
+test('only a complete current-client restore cycle can satisfy the reconnect prerequisite',()=>{
+  for(const method of ['syncGame','enterGame']) {
+    const trace=nativeCycle(5,method);
+    assert.equal(nativeRestoreProof({pageEpoch:5,nativeLifecycleTrace:trace})?.restoreMethod,method);
+  }
+  const invalid=[
+    nativeCycle(5,'syncGame','bridge'),nativeCycle(4),nativeCycle(5).slice(1),nativeCycle(5).slice(0,-1),
+    [...nativeCycle(5),{method:'syncGame',owner:'client',phase:'request',pageEpoch:5,observedMonoMs:200}],
+    [...nativeCycle(5).slice(0,4),nativeCycle(5)[3],...nativeCycle(5).slice(4)],
+  ];
+  for(const index of [2,5,8]) {
+    const trace=nativeCycle(5);trace[index]!.accepted=false;invalid.push(trace);
+  }
+  const backwards=nativeCycle(5);backwards[8]!.observedMonoMs=1;invalid.push(backwards);
+  for(const trace of invalid)assert.equal(nativeRestoreProof({pageEpoch:5,nativeLifecycleTrace:trace}),null);
+  const trace=nativeCycle(5);
+  const interleaved=[trace[0],trace[1],trace[3],trace[2],trace[4],trace[6],trace[5],trace[7],trace[8]]
+    .map((event,index)=>({...event,observedMonoMs:100+index}));
+  assert.ok(nativeRestoreProof({pageEpoch:5,nativeLifecycleTrace:interleaved}));
+});
+
+test('archived public centre-frame anchors reject the observed modal but are not native readiness',()=>{
+  for(const sample of recoveryFixture.samples) {
+    const image=imageFor();
+    recoveryFixture.anchors.forEach((anchor:any,index:number)=>image.rgba.set(sample.rgba[index],(anchor.y*image.width+anchor.x)*4));
+    assert.equal(hasRecoveryTableAnchors(image),sample.expected,sample.label);
+  }
+  assert.ok(recoveryFixture.samples.some((sample:any)=>sample.observation==='empty-table-center-visible'&&sample.expected===true));
+  assert.equal(nativeRestoreProof({pageEpoch:1,nativeLifecycleTrace:nativeCycle().slice(0,5)}),null);
+});
+
+test('reconnect waits for the native restore before taking pixels and makes only one toggle',async()=>{
+  const page=new Page();
+  page.nativeLifecycleTrace=[...nativeCycle().slice(0,3),...nativeCycle(1,'syncGame','bridge')];
+  page.onRead=()=>{if(page.reads===3){page.nativeLifecycleTrace=nativeCycle();page.nativeRestoreRevision++;}};
+  const result=await ensureAutoWin(page,profile,true,'reconnect');
+  assert.equal(result.state,'enabled');assert.equal(result.clicked,true);assert.equal(page.clicks,1);
+  assert.equal(result.nativeRestore?.finishForwardedMonoMs,122);
+  assert.ok(page.captureRestoreProofs.every(proof=>proof?.finishForwardedMonoMs===122));
+  assert.equal(page.acknowledgements.length,1);
+  assert.equal(result.nativeRestoreRevision,1);
+});
+
+test('an enabled switch is read afresh after reconnect readiness without toggling it',async()=>{
+  const page=new Page();page.enabled=true;page.nativeLifecycleTrace=nativeCycle();
+  const result=await ensureAutoWin(page,profile,true,'reconnect');
+  assert.equal(result.clicked,false);assert.equal(page.clicks,0);assert.equal(page.captures,2);
+  assert.equal(result.nativeRestore?.pageEpoch,page.epoch);
+});
+
+test('reconnect readiness cannot migrate to a changed scope while waiting',async()=>{
+  for(const fault of ['epoch','hand','step','input','resume','disconnect','terminal']) {
+    const page=new Page();page.nativeLifecycleTrace=nativeCycle().slice(0,3);
+    page.onRead=()=>{
+      if(page.reads!==2)return;
+      if(fault==='epoch')page.epoch++;
+      else if(fault==='hand')page.sourceStream++;
+      else if(fault==='step')page.step++;
+      else if(fault==='input')page.generation++;
+      else if(fault==='resume'){page.controlEpoch++;page.paused=false;}
+      else if(fault==='disconnect')page.connected=false;
+      else page.handEnded=true;
+    };
+    await assert.rejects(ensureAutoWin(page,profile,true,'reconnect'),/AUTO_WIN_RECOVERY_NOT_READY/);
+    assert.equal(page.clicks,0);assert.equal(page.captures,0);assert.equal(page.acknowledgements.length,0);
+  }
+});
+
+test('a new native restore during pointer movement cancels the sole reconnect click',async()=>{
+  const page=new Page();page.nativeLifecycleTrace=nativeCycle();
+  page.onMouseMoved=()=>page.nativeLifecycleTrace!.push({method:'syncGame',owner:'client',phase:'request',pageEpoch:1,observedMonoMs:200});
+  await assert.rejects(ensureAutoWin(page,profile,true,'reconnect'),/AUTO_WIN_RECOVERY_NOT_READY/);
+  assert.equal(page.clicks,0);assert.equal(page.acknowledgements.length,0);
+});
+
+test('native restore changes after the sole click cannot be acknowledged or retried',async()=>{
+  const page=new Page();page.nativeLifecycleTrace=nativeCycle();
+  page.onMouseReleased=()=>page.nativeLifecycleTrace!.push({method:'syncGame',owner:'client',phase:'request',pageEpoch:1,observedMonoMs:200});
+  await assert.rejects(ensureAutoWin(page,profile,true,'reconnect'),/AUTO_WIN_RECOVERY_NOT_READY/);
+  assert.equal(page.clicks,1);assert.equal(page.acknowledgements.length,0);
+});
+
+test('missing and unfinished native recovery fail closed with no screenshot or click',async()=>{
+  const missing=new Page();missing.nativeLifecycleTrace=undefined;
+  await assert.rejects(ensureAutoWin(missing,profile,true,'reconnect'),/AUTO_WIN_RECOVERY_NOT_READY/);
+  assert.equal(missing.clicks,0);assert.equal(missing.captures,0);
+  const unfinished=new Page();unfinished.nativeLifecycleTrace=nativeCycle().slice(0,3);
+  await assert.rejects(ensureAutoWin(unfinished,profile,true,'reconnect'),/AUTO_WIN_RECOVERY_NOT_READY/);
+  assert.equal(unfinished.clicks,0);assert.equal(unfinished.captures,0);assert.equal(unfinished.acknowledgements.length,0);
+});
+
+test('the bridge routes only the explicit reconnect purpose through the native prerequisite',async()=>{
+  const page=new Page();page.nativeLifecycleTrace=undefined;
+  await assert.rejects(bridgeCall(page,'ensureAutoWin',{purpose:'reconnect'}),/AUTO_WIN_RECOVERY_NOT_READY/);
+  assert.equal(page.clicks,0);assert.equal(page.captures,0);
+  for(const argument of [{purpose:'resume'},{purpose:'reconnect',extra:true},true,[]])
+    assert.throws(()=>bridgeCall(page,'ensureAutoWin',argument),/AUTO_WIN_PURPOSE_INVALID/);
+});
+
+test('default and initialization calls cannot bypass native readiness while pause cleanup can close the switch',async()=>{
+  for (const purpose of ['resume','initialize','reconnect'] as const) {
+    const page=new Page();page.nativeLifecycleTrace=undefined;
+    await assert.rejects(ensureAutoWin(page,profile,true,purpose),/AUTO_WIN_RECOVERY_NOT_READY/);
+    assert.equal(page.clicks,0);assert.equal(page.captures,0);
+  }
+  const page=new Page();page.nativeLifecycleTrace=undefined;page.enabled=true;
+  const result=await ensureAutoWin(page,profile,false,'pause-cleanup');
+  assert.equal(result.state,'disabled');assert.equal(page.clicks,1);
+});
+
+test('a proven new entry without restore needs no finish but unknown or empty sync responses cannot open the gate',async()=>{
+  const trace=nativeCycle(1,'enterGame','client',false).slice(0,6);
+  const proof=nativeRestoreProof({pageEpoch:1,nativeLifecycleTrace:trace});
+  assert.equal(proof?.hasRestore,false);assert.equal(proof?.finishForwardedMonoMs,null);
+  const page=new Page();page.nativeLifecycleTrace=trace;
+  assert.equal((await ensureAutoWin(page)).state,'enabled');assert.equal(page.clicks,1);
+  assert.equal(nativeRestoreProof({pageEpoch:1,nativeLifecycleTrace:nativeCycle(1,'syncGame','client',false).slice(0,6)}),null);
+  const unknown=nativeCycle().map(event=>({...event,...(event.method==='syncGame'&&event.phase!=='request'?{hasRestore:'unknown'}:{})}));
+  assert.equal(nativeRestoreProof({pageEpoch:1,nativeLifecycleTrace:unknown}),null);
+  const missing=nativeCycle().map(({hasRestore,...event})=>event);
+  assert.equal(nativeRestoreProof({pageEpoch:1,nativeLifecycleTrace:missing}),null);
+});
+
+test('the native prerequisite alone cannot click through the known reconnect modal',async()=>{
+  const page=new Page();page.nativeLifecycleTrace=nativeCycle();page.recoveryModal=true;
+  page.onCapture=()=>{
+    if(page.captures<3)assert.equal(page.clicks,0);
+    if(page.captures===3)page.recoveryModal=false;
+  };
+  page.onMouseMoved=()=>assert.ok(page.captures>=4,'two consecutive positive table samples are required');
+  const result=await ensureAutoWin(page,profile,true,'reconnect');
+  assert.equal(result.clicked,true);assert.equal(page.clicks,1);assert.equal(page.acknowledgements.length,1);
+});
+
+test('a new restore during the table wait cannot reuse the earlier native completion',async()=>{
+  const page=new Page();page.nativeLifecycleTrace=nativeCycle();
+  page.onCapture=()=>page.nativeLifecycleTrace!.push({method:'syncGame',owner:'client',phase:'request',pageEpoch:1,observedMonoMs:200});
+  await assert.rejects(ensureAutoWin(page,profile,true,'reconnect'),/AUTO_WIN_RECOVERY_NOT_READY/);
+  assert.equal(page.clicks,0);assert.equal(page.acknowledgements.length,0);
+});
+
+test('a modal after the sole reconnect click cannot acknowledge an enabled glyph behind it',async()=>{
+  const page=new Page();page.nativeLifecycleTrace=nativeCycle();
+  page.onMouseReleased=()=>{page.recoveryModal=true;};
+  await assert.rejects(ensureAutoWin(page,profile,true,'reconnect'),/AUTO_WIN_RECOVERY_NOT_READY/);
+  assert.equal(page.enabled,true);assert.equal(page.clicks,1);assert.equal(page.acknowledgements.length,0);
+});
+
+test('an absent positive table frame times out without clicking',async()=>{
+  const page=new Page();page.nativeLifecycleTrace=nativeCycle();page.recoveryModal=true;
+  await assert.rejects(ensureAutoWin(page,profile,true,'reconnect'),/AUTO_WIN_RECOVERY_NOT_READY/);
+  assert.equal(page.clicks,0);assert.equal(page.acknowledgements.length,0);assert.ok(page.captures>1);
+});
+
+test('native revision changes during a capture or after the last read cannot be acknowledged',async()=>{
+  for (const point of ['capture','ack']) {
+    const page=new Page();page.enabled=true;
+    if(point==='capture')page.onCapture=()=>{page.nativeRestoreRevision++;};
+    else page.onAck=()=>{page.nativeRestoreRevision++;};
+    await assert.rejects(ensureAutoWin(page),/AUTO_WIN_READBACK_STALE/);
+    assert.equal(page.clicks,0);assert.equal(page.acknowledgements.length,0);
+  }
+});
+
+test('native revision changes after pointer movement cannot use the old click proof',async()=>{
+  const page=new Page();page.onMouseMoved=()=>{page.nativeRestoreRevision++;};
+  await assert.rejects(ensureAutoWin(page),/AUTO_WIN_(READBACK_STALE|TOGGLE_REQUIRES_PAUSE)/);
+  assert.equal(page.clicks,0);assert.equal(page.acknowledgements.length,0);
+});
+
+test('missing or invalid native revisions cannot be read back even in read-only verification',async()=>{
+  for (const revision of [undefined,-1,1.5,Number.NaN]) {
+    const page=new Page();page.enabled=true;(page as any).nativeRestoreRevision=revision;
+    await assert.rejects(verifyAutoWin(page),/AUTO_WIN_READBACK_STALE/);
+    assert.equal(page.clicks,0);assert.equal(page.captures,0);assert.equal(page.acknowledgements.length,0);
   }
 });

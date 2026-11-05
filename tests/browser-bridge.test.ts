@@ -10,14 +10,16 @@ import type { GameState, TileCode } from '../src/domain/game/types.ts';
 
 const proto = `syntax="proto3"; package lq;
 message Wrapper { string name=1; bytes data=2; }
-message Error { uint32 code=1; }
+message Error { uint32 code=1; string message=2; }
 message Empty {}
 message ReqAuthGame { uint32 account_id=1; string token=2; string game_uuid=3; }
-message ResAuthGame { repeated uint32 seat_list=1; }
+message ResAuthGame { repeated uint32 seat_list=1; Error error=2; string private_note=3; }
+message ReqLifecycle { string token=1; string game_uuid=2; uint32 account_id=3; }
 message ReqInputOperation { uint32 type=1; string tile=2; bool moqie=3; uint32 timeuse=4; uint32 index=5; }
 message ReqInputChiPengGang { uint32 type=1; uint32 index=2; uint32 timeuse=3; }
-message Response { Error error=1; }
+message Response { Error error=1; string private_note=2; }
 message ReqSyncGame { string round_id=1; uint32 step=2; }
+message ResEnterGame { Error error=1; bool is_end=2; uint32 step=3; GameRestore game_restore=4; string private_note=5; }
 message ResSyncGame { Error error=1; bool is_end=2; uint32 step=3; GameRestore game_restore=4; }
 message GameRestore { repeated ActionPrototype actions=1; uint32 passed_waiting_time=2; uint32 game_state=3; uint32 last_pause_time_ms=4; }
 message ActionPrototype { uint32 step=1; string name=2; bytes data=3; }
@@ -35,6 +37,8 @@ message NotifyGameEndResult { GameResult result=1; }
 `;
 const rpcMap: Record<string, { req: string; resp: string }> = {
   '.lq.FastTest.authGame': { req: 'lq.ReqAuthGame', resp: 'lq.ResAuthGame' },
+  '.lq.FastTest.enterGame': { req: 'lq.ReqLifecycle', resp: 'lq.ResEnterGame' },
+  '.lq.FastTest.finishSyncGame': { req: 'lq.ReqLifecycle', resp: 'lq.Response' },
   '.lq.FastTest.heartBeat': { req: 'lq.Empty', resp: 'lq.Response' },
   '.lq.FastTest.syncGame': { req: 'lq.ReqSyncGame', resp: 'lq.ResSyncGame' },
   '.lq.FastTest.inputOperation': { req: 'lq.ReqInputOperation', resp: 'lq.Response' },
@@ -82,7 +86,7 @@ function fixture(capacity = 256, phase2ActionsEnabled = false) {
   const bridge = window.__majiBridge;
   const autoWin = (state='enabled') => bridge.ackAutoWin({source:'unity-button-pixels-v1',state,
     observedAt:new Date().toISOString(),pageEpoch:bridge.read().pageEpoch,generation:bridge.read().generation,
-    step:bridge.read().lastStep,rgbaSha256:'a'.repeat(64)});
+    nativeRestoreRevision:bridge.read().nativeRestoreRevision,step:bridge.read().lastStep,rgbaSha256:'a'.repeat(64)});
   const start = () => { socket.send(requestFrame(80, '.lq.FastTest.heartBeat')); socket.receive(responseFrame(packetId(socket.sent.at(-1)!), '.lq.FastTest.heartBeat')); };
   function action(name: string, step: number, payload: object) {
     const data = new Uint8Array(encode(`lq.${name}`, payload));
@@ -256,6 +260,233 @@ test('auth correlation exposes own seat and match UUID, removes accounts and tok
   assert.equal(read.gameUuid, 'match-uuid');
   assert.equal(JSON.stringify(read).includes('54321'), false);
   assert.equal(JSON.stringify(read).includes('sensitive-token'), false);
+  f.bridge.restore();
+});
+
+test('native lifecycle trace whitelists four methods and timestamps forwarding after client delivery without payloads', () => {
+  const f=fixture();f.start();
+  const atClient:any[]=[];
+  f.socket.addEventListener('message',()=>{
+    atClient.push(f.bridge.read().nativeLifecycleTrace.at(-1));
+    f.advanceMono(20);
+  });
+  const methods=['authGame','enterGame','syncGame','finishSyncGame'];
+  const privateInput={account_id:54321,token:'private-token',game_uuid:'private-game-uuid'};
+  for(const [index,name] of methods.entries()){
+    const method=`.lq.FastTest.${name}`;
+    f.socket.send(requestFrame(700+index,method,name==='syncGame'?{round_id:'private-round'}:privateInput));
+    const id=packetId(f.socket.sent.at(-1)!);
+    const response=name==='authGame'?{seat_list:[54321,2,3,4],private_note:'private-auth-response'}:
+      name==='enterGame'?{error:{code:7,message:'private-error'},private_note:'private-response'}:{};
+    const before=f.bridge.read();
+    f.socket.receive(name==='finishSyncGame'
+      ?new Uint8Array([3,id&255,id>>8,...encode('lq.Wrapper',{data:new Uint8Array([255])})])
+      :responseFrame(id,method,response));
+    if(name==='finishSyncGame')for(const key of ['reason','pageEpoch','generation','queued'])assert.equal(f.bridge.read()[key],before[key]);
+  }
+  const trace=JSON.parse(JSON.stringify(f.bridge.read().nativeLifecycleTrace));
+  assert.equal(trace.length,12);assert.equal(atClient.length,4);
+  for(const [index,name] of methods.entries()){
+    const rows=trace.slice(index*3,index*3+3),accepted=[true,false,true,'unknown'][index];
+    assert.deepEqual(rows.map((r:any)=>r.phase),['request','response','response-forwarded']);
+    assert.deepEqual(rows.map((r:any)=>r.accepted),['unknown',accepted,accepted]);
+    assert.ok(rows.every((r:any)=>r.method===name&&r.owner==='client'&&r.pageEpoch===1));
+    assert.equal(atClient[index].phase,'response');
+    assert.ok(rows[2].observedMonoMs>=atClient[index].observedMonoMs+20);
+  }
+  for(const row of trace){
+    const restoreResponse=['enterGame','syncGame'].includes(row.method)&&row.phase!=='request';
+    assert.deepEqual(Object.keys(row).sort(),['accepted',...(restoreResponse?['hasRestore']:[]),'method','observedAt','observedMonoMs','owner','pageEpoch','phase']);
+    if(restoreResponse)assert.equal(row.hasRestore,row.method==='enterGame'?'unknown':false);
+    assert.ok(Number.isFinite(Date.parse(row.observedAt)));assert.ok(Number.isFinite(row.observedMonoMs));
+  }
+  assert.doesNotMatch(JSON.stringify(trace),/private-|54321|account|token|uuid|payload|requestId|clientId|error/i);
+  const altered=f.bridge.read().nativeLifecycleTrace;altered[0].method='changed';altered.push({payload:'private'});
+  assert.deepEqual(JSON.parse(JSON.stringify(f.bridge.read().nativeLifecycleTrace)),trace);
+  assert.equal(f.bridge.read().stats.clientRequests,5);assert.equal(f.bridge.read().stats.bridgeActionSends,0);
+  f.bridge.restore();
+});
+
+test('restore presence trace is three-state and never exposes the native restore payload',()=>{
+  const f=fixture();f.start();
+  for(const name of ['enterGame','syncGame'])for(const kind of ['present','absent','error','malformed']){
+    const method=`.lq.FastTest.${name}`;
+    f.socket.send(requestFrame(920,method));const id=packetId(f.socket.sent.at(-1)!);
+    const privateRestore={actions:[{name:'private-native-action',step:123,data:new TextEncoder().encode('private-native-payload')}]};
+    const value=kind==='present'?{game_restore:privateRestore}:kind==='error'?{error:{code:9,message:'private-error'},game_restore:privateRestore}:{};
+    f.socket.receive(kind==='malformed'
+      ?new Uint8Array([3,id&255,id>>8,...encode('lq.Wrapper',{data:new Uint8Array([255])})])
+      :responseFrame(id,method,value));
+    const rows=f.bridge.read().nativeLifecycleTrace.slice(-3),expected=kind==='present'?true:kind==='absent'?false:'unknown';
+    assert.equal(Object.hasOwn(rows[0],'hasRestore'),false);
+    assert.equal(rows[1].hasRestore,expected);assert.equal(rows[2].hasRestore,expected);
+    assert.equal(f.bridge.read().generation,0);assert.equal(f.bridge.read().reason,null);assert.equal(f.bridge.read().queued,0);
+  }
+  assert.doesNotMatch(JSON.stringify(f.bridge.read().nativeLifecycleTrace),/private-|payload|game_restore|actions|account|token|uuid/i);
+  f.bridge.restore();
+});
+
+test('new native restore requests revoke same-epoch enabled proof, timing and prepared permits',async()=>{
+  for(const name of ['authGame','enterGame','syncGame']){
+    const f=fixture(),input=await f.opened(),prepared=f.bridge.prepare(input),before=f.bridge.read();
+    const oldReadback={source:'unity-button-pixels-v1',...before.lastAutoWinReadback};
+    const method=`.lq.FastTest.${name}`;
+    f.socket.send(requestFrame(930,method,name==='authGame'?{account_id:42,token:'private',game_uuid:'same-match'}:{}));
+    const id=packetId(f.socket.sent.at(-1)!),after=f.bridge.read(),sent=f.socket.sent.length;
+    assert.equal(after.pageEpoch,before.pageEpoch);assert.equal(after.generation,before.generation+1);
+    assert.equal(after.nativeRestoreRevision,before.nativeRestoreRevision+1);
+    assert.equal(after.autoWin,null);assert.equal(after.lastAutoWinReadback,null);
+    assert.equal((await f.bridge.dispatch({command:input.command,token:prepared.token})).delivery,'not-sent');
+    assert.equal(f.socket.sent.length,sent);assert.equal(after.stats.bridgeActionSends,0);
+    assert.throws(()=>f.bridge.ackAutoWin(oldReadback),/AUTO_WIN_READBACK_STALE/);
+    const currentInput=structuredClone(input);currentInput.expected.generation=after.generation;
+    assert.throws(()=>f.bridge.prepare(currentInput),/AUTO_WIN_UNVERIFIED/);
+    f.autoWin();assert.throws(()=>f.bridge.prepare(currentInput),/DEADLINE_PROVENANCE_UNVERIFIED/);
+    f.socket.receive(responseFrame(id,method,name==='authGame'?{seat_list:[42,1,2,3]}:{}));
+    f.bridge.restore();
+  }
+});
+
+test('native restore clears prior winning-offer attribution while evidence-free restore progress keeps its generation',async()=>{
+  const f=fixture();await f.opened();
+  f.action('ActionDealTile',2,{seat:0,tile:'2m',left_tile_count:67,operation:{seat:0,operation_list:[{type:8}]}});
+  const before=f.bridge.read();assert.ok(before.lastAutoWinReadback);
+  f.socket.send(requestFrame(940,'.lq.FastTest.syncGame'));const restoreId=packetId(f.socket.sent.at(-1)!);
+  assert.equal(f.bridge.read().generation,before.generation+1);assert.equal(f.bridge.read().lastAutoWinReadback,null);
+  const emptyGeneration=f.bridge.read().generation;
+  f.socket.send(requestFrame(941,'.lq.FastTest.enterGame'));const enterId=packetId(f.socket.sent.at(-1)!);
+  assert.equal(f.bridge.read().generation,emptyGeneration);
+  f.socket.send(requestFrame(942,'.lq.FastTest.inputOperation',{type:8}));const winId=packetId(f.socket.sent.at(-1)!);
+  assert.equal(f.bridge.read().lastClientWin.priorAutoWinReadback,null);
+  assert.equal(f.bridge.read().lastClientWin.autoWinVerifiedAtRequest,false);
+  for(const [id,method] of [[restoreId,'.lq.FastTest.syncGame'],[enterId,'.lq.FastTest.enterGame'],[winId,'.lq.FastTest.inputOperation']] as const)
+    f.socket.receive(responseFrame(id,method));
+  f.bridge.restore();
+});
+
+test('an evidence-free native restore revision atomically rejects earlier or revisionless pixel readback',()=>{
+  for(const name of ['authGame','enterGame','syncGame']){
+    const f=fixture();f.start();const before=f.bridge.read();
+    const readback={source:'unity-button-pixels-v1',state:'enabled',observedAt:new Date().toISOString(),
+      pageEpoch:before.pageEpoch,generation:before.generation,step:before.lastStep,
+      nativeRestoreRevision:before.nativeRestoreRevision,rgbaSha256:'a'.repeat(64)};
+    const method=`.lq.FastTest.${name}`;
+    f.socket.send(requestFrame(950,method,name==='authGame'?{account_id:42,token:'private',game_uuid:'same-match'}:{}));
+    const id=packetId(f.socket.sent.at(-1)!),after=f.bridge.read();
+    assert.equal(after.pageEpoch,before.pageEpoch);assert.equal(after.generation,before.generation);
+    assert.equal(after.nativeRestoreRevision,before.nativeRestoreRevision+1);
+    assert.equal(f.bridge.drain().nativeRestoreRevision,after.nativeRestoreRevision);
+    for(const revision of [before.nativeRestoreRevision,undefined,-1,after.nativeRestoreRevision+0.5])
+      assert.throws(()=>f.bridge.ackAutoWin({...readback,nativeRestoreRevision:revision}),/AUTO_WIN_READBACK_STALE/);
+    assert.equal(f.bridge.read().autoWin,null);assert.equal(f.bridge.read().lastAutoWinReadback,null);
+    f.socket.receive(responseFrame(id,method,name==='authGame'?{seat_list:[42,1,2,3]}:{}));
+    f.autoWin();assert.equal(f.bridge.read().autoWin.nativeRestoreRevision,after.nativeRestoreRevision);
+    f.bridge.restore();
+  }
+});
+
+test('native restore revokes future execution without dropping a receipt for an already sent action',async()=>{
+  const f=fixture(),input=await f.opened(),prepared=f.bridge.prepare(input);
+  const dispatch=f.bridge.dispatch({command:input.command,token:prepared.token}),actionId=packetId(f.socket.sent.at(-1)!);
+  assert.equal(f.bridge.read().stats.bridgeActionSends,1);
+  f.socket.send(requestFrame(951,'.lq.FastTest.syncGame'));const restoreId=packetId(f.socket.sent.at(-1)!);
+  assert.equal(f.bridge.read().autoWin,null);assert.equal(f.bridge.read().lastAutoWinReadback,null);
+  f.socket.receive(responseFrame(actionId,'.lq.FastTest.inputOperation'));
+  assert.equal((await dispatch).delivery,'accepted');assert.equal(f.bridge.read().stats.bridgeActionSends,1);
+  f.socket.receive(responseFrame(restoreId,'.lq.FastTest.syncGame'));f.bridge.restore();
+});
+
+test('bridge-owned sync preserves historical enabled readback and does not impersonate native restore invalidation',async()=>{
+  const f=fixture();await f.opened();const before=f.bridge.read();
+  const sync=f.bridge.sync(),id=packetId(f.socket.sent.at(-1)!);
+  assert.deepEqual(f.bridge.read().lastAutoWinReadback,before.lastAutoWinReadback);
+  assert.equal(f.bridge.read().generation,before.generation);assert.equal(f.bridge.read().pageEpoch,before.pageEpoch);
+  assert.equal(f.bridge.read().nativeRestoreRevision,before.nativeRestoreRevision);
+  // Existing bridge sync still pauses and clears its executable proof/timing.
+  assert.equal(f.bridge.read().autoWin,null);assert.equal(f.bridge.read().paused,true);
+  f.socket.receive(responseFrame(id,'.lq.FastTest.syncGame',{step:2,game_restore:{actions:[
+    {name:'ActionNewRound',step:0,data:encode('lq.ActionNewRound',{tiles:['1m'],md5:'first-hand'})},
+    {name:'ActionDealTile',step:1,data:encode('lq.ActionDealTile',{seat:0,tile:'2m',left_tile_count:68,operation:{seat:0,operation_list:[{type:1}],time_fixed:300000}})},
+  ]}}));
+  await sync;assert.deepEqual(f.bridge.read().lastAutoWinReadback,before.lastAutoWinReadback);
+  assert.equal(f.bridge.read().generation,before.generation);
+  assert.equal(f.bridge.read().nativeRestoreRevision,before.nativeRestoreRevision);
+  assert.equal(f.bridge.read().nativeLifecycleTrace.at(-1).owner,'bridge');
+  assert.equal(f.bridge.read().nativeLifecycleTrace.at(-1).hasRestore,true);
+  f.bridge.restore();
+});
+
+test('bridge sync trace has bridge ownership without a native forwarded stage or gate changes',async()=>{
+  const f=fixture();f.start();const before=f.bridge.read();
+  const delivered:number[]=[];f.socket.addEventListener('message',e=>delivered.push(packetId(new Uint8Array((e as MessageEvent).data))));
+  const sync=f.bridge.sync(),id=packetId(f.socket.sent.at(-1)!);
+  f.socket.receive(responseFrame(id,'.lq.FastTest.syncGame',{step:1,game_restore:{actions:[
+    {name:'ActionNewRound',step:0,data:encode('lq.ActionNewRound',{tiles:['1m'],md5:'private-round'})},
+  ]}}));
+  await sync;const after=f.bridge.read();
+  assert.deepEqual(JSON.parse(JSON.stringify(after.nativeLifecycleTrace)).map((r:any)=>[r.method,r.owner,r.phase,r.accepted]),[
+    ['syncGame','bridge','request','unknown'],['syncGame','bridge','response',true],
+  ]);
+  for(const key of ['pageEpoch','generation','queued','paused','reason','autoWin','lastStep'])assert.equal(after[key],before[key]);
+  assert.deepEqual(delivered,[]);assert.equal(after.stats.bridgeSyncRequests,1);assert.equal(after.stats.bridgeActionSends,0);
+  f.bridge.restore();
+});
+
+test('native lifecycle trace is bounded and retains request epoch across later page invalidation',()=>{
+  const f=fixture(),requestTimes:number[]=[];f.start();
+  for(let i=0;i<20;i++){
+    f.advanceMono(100);
+    f.socket.send(requestFrame(800+i,'.lq.FastTest.finishSyncGame'));
+    requestTimes.push(f.bridge.read().nativeLifecycleTrace.at(-1).observedMonoMs);
+    f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.finishSyncGame'));
+  }
+  assert.equal(f.bridge.read().nativeLifecycleTrace.length,48);
+  assert.equal(f.bridge.read().nativeLifecycleTrace[0].observedMonoMs,requestTimes[4]);
+  assert.equal(f.bridge.read().generation,0);assert.equal(f.bridge.read().queued,0);assert.equal(f.bridge.read().reason,null);
+  const requestEpoch=f.bridge.read().pageEpoch;
+  f.socket.send(requestFrame(900,'.lq.FastTest.finishSyncGame'));const id=packetId(f.socket.sent.at(-1)!);
+  f.bridge.pause();assert.ok(f.bridge.read().pageEpoch>requestEpoch);
+  f.socket.receive(responseFrame(id,'.lq.FastTest.finishSyncGame'));
+  const rows=f.bridge.read().nativeLifecycleTrace.slice(-3);
+  assert.ok(rows.every((r:any)=>r.pageEpoch===requestEpoch));assert.equal(f.bridge.read().nativeLifecycleTrace.length,48);
+  f.bridge.restore();
+});
+
+test('client forwarding records after nested lifecycle requests and keeps the original request epoch',()=>{
+  const f=fixture();f.start();const epoch=f.bridge.read().pageEpoch;
+  f.socket.addEventListener('message',e=>{
+    if(packetId(new Uint8Array((e as MessageEvent).data))!==910)return;
+    assert.equal(f.bridge.read().nativeLifecycleTrace.at(-1).phase,'response');
+    f.bridge.pause();
+    f.socket.send(requestFrame(911,'.lq.FastTest.finishSyncGame'));
+  });
+  f.socket.send(requestFrame(910,'.lq.FastTest.enterGame'));
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.enterGame'));
+  const trace=JSON.parse(JSON.stringify(f.bridge.read().nativeLifecycleTrace));
+  assert.deepEqual(trace.map((r:any)=>[r.method,r.phase,r.pageEpoch]),[
+    ['enterGame','request',epoch],['enterGame','response',epoch],
+    ['finishSyncGame','request',epoch+1],['enterGame','response-forwarded',epoch],
+  ]);
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.finishSyncGame'));
+  assert.equal(f.bridge.read().nativeLifecycleTrace.at(-1).pageEpoch,epoch+1);
+  assert.equal(f.bridge.read().reason,null);assert.equal(f.bridge.read().generation,0);assert.equal(f.bridge.read().queued,0);
+  f.bridge.restore();
+});
+
+test('retired socket responses remain routable but cannot append lifecycle trace in the current epoch',()=>{
+  const f=fixture(),auth={account_id:42,token:'private-token',game_uuid:'same-private-match'};
+  f.socket.send(requestFrame(90,'.lq.FastTest.authGame',auth));
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.authGame',{seat_list:[42,1,2,3]}));
+  f.socket.send(requestFrame(91,'.lq.FastTest.finishSyncGame'));const oldId=packetId(f.socket.sent.at(-1)!);
+  const replacement=new f.window.WebSocket('replacement');replacement.send(requestFrame(80,'.lq.FastTest.authGame',auth));
+  replacement.receive(responseFrame(packetId(replacement.sent.at(-1)),'.lq.FastTest.authGame',{seat_list:[42,1,2,3]}));
+  const before=JSON.stringify(f.bridge.read().nativeLifecycleTrace),revision=f.bridge.read().nativeRestoreRevision,delivered:number[]=[];
+  f.socket.addEventListener('message',e=>delivered.push(packetId(new Uint8Array((e as MessageEvent).data))));
+  f.socket.receive(responseFrame(oldId,'.lq.FastTest.finishSyncGame'));
+  assert.deepEqual(delivered,[91]);assert.equal(JSON.stringify(f.bridge.read().nativeLifecycleTrace),before);
+  f.socket.send(requestFrame(92,'.lq.FastTest.enterGame'));f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.enterGame'));
+  assert.equal(JSON.stringify(f.bridge.read().nativeLifecycleTrace),before);
+  assert.equal(f.bridge.read().nativeRestoreRevision,revision);
   f.bridge.restore();
 });
 

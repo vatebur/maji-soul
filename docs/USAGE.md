@@ -97,6 +97,8 @@ vfox exec nodejs@24.22.1 -- npm start -- live-observe 15 p1 /absolute/path/live-
 
 `autoWinRecovery` 是最近一次开关恢复结果，`autoWinRecoveries` 保留各次初始／重连记录。像素无法确认时标为 `unverified` 并使报告 blocked，观察仍继续保存权威事件；它不把 UI 失败写成协议故障，也不以历史开关状态授权发送。终局无需操作开关，记录 `not-required`。开关操作期间的新入站仍归约入账。
 
+开启开关前，初次接入和重连均等待客户端自身的入场／恢复响应。需要恢复历史时还须收到客户端的 `finishSyncGame` 成功响应；桥接程序自己的同步不能代替它。随后连续两次读取已知中心框和开关像素，以排除当前版本的重连弹窗；这不代表能识别任意 Unity 弹窗。等待超时或作用域变化返回 `AUTO_WIN_RECOVERY_NOT_READY`，不点击、不自动重试。新的客户端恢复请求会撤销旧许可和读回；截图携带恢复序号，在页面确认时再次同步校验，防止恢复期间的旧截图重新授权发送。
+
 报告新增 `lifecycle`（边界计数、台账小局序号、当前结束／恢复状态）及 `captureDirectories`。重连后的完整当前小局另存片段，片段序号从 1 重放，manifest 的 `originHandOrdinal` 保留原序号。对每个片段运行 `replay`。结束观察时仍断线、只收到终局标志或只收到最终排名而缺结算时返回 blocked；缺少完整同步历史也不推断状态。`passed` 仅表示本次有时限观察通过，要验证完整整场需另核对最终状态和实际覆盖。详细步骤见[跨小局验证](./validation/lifecycle-coordination.md)。
 
 `observationClosure.settled` 表示最后入账游标与最终页面读回一致，且没有排队事件、故障或断线；收尾期间出现新变化会使报告 blocked。

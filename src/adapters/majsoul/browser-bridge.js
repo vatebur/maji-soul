@@ -21,12 +21,33 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
   let operationTiming = null;
   let lastClientWin = null, lastOwnWin = null;
   const stats = { clientRequests: 0, bridgeSyncRequests: 0, bridgeActionSends: 0, clientWinRequests: 0, authoritativeOwnWins: 0 };
+  const nativeLifecycleTrace = [];
+  let nativeRestoreRevision = 0;
+  const lifecycleMethods = ['authGame','enterGame','syncGame','finishSyncGame'];
   const seen = new Map();
   const iso = () => new Date().toISOString();
   const fail = code => { paused = true; reason = code; pageEpoch++; tokens.clear(); autoWin = null; operationTiming = null; lastAutoWinReadback = null; winningOffer = null; };
   const requireThat = (value, code) => { if (!value) throw Error(code); };
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const clone = value => JSON.parse(JSON.stringify(value));
+  function traceLifecycle(socket, flow, method, owner, phase, requestPageEpoch, outcome = { accepted:'unknown' }) {
+    if (flow.retired || socket !== gameSocket || !lifecycleMethods.some(name => method === `.lq.FastTest.${name}`)) return;
+    // Diagnostic only: neither the queue/generation nor any readiness/permit gate changes.
+    // Response stages keep their request epoch, even if client callbacks changed it.
+    nativeLifecycleTrace.push({ method: method.slice('.lq.FastTest.'.length), owner, phase, pageEpoch: requestPageEpoch,
+      observedAt: iso(), observedMonoMs: performance.now(), accepted:outcome.accepted,
+      ...(phase!=='request' && ['.lq.FastTest.syncGame','.lq.FastTest.enterGame'].includes(method)
+        ? {hasRestore:outcome.hasRestore ?? 'unknown'} : {}) });
+    if (nativeLifecycleTrace.length > 48) nativeLifecycleTrace.shift();
+  }
+  function lifecycleOutcome(socket, flow, method, data) {
+    const unknown = {accepted:'unknown',hasRestore:'unknown'};
+    if (flow.retired || socket !== gameSocket || !lifecycleMethods.some(name => method === `.lq.FastTest.${name}`)) return unknown;
+    try {
+      const response = body(rpcMap[method].resp, data), accepted = !response.error;
+      return {accepted,hasRestore:accepted ? response.game_restore !== null && response.game_restore !== undefined : 'unknown'};
+    } catch { return unknown; }
+  }
   const endsHand = name => ['ActionHule','ActionNoTile','ActionLiuJu'].includes(name);
   function closeWindow() {
     paused = true; tokens.clear(); operation = null; operationTiming = null;
@@ -218,6 +239,8 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       if (!request) { if (flow.fresh && !flow.retired) fail('UNEXPECTED_RPC_RESPONSE'); return; }
       flow.pending.delete(packet.id);
       if (request.timer) clearTimeout(request.timer);
+      const lifecycleResult = lifecycleOutcome(socket, flow, request.method, packet.data);
+      traceLifecycle(socket, flow, request.method, request.bridge ? 'bridge' : 'client', 'response', request.lifecyclePageEpoch, lifecycleResult);
       if (request.method === '.lq.FastTest.authGame' && socket === gameSocket && !flow.retired) {
         try {
           const decoded = body(rpcMap[request.method].resp, packet.data);
@@ -254,6 +277,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       const rewritten = packet.bytes.slice(); rewritten[1] = request.clientId & 255; rewritten[2] = request.clientId >> 8;
       const replacement = new MessageEvent('message', { data: rewritten.buffer, origin: event.origin, lastEventId: event.lastEventId });
       replayed.add(replacement); socket.dispatchEvent(replacement);
+      traceLifecycle(socket, flow, request.method, 'client', 'response-forwarded', request.lifecyclePageEpoch, lifecycleResult);
     };
     flow.close = () => {
       if (socket === gameSocket) { pageEpoch++; fail('DISCONNECTED'); operation = null; push({ kind: 'disconnected', receivedAt: iso() }); }
@@ -298,8 +322,17 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       gameSocket = this; flow.retired = false;
       flow.authAccount = request.account_id; gameUuid = request.game_uuid;
     }
+    if (!flow.retired && this===gameSocket && ['.lq.FastTest.authGame','.lq.FastTest.enterGame','.lq.FastTest.syncGame'].includes(packet.name)) {
+      // Native recovery can replace Unity controls and the current operation in
+      // this same epoch. Revoke existing evidence before it starts; a recovery
+      // already waiting without evidence may still advance its native trace.
+      nativeRestoreRevision++;
+      if (tokens.size || autoWin || operationTiming || lastAutoWinReadback || winningOffer) generation++;
+      tokens.clear(); autoWin=null; operationTiming=null; lastAutoWinReadback=null; winningOffer=null;
+    }
     // Legacy sockets predate interception: preserve client operation, deny bridge RPCs.
-    if (!flow.fresh) { const result = originalSend.call(this, raw); stats.clientRequests++; return result; }
+    if (!flow.fresh) { const result = originalSend.call(this, raw); stats.clientRequests++;
+      traceLifecycle(this, flow, packet.name, 'client', 'request', pageEpoch); return result; }
     let clientWinType = null, winRecord = null;
     if (!flow.retired && this === gameSocket && (packet.name === '.lq.FastTest.inputOperation' || packet.name === '.lq.FastTest.inputChiPengGang')) {
       tokens.clear(); generation++; // manual/client action revokes prepared program commands
@@ -321,8 +354,10 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
             ageAtRequestMs:Math.max(0,performance.now()-winningOffer.priorAutoWinReadback.sampledMonoMs) } : null };
       lastClientWin = winRecord;
     }
-    flow.pending.set(id, { method: packet.name, bridge: false, clientId: packet.id, winRecord });
-    try { const result = originalSend.call(this, rewritten); stats.clientRequests++; return result; }
+    const lifecyclePageEpoch = pageEpoch;
+    flow.pending.set(id, { method: packet.name, bridge: false, clientId: packet.id, winRecord, lifecyclePageEpoch });
+    try { const result = originalSend.call(this, rewritten); stats.clientRequests++;
+      traceLifecycle(this, flow, packet.name, 'client', 'request', lifecyclePageEpoch); return result; }
     catch (error) { if (winRecord) winRecord.delivery='unknown'; flow.pending.delete(id); fail('CLIENT_SEND_FAILED'); throw error; }
   }
   OriginalSocket.prototype.send = send; window.WebSocket = SocketProxy;
@@ -332,12 +367,13 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     const id = allocate(flow), bytes = frame(method, params, id);
     let sent = false, invoked = false;
     const work = new Promise((resolve, reject) => {
-      const pending = { method, bridge: true, resolve, reject, timer: null };
+      const pending = { method, bridge: true, resolve, reject, timer: null, lifecyclePageEpoch: pageEpoch };
       flow.pending.set(id, pending);
       try {
         // All code between this check and actual send is synchronous, with no user callbacks.
         if (finalCheck) finalCheck();
         invoked = true; originalSend.call(gameSocket, bytes); sent = true;
+        traceLifecycle(gameSocket, flow, method, 'bridge', 'request', pending.lifecyclePageEpoch);
         if (method === '.lq.FastTest.syncGame') stats.bridgeSyncRequests++;
         if (method === '.lq.FastTest.inputOperation' || method === '.lq.FastTest.inputChiPengGang') stats.bridgeActionSends++;
         if (flow.pending.has(id)) pending.timer = setTimeout(() => reject(Error('RPC_RECEIPT_TIMEOUT')), 5000);
@@ -372,7 +408,8 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     }
     requireThat(operation && operation.step === lastStep && operation.value.seat === ownSeat, 'WINDOW_CLOSED');
     requireThat(!operation.value.operation_list?.some(o => o.type === 8 || o.type === 9), 'CLIENT_AUTO_WIN_WINDOW');
-    requireThat(autoWin?.state === 'enabled' && autoWin.pageEpoch === pageEpoch && autoWin.generation === generation && autoWin.step === lastStep && performance.now() < autoWin.expiresMonoMs, 'AUTO_WIN_UNVERIFIED');
+    requireThat(autoWin?.state === 'enabled' && autoWin.pageEpoch === pageEpoch && autoWin.generation === generation && autoWin.step === lastStep &&
+      autoWin.nativeRestoreRevision===nativeRestoreRevision && performance.now() < autoWin.expiresMonoMs, 'AUTO_WIN_UNVERIFIED');
     let request;
     if (phase2ActionsEnabled) {
       requireThat(same(intent.actionSpec, action.action), 'DURABLE_INTENT_REQUIRED');
@@ -388,16 +425,16 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     return request;
   }
   const api = {
-    read: () => ({ schemaVersion: 1, pageEpoch, generation, lastStep, sourceStream: actionStream, ownSeat,
+    read: () => ({ schemaVersion: 1, pageEpoch, generation, nativeRestoreRevision, lastStep, sourceStream: actionStream, ownSeat,
       connected:gameSocket?.readyState===1,handSha256,handEnded,matchEnded,matchResult:matchResult?clone(matchResult):null,
       paused, controlEpoch, reason, overflow, queued: records.length, freshConnection: !!flows.get(gameSocket)?.fresh,
       pendingRpcCount: [...flows.values()].reduce((count, flow) => count + flow.pending.size, 0),
       operation: operation ? clone(operation) : null, authSummary: authSummary ? clone(authSummary) : null,
       autoWin: autoWin ? { state: autoWin.state, pageEpoch: autoWin.pageEpoch, generation: autoWin.generation, step: autoWin.step,
-        observedAt: autoWin.observedAt, rgbaSha256: autoWin.rgbaSha256, expiresInMs: Math.max(0, autoWin.expiresMonoMs-performance.now()) } : null,
+        nativeRestoreRevision:autoWin.nativeRestoreRevision, observedAt: autoWin.observedAt, rgbaSha256: autoWin.rgbaSha256, expiresInMs: Math.max(0, autoWin.expiresMonoMs-performance.now()) } : null,
       lastClientWin:lastClientWin?clone(lastClientWin):null,lastOwnWin:lastOwnWin?clone(lastOwnWin):null,
-      lastAutoWinReadback:lastAutoWinReadback?pick(lastAutoWinReadback,['state','pageEpoch','sourceStream','step','generation','observedAt','rgbaSha256']):null,
-      gameUuid, phase2ActionsEnabled, stats: { ...stats }, allocator: 'wire-multiplexer-v1' }),
+      lastAutoWinReadback:lastAutoWinReadback?pick(lastAutoWinReadback,['state','pageEpoch','sourceStream','step','generation','nativeRestoreRevision','observedAt','rgbaSha256']):null,
+      gameUuid, phase2ActionsEnabled, stats: { ...stats }, nativeLifecycleTrace: clone(nativeLifecycleTrace), allocator: 'wire-multiplexer-v1' }),
     drain: () => { const result = { ...api.read(), records: records.splice(0) }; return result; },
     pause: control => {
       paused = true; tokens.clear();
@@ -414,12 +451,13 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       requireThat(!restored && !reason && !overflow && flows.get(gameSocket)?.fresh, 'BRIDGE_UNTRUSTED');
       requireThat(readback?.source === 'unity-button-pixels-v1' && ['enabled','disabled','unknown'].includes(readback.state) && /^[a-f0-9]{64}$/.test(readback.rgbaSha256), 'AUTO_WIN_READBACK_INVALID');
       requireThat(readback.pageEpoch === pageEpoch && readback.generation === generation && readback.step === lastStep, 'AUTO_WIN_READBACK_STALE');
+      requireThat(Number.isSafeInteger(readback.nativeRestoreRevision) && readback.nativeRestoreRevision===nativeRestoreRevision, 'AUTO_WIN_READBACK_STALE');
       const age = Date.now()-Date.parse(readback.observedAt);
       requireThat(Number.isFinite(age) && age>=0 && age<1000, 'AUTO_WIN_READBACK_STALE');
-      autoWin = { ...pick(readback, ['state','pageEpoch','generation','step','observedAt','rgbaSha256']), expiresMonoMs:performance.now()+1000-age };
-      lastAutoWinReadback={ ...pick(readback,['state','pageEpoch','generation','step','observedAt','rgbaSha256']),sourceStream:actionStream,sampledMonoMs:performance.now()-age };
+      autoWin = { ...pick(readback, ['state','pageEpoch','generation','step','nativeRestoreRevision','observedAt','rgbaSha256']), expiresMonoMs:performance.now()+1000-age };
+      lastAutoWinReadback={ ...pick(readback,['state','pageEpoch','generation','step','nativeRestoreRevision','observedAt','rgbaSha256']),sourceStream:actionStream,sampledMonoMs:performance.now()-age };
       if(readback.state!=='enabled')winningOffer=null;
-      return { state:autoWin.state,pageEpoch,generation,expiresInMs:1000-age };
+      return { state:autoWin.state,pageEpoch,generation,nativeRestoreRevision,expiresInMs:1000-age };
     },
     ackTiming(timing) {
       tokens.clear(); operationTiming = null;

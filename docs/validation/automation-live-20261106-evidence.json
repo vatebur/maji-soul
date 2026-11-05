@@ -14,7 +14,13 @@
       "ordinary-discard-initial-blocked",
       "ordinary-discard-confirmed",
       "pause-before-final-send",
-      "injected-dispatch-delay-rejected"
+      "injected-dispatch-delay-rejected",
+      "reconnect-initial-blocked",
+      "same-process-reconnect-recovered",
+      "network-latency-configuration-unconfirmed",
+      "reconnect-disabled-reenable-blocked",
+      "reconnect-disabled-diagnostic-blocked",
+      "reconnect-disabled-trace-blocked"
     ],
     "sameMatch": true,
     "sameHand": true
@@ -162,7 +168,7 @@
       "reasonCode": null,
       "acceptedChecks": [
         "AUTOMATIC_ORDINARY_DISCARD_CONFIRMED",
-        "AUTO_WIN_RECONNECT_ENABLE_READBACK"
+        "AUTO_WIN_RELOAD_ENABLE_READBACK"
       ],
       "programActionSends": {
         "before": 0,
@@ -488,6 +494,969 @@
         "phase": "dispatch",
         "invocationStarted": true,
         "code": "TRANSPORT_NOT_SENT"
+      }
+    },
+    {
+      "alias": "reconnect-initial-blocked",
+      "reportSha256": "754eb26ea383aafdd044c0c102aca4aba81fd3338f9d74b20108def7f9e9455e",
+      "reportStatus": "blocked",
+      "reasonCode": null,
+      "acceptedChecks": [],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": false,
+      "faultCount": 1,
+      "autoWin": {
+        "readbackState": "enabled",
+        "readbackVerified": false,
+        "clickedToEnable": true,
+        "actualTriggerConfirmed": false,
+        "mayActAfterProgramPause": true,
+        "recoveries": [
+          {
+            "trigger": "initial-sync",
+            "status": "unverified",
+            "attempted": true,
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "operationStep": 60,
+            "generation": 2,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "pageEpoch": 1,
+              "generation": 3,
+              "operationStep": 60,
+              "clickedToEnable": true,
+              "sameScopeAsRecovery": false
+            }
+          }
+        ]
+      },
+      "timing": null,
+      "captures": [
+        {
+          "segmentOrdinal": 1,
+          "eventCount": 62,
+          "eventsFileSha256": "d8105ad0156c6ac00f093133a9eb902fd73814fb925fe46bbed0719aa45643f9",
+          "manifestEventsSha256": "d5148b2f40da9a486b122e8bc4d617826d2a227855f2d81141ccca2d55a34df1",
+          "originHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        }
+      ],
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 0,
+        "handEnds": 0,
+        "matchEnds": 0,
+        "reconnects": 0,
+        "handOrdinal": 1,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": true
+      },
+      "observation": {
+        "connected": false,
+        "queued": 0,
+        "reasonCode": "DISCONNECTED",
+        "overflow": false,
+        "drainedMatchesFinalCursor": true
+      },
+      "exclusion": {
+        "code": "RECONNECT_OBSERVATION_INCOMPLETE",
+        "reconnectAccepted": false,
+        "autoWinRecoveryAccepted": false,
+        "retestAlias": "same-process-reconnect-recovered"
+      }
+    },
+    {
+      "alias": "same-process-reconnect-recovered",
+      "reportSha256": "2e81a378a35f887cd6b764b7c33b29ad9ae92c940254d9f5b78c532639e94ac4",
+      "reportStatus": "passed",
+      "reasonCode": null,
+      "acceptedChecks": [
+        "SAME_PROCESS_RECONNECT_RECOVERED",
+        "AUTO_WIN_RECONNECT_READBACK"
+      ],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 1,
+      "autoWin": {
+        "readbackState": "enabled",
+        "readbackVerified": true,
+        "clickedToEnable": false,
+        "actualTriggerConfirmed": false,
+        "mayActAfterProgramPause": true,
+        "recoveries": [
+          {
+            "trigger": "initial-sync",
+            "status": "unverified",
+            "attempted": true,
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "operationStep": 60,
+            "generation": 2,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "pageEpoch": 1,
+              "generation": 3,
+              "operationStep": 60,
+              "clickedToEnable": true,
+              "sameScopeAsRecovery": false
+            }
+          },
+          {
+            "trigger": "reconnect",
+            "status": "verified",
+            "attempted": true,
+            "reasonCode": null,
+            "connectionEpoch": 2,
+            "pageEpoch": 5,
+            "operationStep": 60,
+            "generation": 5,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "pageEpoch": 5,
+              "generation": 5,
+              "operationStep": 60,
+              "clickedToEnable": false,
+              "sameScopeAsRecovery": true
+            }
+          }
+        ],
+        "disabledToEnabledVerified": false
+      },
+      "timing": null,
+      "captures": [
+        {
+          "segmentOrdinal": 1,
+          "eventCount": 62,
+          "eventsFileSha256": "4bed3321845a33334ee745723a0e1fbaa446ba5015091049b10858b5fd24e8ab",
+          "manifestEventsSha256": "7b8469b6f3351fd0c9619ed4de4bf4357b7a1d4d12fad5ec00dca920bb23c7bf",
+          "originHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        },
+        {
+          "segmentOrdinal": 2,
+          "eventCount": 65,
+          "eventsFileSha256": "74416de3a4cb34f2d77842591fdc3ee32e0cb56f485694f804b3c970e9d5fa2c",
+          "manifestEventsSha256": "6a66aab5a44b5cfa29e474b1970d2c7e42e4a549d21d2677307b25905732f91a",
+          "originHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        }
+      ],
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 0,
+        "handEnds": 0,
+        "matchEnds": 0,
+        "reconnects": 1,
+        "handOrdinal": 1,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": false
+      },
+      "observation": {
+        "connected": true,
+        "queued": 0,
+        "reasonCode": null,
+        "overflow": false,
+        "drainedMatchesFinalCursor": true
+      }
+    },
+    {
+      "alias": "network-latency-configuration-unconfirmed",
+      "reportSha256": "bb552e59819c149e148ada471b422516a0ac748497d5daf4c604f8b985ab5ff3",
+      "reportStatus": "passed",
+      "reasonCode": null,
+      "acceptedChecks": [
+        "AUTOMATIC_COUNTDOWN_NORMAL_WINDOW"
+      ],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 0,
+      "timing": {
+        "fixedMs": 300000,
+        "addMs": 0,
+        "operationStep": 63,
+        "protocolRemainingMs": 87000,
+        "networkAllowanceMs": 84,
+        "quantizationAllowanceMs": 2000,
+        "totalUncertaintyMs": 2084,
+        "budgetAtResponseAfterSafetyMarginMs": 84666,
+        "responseIntervalMs": 2185.9,
+        "serverElapsedDeltaMs": 2000,
+        "sameSampleHand": true,
+        "sameSampleStep": true,
+        "sameSamplePageEpoch": true,
+        "samples": [
+          {
+            "displayedSeconds": 90.0,
+            "elapsedSeconds": 211,
+            "roundTripMs": 93.9,
+            "displayDelayMs": 1.6,
+            "displayProtocolResidualMs": 1001.6
+          },
+          {
+            "displayedSeconds": 88.0,
+            "elapsedSeconds": 213,
+            "roundTripMs": 83.7,
+            "displayDelayMs": 3.0,
+            "displayProtocolResidualMs": 1003.0
+          }
+        ]
+      },
+      "captures": [
+        {
+          "segmentOrdinal": 1,
+          "eventCount": 65,
+          "eventsFileSha256": "ad705a7d4e3a3f0462cd737f5c34b4382a559c04ce798ff49a8515580a24dcfc",
+          "manifestEventsSha256": "5a6dbe68a0842353c6a69902ac5b963bc62b309e8e1f8022b66d8ef83e9f290f",
+          "originHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        }
+      ],
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 0,
+        "handEnds": 0,
+        "matchEnds": 0,
+        "reconnects": 0,
+        "handOrdinal": 1,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": false
+      },
+      "observation": {
+        "connected": true,
+        "queued": 0,
+        "reasonCode": null,
+        "overflow": false,
+        "drainedMatchesFinalCursor": true
+      },
+      "autoWin": {
+        "readbackState": "enabled",
+        "readbackVerified": true,
+        "clickedToEnable": true,
+        "actualTriggerConfirmed": false
+      },
+      "injection": {
+        "kind": "cdp-network-latency-experiment",
+        "sourceSha256": "b47976a3c7d060307809665a1bf2ac7dc6a856a1a862966131cd4c36ab9404d7",
+        "requestedLatencyMs": 750,
+        "baselineRoundTripMs": [
+          84.7,
+          88.6
+        ],
+        "applied": true,
+        "reset": true,
+        "controlledRpcLatencyConfirmed": false
+      },
+      "exclusion": {
+        "code": "NETWORK_LATENCY_NOT_OBSERVED",
+        "controlledNetworkDelayAccepted": false
+      }
+    },
+    {
+      "alias": "reconnect-disabled-reenable-blocked",
+      "reportSha256": "061cb7802608e7b13d5af6808a88e455fc96419de0936dd478402bd816e6c758",
+      "reportStatus": "blocked",
+      "reasonCode": null,
+      "acceptedChecks": [],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 1,
+      "timing": null,
+      "captures": [
+        {
+          "segmentOrdinal": 1,
+          "eventCount": 73,
+          "eventsFileSha256": "b51a86b2ab5f3c33832f85b70e1ea480310abdf5784c18007b81e0bd3f10d586",
+          "manifestEventsSha256": "f8d729088fc54ca7917b70349fe4e7abd17e654fc31b82ad2e8caef5ea232ca6",
+          "originHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        },
+        {
+          "segmentOrdinal": 2,
+          "eventCount": 73,
+          "eventsFileSha256": "07783487e13a5117becb9272ac869fc6fd6cd0902b850c0457f9dadc02221f75",
+          "manifestEventsSha256": "91ba7f535a21ee81c27a2be20cce139d81bfc235eefdbbeafbd758cccdd8c22c",
+          "originHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        }
+      ],
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 0,
+        "handEnds": 0,
+        "matchEnds": 0,
+        "reconnects": 1,
+        "handOrdinal": 1,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": false
+      },
+      "observation": {
+        "connected": true,
+        "queued": 0,
+        "reasonCode": null,
+        "overflow": false,
+        "drainedMatchesFinalCursor": true
+      },
+      "autoWin": {
+        "readbackState": "unknown",
+        "readbackVerified": false,
+        "clickedToEnable": null,
+        "actualTriggerConfirmed": false,
+        "disabledToEnabledVerified": false,
+        "mayActAfterProgramPause": true,
+        "recoveries": [
+          {
+            "trigger": "initial-sync",
+            "status": "unverified",
+            "attempted": true,
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "operationStep": 71,
+            "generation": 2,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "pageEpoch": 1,
+              "generation": 3,
+              "operationStep": 71,
+              "clickedToEnable": true,
+              "sameScopeAsRecovery": false
+            }
+          },
+          {
+            "trigger": "reconnect",
+            "status": "unverified",
+            "attempted": true,
+            "reasonCode": "AUTO_WIN_READBACK_FAILED",
+            "connectionEpoch": 2,
+            "pageEpoch": 5,
+            "operationStep": 71,
+            "generation": 6,
+            "readback": null
+          }
+        ]
+      },
+      "injection": {
+        "kind": "socket-reconnect-request",
+        "sourceSha256": "804e3ed349a99ec4da5c63be0f49eff5d74fd1a1b893cb7923cfec84b4da0073",
+        "disabledReadback": {
+          "state": "disabled",
+          "pageEpoch": 1,
+          "generation": 4,
+          "step": 71,
+          "clicked": true
+        }
+      },
+      "exclusion": {
+        "code": "AUTO_WIN_RECONNECT_REENABLE_UNVERIFIED",
+        "disabledToEnabledAccepted": false
+      }
+    },
+    {
+      "alias": "reconnect-disabled-diagnostic-blocked",
+      "reportSha256": "d232daa89293ba7b2db6549f51075e4ddeb68d97ca4e119d5a294b16d5946d4e",
+      "reportStatus": "blocked",
+      "reasonCode": null,
+      "acceptedChecks": [],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 1,
+      "timing": null,
+      "captures": [
+        {
+          "segmentOrdinal": 1,
+          "eventCount": 84,
+          "eventsFileSha256": "a5712efd2893a6801d36bb70dfd36814aef1be4bba343a4da1971c8d064a8666",
+          "manifestEventsSha256": "36b59501ca4dac924125705cc168a98f2c2b8f8cb4e72a5d6b6a60d1a81a2acf",
+          "originHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        },
+        {
+          "segmentOrdinal": 2,
+          "eventCount": 84,
+          "eventsFileSha256": "728de81d78f9419500b619270bd224ceb020363703c298f63233612580129e30",
+          "manifestEventsSha256": "000f86e1d1bb2b368cc29e90f95e7280f856101d0768052c424b76e75790b8d5",
+          "originHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        }
+      ],
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 0,
+        "handEnds": 0,
+        "matchEnds": 0,
+        "reconnects": 1,
+        "handOrdinal": 1,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": false
+      },
+      "observation": {
+        "connected": true,
+        "queued": 0,
+        "reasonCode": null,
+        "overflow": false,
+        "drainedMatchesFinalCursor": true
+      },
+      "autoWin": {
+        "readbackState": "unknown",
+        "readbackVerified": false,
+        "clickedToEnable": null,
+        "actualTriggerConfirmed": false,
+        "disabledToEnabledVerified": false,
+        "mayActAfterProgramPause": true,
+        "recoveries": [
+          {
+            "trigger": "initial-sync",
+            "status": "unverified",
+            "attempted": true,
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "operationStep": 81,
+            "generation": 2,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "pageEpoch": 1,
+              "generation": 3,
+              "operationStep": 81,
+              "clickedToEnable": true,
+              "sameScopeAsRecovery": false
+            }
+          },
+          {
+            "trigger": "reconnect",
+            "status": "unverified",
+            "attempted": true,
+            "reasonCode": "AUTO_WIN_READBACK_FAILED",
+            "connectionEpoch": 2,
+            "pageEpoch": 5,
+            "operationStep": 81,
+            "generation": 6,
+            "readback": null
+          }
+        ]
+      },
+      "injection": {
+        "kind": "socket-reconnect-request",
+        "sourceSha256": "f3f6f34293fa51f7e6e2cf759abfbd450a7a6d1c77ea9a73a032c102db118dd0",
+        "disabledReadback": {
+          "state": "disabled",
+          "pageEpoch": 1,
+          "generation": 4,
+          "step": 81,
+          "clicked": true
+        }
+      },
+      "exclusion": {
+        "code": "AUTO_WIN_RECONNECT_REENABLE_UNVERIFIED",
+        "disabledToEnabledAccepted": false
+      },
+      "uiEvidence": {
+        "eventsSourceSha256": "ed786be64104e3de3b867a2157b611980a47ed243b5e6adb89875fc4ff90b240",
+        "fullScreenshotsTracked": false
+      }
+    },
+    {
+      "alias": "reconnect-disabled-trace-blocked",
+      "reportSha256": "cdf91dfc7b6cd5affe4cde43099719cfe1fa8074a839c5f10c5f83d92baf5ee8",
+      "reportStatus": "blocked",
+      "reasonCode": null,
+      "acceptedChecks": [],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 1,
+      "timing": null,
+      "captures": [
+        {
+          "segmentOrdinal": 1,
+          "eventCount": 92,
+          "eventsFileSha256": "467a4a2a9e70f5af3e571f67f3007bab9f383080b4cea9355b7e7c1bb562d8c3",
+          "manifestEventsSha256": "c3817e14f74909c2a4d2aa26a689933d342a98ba457258b2faa6af3a5eaad1b5",
+          "originHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        },
+        {
+          "segmentOrdinal": 2,
+          "eventCount": 92,
+          "eventsFileSha256": "b571a0c07a22cf5870bbfbe70f0a1af0ff22f73a671419c9e1833013da1bc31e",
+          "manifestEventsSha256": "1951f520f0b077f76596d57ced0cc9cd5208ebce67ddbe4ccc974260d4d83080",
+          "originHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        }
+      ],
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 0,
+        "handEnds": 0,
+        "matchEnds": 0,
+        "reconnects": 1,
+        "handOrdinal": 1,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": false
+      },
+      "observation": {
+        "connected": true,
+        "queued": 0,
+        "reasonCode": null,
+        "overflow": false,
+        "drainedMatchesFinalCursor": true
+      },
+      "autoWin": {
+        "readbackState": "unknown",
+        "readbackVerified": false,
+        "clickedToEnable": null,
+        "actualTriggerConfirmed": false,
+        "disabledToEnabledVerified": false,
+        "mayActAfterProgramPause": true,
+        "recoveries": [
+          {
+            "trigger": "initial-sync",
+            "status": "unverified",
+            "attempted": true,
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "operationStep": 89,
+            "generation": 2,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "pageEpoch": 1,
+              "generation": 3,
+              "operationStep": 89,
+              "clickedToEnable": true,
+              "sameScopeAsRecovery": false
+            }
+          },
+          {
+            "trigger": "reconnect",
+            "status": "unverified",
+            "attempted": true,
+            "reasonCode": "AUTO_WIN_READBACK_FAILED",
+            "connectionEpoch": 2,
+            "pageEpoch": 5,
+            "operationStep": 89,
+            "generation": 6,
+            "readback": null
+          }
+        ]
+      },
+      "injection": {
+        "kind": "socket-reconnect-request",
+        "sourceSha256": "919551482efbd347719e35a8caf6e71efeebde2117506926dfd219ac697b7d30",
+        "disabledReadback": {
+          "state": "disabled",
+          "pageEpoch": 1,
+          "generation": 4,
+          "step": 89,
+          "clicked": true
+        }
+      },
+      "exclusion": {
+        "code": "AUTO_WIN_RECONNECT_REENABLE_UNVERIFIED",
+        "disabledToEnabledAccepted": false
+      },
+      "uiEvidence": {
+        "eventsSourceSha256": "8deac5a46021be1c154ddda081f658a7c021d14e8c47326f442f1fe5e2f130f0",
+        "fullScreenshotsTracked": false,
+        "nativeTraceSourceSha256": "b8e39fa674f5e5d7a39aafc64b1f6bcab45a0201de37b828f3e0c14ad4e53d0f"
+      }
+    },
+    {
+      "alias": "same-process-disabled-reconnect-reenabled",
+      "reportSha256": "8e79e1e1062d3c61cbe1968553afeb2b29c9d15c9af8e38eb2849f76e1e7c5e2",
+      "reportStatus": "passed",
+      "reasonCode": null,
+      "acceptedChecks": [
+        "AUTO_WIN_RECONNECT_DISABLED_REENABLE",
+        "SAME_PROCESS_RECONNECT_RECOVERED",
+        "AUTO_WIN_POST_RESTORE_MODAL_WAIT"
+      ],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 1,
+      "autoWin": {
+        "readbackState": "enabled",
+        "readbackVerified": true,
+        "clickedToEnable": true,
+        "disabledToEnabledVerified": true,
+        "actualTriggerConfirmed": false,
+        "clientWinRequests": {
+          "before": 0,
+          "after": 0
+        },
+        "authoritativeOwnWins": {
+          "before": 0,
+          "after": 0
+        },
+        "mayActAfterProgramPause": true,
+        "recoveries": [
+          {
+            "trigger": "initial-sync",
+            "status": "unverified",
+            "attempted": true,
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "operationStep": 2,
+            "generation": 2,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "pageEpoch": 1,
+              "generation": 3,
+              "operationStep": 2,
+              "clickedToEnable": true,
+              "samePageAndStepAsRecovery": true,
+              "generationDelta": 1
+            }
+          },
+          {
+            "trigger": "reconnect",
+            "status": "verified",
+            "attempted": true,
+            "reasonCode": null,
+            "connectionEpoch": 2,
+            "pageEpoch": 5,
+            "operationStep": 2,
+            "generation": 6,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "pageEpoch": 5,
+              "generation": 7,
+              "operationStep": 2,
+              "clickedToEnable": true,
+              "samePageAndStepAsRecovery": true,
+              "generationDelta": 1
+            }
+          }
+        ]
+      },
+      "timing": null,
+      "captures": [
+        {
+          "segmentOrdinal": 1,
+          "eventCount": 5,
+          "eventsFileSha256": "078ec698de083a9f1c74428b5ea3c314c85cb6ea565a71b3c9ac22295897de21",
+          "manifestEventsSha256": "31af8d238fca054b6671fae54696dc8f52ace71c5aa860c222b911b50deda8d6",
+          "originHandOrdinal": 2,
+          "archiveHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        },
+        {
+          "segmentOrdinal": 2,
+          "eventCount": 5,
+          "eventsFileSha256": "9d8e5cee035bad4b7bc9fdf7e223e9dcc4d55735819c62c8f56f80ffe626b9b6",
+          "manifestEventsSha256": "c5cdf0951aa39031213758c8da9709fe381e79d862d4e8d7f9ed2b1c4fe47d36",
+          "originHandOrdinal": 2,
+          "archiveHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        }
+      ],
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 0,
+        "handEnds": 0,
+        "matchEnds": 0,
+        "reconnects": 1,
+        "handOrdinal": 2,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": false
+      },
+      "observation": {
+        "connected": true,
+        "queued": 0,
+        "reasonCode": null,
+        "overflow": false,
+        "drainedMatchesFinalCursor": true
+      },
+      "identity": {
+        "sameMatchAsFirstHandGroup": true,
+        "sameHandAsFirstHandGroup": false,
+        "sameMatchWithinRun": true,
+        "sameHandWithinRun": true,
+        "originalLedgerReused": true,
+        "ledgerHandOrdinal": 2,
+        "crossHandTransitionObserved": false
+      },
+      "injection": {
+        "kind": "socket-reconnect-request",
+        "sourceSha256": "402f1188ffec7f8675dfb09ca24047fe15db68fbbc3afa36e153c68bf1d1648f",
+        "disabledReadback": {
+          "state": "disabled",
+          "pageEpoch": 1,
+          "generation": 4,
+          "step": 2,
+          "clicked": true
+        }
+      },
+      "uiEvidence": {
+        "eventsSourceSha256": "3d8a6a8a9863d174f9ceb4a8518a7da6e293fe11d582d52b97856fdbf15d66c7",
+        "nativeTraceSourceSha256": "13f30b74871c100b8cc630f9d9b1d6d44c77bd8c1a5f5809952d2cf47dc09e3b",
+        "fullScreenshotsTracked": false,
+        "timestampSemantics": "cdp-command-starts-relative-to-native-finish-forwarded",
+        "nativeRestore": {
+          "pageEpoch": 5,
+          "restoreMethod": "syncGame",
+          "hasRestore": true,
+          "finishForwarded": true,
+          "allResponsesAccepted": true
+        },
+        "frames": [
+          {
+            "alias": "frame-07",
+            "sourceSha256": "74d0a25d6df3503395ecdf43d4ca2d5620751c7aeb2a60514ee4e2e046a772df",
+            "captureRequestedAfterNativeFinishMs": -2155,
+            "centerFrameVisible": true,
+            "autoWinState": "disabled"
+          },
+          {
+            "alias": "frame-08",
+            "sourceSha256": "177f864d35de972706d1281a51ed4842f22091e8816a87b58162fa6163de5ebf",
+            "captureRequestedAfterNativeFinishMs": 31,
+            "centerFrameVisible": true,
+            "autoWinState": "disabled"
+          },
+          {
+            "alias": "frame-09",
+            "sourceSha256": "44a992ce9abdfa61eff40f55ce14b3b620c1627aaaa8920e7f89dfdbf6d3b2f0",
+            "captureRequestedAfterNativeFinishMs": 416,
+            "centerFrameVisible": false,
+            "autoWinState": "disabled"
+          },
+          {
+            "alias": "frame-10",
+            "sourceSha256": "5fa0bd27a6457bfe5b55214f3a8f792fa19732a0e673637f5af12376c74de03f",
+            "captureRequestedAfterNativeFinishMs": 749,
+            "centerFrameVisible": false,
+            "autoWinState": "disabled"
+          },
+          {
+            "alias": "frame-11",
+            "sourceSha256": "5e29e2a0ad4ad42b8705c7fd882f5aa79a733372b1aaae45f735f0cc975d1d13",
+            "captureRequestedAfterNativeFinishMs": 1120,
+            "centerFrameVisible": true,
+            "autoWinState": "disabled"
+          },
+          {
+            "alias": "frame-12",
+            "sourceSha256": "72c7fb3d1bb1a367fab2b9a992842a273882e2e5f5dc0db9690fc6059464bf73",
+            "captureRequestedAfterNativeFinishMs": 1483,
+            "centerFrameVisible": true,
+            "autoWinState": "disabled"
+          },
+          {
+            "alias": "frame-13",
+            "sourceSha256": "f9adcba15892341af76aecf89ecc9548999c09ae422975adc951494953e3a716",
+            "captureRequestedAfterNativeFinishMs": 1934,
+            "centerFrameVisible": true,
+            "autoWinState": "unknown"
+          },
+          {
+            "alias": "frame-14",
+            "sourceSha256": "8b4a804c8a04840565a3368a128cacf3a9f503d42fc8db483bee0f5b79bd7bbc",
+            "captureRequestedAfterNativeFinishMs": 2361,
+            "centerFrameVisible": true,
+            "autoWinState": "enabled"
+          }
+        ],
+        "mousePressedCountAfterNativeFinish": 1,
+        "mousePressedAfterNativeFinishMs": 1813,
+        "mouseReleasedAfterNativeFinishMs": 1814,
+        "consecutiveVisibleDisabledFramesBeforeClick": 2
+      }
+    },
+    {
+      "alias": "new-connection-network-latency-unconfirmed",
+      "reportSha256": "49c9739d5558ac0aaffa6bfc084b8669d910c9ab0f4f9e95a8e71277593895ea",
+      "reportStatus": "passed",
+      "reasonCode": null,
+      "acceptedChecks": [
+        "AUTOMATIC_COUNTDOWN_NORMAL_WINDOW",
+        "AUTO_WIN_RELOAD_ENABLE_READBACK"
+      ],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 0,
+      "timing": {
+        "fixedMs": 300000,
+        "addMs": 0,
+        "operationStep": 2,
+        "protocolRemainingMs": 9000,
+        "networkAllowanceMs": 151,
+        "quantizationAllowanceMs": 2000,
+        "totalUncertaintyMs": 2151,
+        "budgetAtResponseAfterSafetyMarginMs": 6599,
+        "responseIntervalMs": 2254.4,
+        "serverElapsedDeltaMs": 2000,
+        "sameSampleHand": true,
+        "sameSampleStep": true,
+        "sameSamplePageEpoch": true,
+        "samples": [
+          {
+            "displayedSeconds": 11.0,
+            "elapsedSeconds": 289,
+            "roundTripMs": 117.5,
+            "displayDelayMs": 4.0,
+            "displayProtocolResidualMs": 4.0
+          },
+          {
+            "displayedSeconds": 9.0,
+            "elapsedSeconds": 291,
+            "roundTripMs": 150.2,
+            "displayDelayMs": 2.4,
+            "displayProtocolResidualMs": 2.4
+          }
+        ]
+      },
+      "captures": [
+        {
+          "segmentOrdinal": 1,
+          "eventCount": 5,
+          "eventsFileSha256": "130644f05736ae5e6760add905dad6e168ee49fa4700796e956adb90d181cb39",
+          "manifestEventsSha256": "3a30fa0b1d8e7e1c6db5455dcbe2a7aa19492ef352b1003c2399fdf5014ae4bc",
+          "originHandOrdinal": 2,
+          "archiveHandOrdinal": 1,
+          "containsExecutableWindow": false,
+          "pureReducerMatchesExpected": true
+        }
+      ],
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 0,
+        "handEnds": 0,
+        "matchEnds": 0,
+        "reconnects": 0,
+        "handOrdinal": 2,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": false
+      },
+      "observation": {
+        "connected": true,
+        "queued": 0,
+        "reasonCode": null,
+        "overflow": false,
+        "drainedMatchesFinalCursor": true
+      },
+      "autoWin": {
+        "readbackState": "enabled",
+        "readbackVerified": true,
+        "clickedToEnable": true,
+        "nativeRestoreRevision": 2,
+        "actualTriggerConfirmed": false
+      },
+      "injection": {
+        "kind": "cdp-network-latency-before-new-websocket",
+        "sourceSha256": "0942f134ad8f19a254a49f744c7a32997c257f485f212ffb3e00ecde9b95525b",
+        "requestedLatencyMs": 750,
+        "applied": true,
+        "reset": true,
+        "controlledRpcLatencyConfirmed": false
+      },
+      "exclusion": {
+        "code": "NETWORK_LATENCY_NOT_OBSERVED",
+        "controlledNetworkDelayAccepted": false
+      },
+      "identity": {
+        "sameMatchAsFirstHandGroup": true,
+        "sameHandAsFirstHandGroup": false,
+        "sameMatchAsDisabledReconnectRun": true,
+        "sameHandAsDisabledReconnectRun": true,
+        "originalLedgerReused": true,
+        "ledgerHandOrdinal": 2,
+        "crossHandTransitionObserved": false
       }
     }
   ],

@@ -13,10 +13,13 @@ export interface EgoPagePort {
 export interface PageCursor { generation: number; pageEpoch: number; step: number }
 export function bridgeCall(page: EgoPagePort, method: string, argument?: unknown): Promise<any> {
   requireThat(['read', 'drain', 'pause', 'sync', 'ackSync', 'prepare', 'dispatch', 'reconnect', 'restore', 'ackAutoWin', 'ackTiming', 'ensureAutoWin', 'verifyAutoWin', 'automaticTiming'].includes(method), 'BRIDGE_METHOD_INVALID');
+  if (method === 'ensureAutoWin') requireThat(argument == null || typeof argument === 'object' && !Array.isArray(argument) &&
+    Object.keys(argument).length === 1 && (argument as {purpose?:unknown}).purpose === 'reconnect', 'AUTO_WIN_PURPOSE_INVALID');
   // The ego helper owns CDP; the pinned child forwards these bounded operations
   // over the same whitelist instead of creating another browser or OCR service.
   if (page.cdp && (method === 'ensureAutoWin' || method === 'verifyAutoWin')) {
-    return import('./auto-win.ts').then(adapter => method === 'ensureAutoWin' ? adapter.ensureAutoWin(page) : adapter.verifyAutoWin(page));
+    return import('./auto-win.ts').then(adapter => method === 'ensureAutoWin'
+      ? adapter.ensureAutoWin(page,undefined,true,argument ? 'reconnect':'resume') : adapter.verifyAutoWin(page));
   }
   if (page.cdp && method === 'automaticTiming') return import('./automatic-timing.ts').then(adapter => adapter.collectAutomaticTiming(page));
   return page.evaluate(({ method, argument }) => {

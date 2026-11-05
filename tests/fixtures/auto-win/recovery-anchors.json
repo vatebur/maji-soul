@@ -1,0 +1,439 @@
+{
+  "schemaVersion": 1,
+  "clientVersion": "4.0.51",
+  "viewport": {
+    "width": 2036,
+    "height": 918,
+    "devicePixelRatio": 1
+  },
+  "purpose": "center-frame-visible-not-native-ready",
+  "fullScreenshotsTracked": false,
+  "anchors": [
+    {
+      "x": 900,
+      "y": 390,
+      "rgb": [
+        69,
+        67,
+        78
+      ],
+      "tolerance": 4
+    },
+    {
+      "x": 1135,
+      "y": 335,
+      "rgb": [
+        69,
+        67,
+        78
+      ],
+      "tolerance": 4
+    },
+    {
+      "x": 945,
+      "y": 440,
+      "rgb": [
+        69,
+        67,
+        78
+      ],
+      "tolerance": 4
+    },
+    {
+      "x": 1080,
+      "y": 280,
+      "rgb": [
+        69,
+        67,
+        78
+      ],
+      "tolerance": 4
+    }
+  ],
+  "samples": [
+    {
+      "label": "trace-07",
+      "sourceSha256": "3c26cf5adc9c62f6661d21aefdcf4744a6a716a2d4e05386b904f8e1ba2f69fb",
+      "observation": "table-center-visible",
+      "expected": true,
+      "rgba": [
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "trace-08",
+      "sourceSha256": "59febf165781d896a0ba9da92c92c556d69c344ded4e1c51a9aa839ce47b829e",
+      "observation": "table-center-visible",
+      "expected": true,
+      "rgba": [
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "trace-09",
+      "sourceSha256": "6df374c2f6b4300030b6fd00e111ac4963ca0b03f7718757ba7a13fd90303c4f",
+      "observation": "reconnect-modal",
+      "expected": false,
+      "rgba": [
+        [
+          24,
+          32,
+          53,
+          255
+        ],
+        [
+          25,
+          32,
+          54,
+          255
+        ],
+        [
+          25,
+          33,
+          56,
+          255
+        ],
+        [
+          26,
+          33,
+          56,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "trace-10",
+      "sourceSha256": "efbaeb7705267acd209ee312cd3c8456d8c2280fadc8cca5bacf861cd78bf6a4",
+      "observation": "reconnect-modal",
+      "expected": false,
+      "rgba": [
+        [
+          25,
+          32,
+          53,
+          255
+        ],
+        [
+          24,
+          32,
+          53,
+          255
+        ],
+        [
+          26,
+          33,
+          56,
+          255
+        ],
+        [
+          26,
+          34,
+          56,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "trace-11",
+      "sourceSha256": "7100bc1451e3eb93d30ed960a4bccb2c66704bc43230b2d1a33daac674e21934",
+      "observation": "table-center-visible",
+      "expected": true,
+      "rgba": [
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "trace-12",
+      "sourceSha256": "1b36c999ae4632f8c2c4731c8f62eca56e9227ebd0b9629beb4f76f411487f8d",
+      "observation": "table-center-visible",
+      "expected": true,
+      "rgba": [
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "diagnostic-07",
+      "sourceSha256": "e4691caf151a06fce7aa96e6955259a190fdecfc106fdde3fd08270cfd51cb8e",
+      "observation": "table-center-visible",
+      "expected": true,
+      "rgba": [
+        [
+          70,
+          68,
+          79,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "diagnostic-08",
+      "sourceSha256": "0a14d8a6dcfb849f5f9d95b5a49e866e4351c9c314cd453582cfcc00c8452331",
+      "observation": "empty-table-center-visible",
+      "expected": true,
+      "rgba": [
+        [
+          70,
+          68,
+          79,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "diagnostic-09",
+      "sourceSha256": "af9925a5665ab97f4a030820d05f5b99cd15dabeb1c78ceb9b333ee1e7797fe6",
+      "observation": "reconnect-modal",
+      "expected": false,
+      "rgba": [
+        [
+          24,
+          32,
+          53,
+          255
+        ],
+        [
+          24,
+          32,
+          54,
+          255
+        ],
+        [
+          26,
+          33,
+          56,
+          255
+        ],
+        [
+          26,
+          33,
+          56,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "diagnostic-10",
+      "sourceSha256": "95b9eb06f38e07ba6c229d42db90fe829373ee5f163df3d70dd7bc0897754c4c",
+      "observation": "reconnect-modal",
+      "expected": false,
+      "rgba": [
+        [
+          25,
+          32,
+          53,
+          255
+        ],
+        [
+          24,
+          32,
+          53,
+          255
+        ],
+        [
+          26,
+          33,
+          56,
+          255
+        ],
+        [
+          26,
+          34,
+          56,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "diagnostic-11",
+      "sourceSha256": "58e53c0407064b1f90ec91b76a9e0166e1c3a22678ee2d3920b49ec8949c7f92",
+      "observation": "table-center-visible",
+      "expected": true,
+      "rgba": [
+        [
+          70,
+          68,
+          79,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ]
+      ]
+    },
+    {
+      "label": "diagnostic-12",
+      "sourceSha256": "87df3219823f1ff6192043896d0097497b25a087e6a6f47764e39983d3434c67",
+      "observation": "table-center-visible",
+      "expected": true,
+      "rgba": [
+        [
+          70,
+          68,
+          79,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ],
+        [
+          69,
+          68,
+          78,
+          255
+        ],
+        [
+          69,
+          67,
+          78,
+          255
+        ]
+      ]
+    }
+  ]
+}
