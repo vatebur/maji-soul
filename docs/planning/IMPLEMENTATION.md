@@ -6,9 +6,11 @@
 
 接口实现以 [HTTP 与 SSE](../interfaces/API.md)、[内部模块契约](../interfaces/INTERNAL_INTERFACES.md) 和 [OpenAPI](../interfaces/openapi.json) 为基线，变更时同步文档与 schema。
 
-2026-11-05 实施进度：阶段 1 的存储 worker、状态／同步、生产桥接及单执行器已实现；普通弃牌、重连同步、最终发送前暂停已通过当前客户端验收，见[实场记录](../validation/phase1-live.md)、[实现范围](../validation/state-foundation.md)与[恢复测试](../validation/recovery.md)。新增自动倒计时／自动和牌读回与恢复、阶段 2 动作候选及台账确认已实现并完成离线回归；当前客户端新增实场证据仍待补齐，详见[自动化门槛](../validation/automation-gates.md)和[动作映射](../validation/phase2-actions.md)。持续自动运行仍关闭。阶段 0 其他门槛、阶段 2 完整动作与整场尚未通过。下表继续描述目标阶段。
+2026-11-06 当前进度：阶段 1 的存储 worker、状态／同步、生产桥接及单执行器已实现；普通弃牌、重连同步、最终发送前暂停已有当前客户端实证，见[实场记录](../validation/phase1-live.md)、[实现范围](../validation/state-foundation.md)与[恢复测试](../validation/recovery.md)。自动期限、自动和牌读回／恢复、阶段 2 动作候选及台账确认已实现并完成离线回归；后续实场结果与限制统一记录在[自动化门槛](../validation/automation-gates.md)和[动作映射](../validation/phase2-actions.md)。主程序持续自动运行保持关闭，阶段 0 其他门槛、阶段 2 完整动作、双模式整场及同房续局尚未通过。下表继续描述目标阶段。
 
-第 3 项[跨小局与恢复协调](../validation/lifecycle-coordination.md)已补小局结束、新局、连庄、整场结果及同台账恢复，离线验证涵盖旧许可／旧决策、跨会话派发竞态与冲突结算。通过 `live-observe` 有时限观察，下一步由用户验证当前客户端实场，再接双模式整场与同房续局。
+第 3 项[跨小局与恢复协调](../validation/lifecycle-coordination.md)已补小局结束、新局、连庄、整场结果及同台账恢复；离线验证涵盖旧许可／旧决策、跨会话派发竞态与冲突结算。后续已取得同 Actor 重连、真实跨小局／连庄／换庄、荒牌流局和新小局自动开启“和”并读回的局部实证，详见[证据摘要](../validation/automation-live-20261106-evidence.json)第 10、15、22、23、27 条。原始 blocked 报告及后来失效的开关证明保持原状。第 27 条和牌请求与权威结果虽有关联，仍缺请求前有效开关证明；第 28 条只有观察结束后的页面终态／溢出摘要，尾部与终局截图未取得，不能作为权威 MatchEnded 或完整整场证据。
+
+本轮用户已授权 root 负责受控实场与集成，子 agent 并行开发和审查。当前用户已主动关闭浏览器空间并暂缓实测，所有实场工作暂停，等待恢复指示。`live-observe` 默认 30 秒、最多 30 分钟，沿用原台账；恢复实测后仍先补齐严格自动和牌触发和包含权威 MatchEnded 的完整生命周期证据，再推进阶段 2 实场及双模式整场验收。
 
 ## 目录
 
