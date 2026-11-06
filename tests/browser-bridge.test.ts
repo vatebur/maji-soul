@@ -15,8 +15,8 @@ message Empty {}
 message ReqAuthGame { uint32 account_id=1; string token=2; string game_uuid=3; }
 message ResAuthGame { repeated uint32 seat_list=1; Error error=2; string private_note=3; }
 message ReqLifecycle { string token=1; string game_uuid=2; uint32 account_id=3; }
-message ReqInputOperation { uint32 type=1; string tile=2; bool moqie=3; uint32 timeuse=4; uint32 index=5; }
-message ReqInputChiPengGang { uint32 type=1; uint32 index=2; uint32 timeuse=3; }
+message ReqInputOperation { uint32 type=1; uint32 index=2; string tile=3; bool cancel_operation=4; bool moqie=5; uint32 timeuse=6; bool auto_operation=11; }
+message ReqInputChiPengGang { uint32 type=1; uint32 index=2; bool cancel_operation=3; uint32 timeuse=6; }
 message Response { Error error=1; string private_note=2; }
 message ReqSyncGame { string round_id=1; uint32 step=2; }
 message ResEnterGame { Error error=1; bool is_end=2; uint32 step=3; GameRestore game_restore=4; string private_note=5; }
@@ -559,16 +559,31 @@ test('automatic win proof expires monotonically and cannot survive a reconnect',
 });
 
 test('client win requests revoke a prepared discard and are counted separately', async () => {
-  for (const type of [8,9]) {
+  for (const [method,type] of [['.lq.FastTest.inputOperation',8],['.lq.FastTest.inputChiPengGang',9]] as const) {
     const f=fixture(),input=await f.opened(),prepared=f.bridge.prepare(input);
-    f.socket.send(requestFrame(18,'.lq.FastTest.inputOperation',{type}));
-    const wire=packetId(f.socket.sent.at(-1)!);f.socket.receive(responseFrame(wire,'.lq.FastTest.inputOperation'));
+    f.socket.send(requestFrame(18,method,{type}));
+    const wire=packetId(f.socket.sent.at(-1)!);f.socket.receive(responseFrame(wire,method));
     const before=f.socket.sent.length;
     assert.equal((await f.bridge.dispatch({command:input.command,token:prepared.token})).delivery,'not-sent');
     assert.equal(f.socket.sent.length,before);
     assert.equal(f.bridge.read().stats.clientWinRequests,1);
+    assert.equal(f.bridge.read().lastClientWin.method,method);
     assert.equal(f.bridge.read().stats.bridgeActionSends,0);
     f.bridge.restore();
+  }
+});
+
+test('cancelled and non-win client inputs revoke permits without creating win evidence',async()=>{
+  for(const method of ['.lq.FastTest.inputOperation','.lq.FastTest.inputChiPengGang'])for(const request of [
+    {type:9,cancel_operation:true},{type:0,cancel_operation:true},{type:3},{type:123},
+  ]){
+    const f=fixture(),input=await f.opened(),prepared=f.bridge.prepare(input),generation=f.bridge.read().generation;
+    f.socket.send(requestFrame(18,method,request));
+    const id=packetId(f.socket.sent.at(-1)!);f.socket.receive(responseFrame(id,method));
+    const read=f.bridge.read(),sent=f.socket.sent.length;
+    assert.equal(read.generation,generation+1);assert.equal(read.stats.clientWinRequests,0);assert.equal(read.lastClientWin,null);
+    assert.equal((await f.bridge.dispatch({command:input.command,token:prepared.token})).delivery,'not-sent');
+    assert.equal(f.socket.sent.length,sent);assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
   }
 });
 
@@ -585,22 +600,93 @@ test('a win offer reserves the complete operation window for the client', async 
 });
 
 test('win diagnostics correlate offered client request, receipt and authoritative own win', async () => {
-  const f=fixture();await f.opened();
-  f.action('ActionDealTile',2,{seat:0,tile:'2m',left_tile_count:67,
-    operation:{seat:0,operation_list:[{type:8}],time_fixed:300000}});
-  f.bridge.drain();f.autoWin();
-  f.socket.send(requestFrame(19,'.lq.FastTest.inputOperation',{type:8}));
-  const id=packetId(f.socket.sent.at(-1)!);
-  assert.equal(f.bridge.read().lastClientWin.delivery,'pending');
-  f.socket.receive(responseFrame(id,'.lq.FastTest.inputOperation'));
-  f.action('ActionHule',3,{hules:[{seat:0,zimo:true}]});
-  const read=f.bridge.read();
-  assert.equal(read.lastClientWin.offered,true);assert.equal(read.lastClientWin.autoWinVerifiedAtRequest,true);
-  assert.equal(read.lastClientWin.delivery,'accepted');assert.equal(read.lastClientWin.step,2);
-  assert.equal(read.lastOwnWin.clientWinRequestId,id);assert.equal(read.lastOwnWin.step,3);
-  assert.equal(read.lastOwnWin.kind,'tsumo');assert.equal(read.lastOwnWin.pageEpoch,read.pageEpoch);
-  assert.equal(read.stats.authoritativeOwnWins,1);assert.equal(read.stats.bridgeActionSends,0);
-  f.bridge.restore();
+  for(const [method,type,zimo]of [['.lq.FastTest.inputOperation',8,true],['.lq.FastTest.inputChiPengGang',9,false]] as const){
+    const f=fixture();await f.opened();
+    f.action(zimo?'ActionDealTile':'ActionDiscardTile',2,{seat:zimo?0:1,tile:'2m',left_tile_count:67,
+      operation:{seat:0,operation_list:[{type}],time_fixed:300000}});
+    f.bridge.drain();f.autoWin();
+    f.socket.send(requestFrame(19,method,{type,tile:'PRIVATE_INPUT_SENTINEL',auto_operation:true}));
+    const id=packetId(f.socket.sent.at(-1)!);
+    assert.equal(f.bridge.read().lastClientWin.delivery,'pending');
+    f.socket.receive(responseFrame(id,method,{private_note:'PRIVATE_RECEIPT_SENTINEL'}));
+    f.action('ActionHule',3,{hules:[{seat:0,zimo}]});
+    const read=f.bridge.read();
+    assert.equal(read.lastClientWin.method,method);assert.equal(read.lastClientWin.offered,true);
+    assert.equal(read.lastClientWin.autoWinVerifiedAtRequest,true);
+    assert.equal(read.lastClientWin.delivery,'accepted');assert.equal(read.lastClientWin.step,2);
+    assert.equal(typeof read.lastClientWin.receiptObservedAt,'string');
+    assert.equal(read.lastOwnWin.clientWinRequestId,id);assert.equal(read.lastOwnWin.step,3);
+    assert.equal(read.lastOwnWin.kind,zimo?'tsumo':'ron');assert.equal(read.lastOwnWin.pageEpoch,read.pageEpoch);
+    assert.equal(read.stats.authoritativeOwnWins,1);assert.equal(read.stats.bridgeActionSends,0);
+    assert.equal(JSON.stringify(read).includes('PRIVATE_INPUT_SENTINEL'),false);
+    assert.equal(JSON.stringify(read).includes('PRIVATE_RECEIPT_SENTINEL'),false);f.bridge.restore();
+  }
+});
+
+test('rejected and malformed client win responses never become accepted receipts',async()=>{
+  for(const method of ['.lq.FastTest.inputOperation','.lq.FastTest.inputChiPengGang'])for(const response of ['rejected','malformed']){
+    const f=fixture();await f.opened();
+    f.action('ActionDiscardTile',2,{seat:1,tile:'2m',operation:{seat:0,operation_list:[{type:9}]}});
+    f.socket.send(requestFrame(19,method,{type:9}));const id=packetId(f.socket.sent.at(-1)!);
+    f.socket.receive(response==='rejected'?responseFrame(id,method,{error:{code:7,message:'PRIVATE_ERROR_SENTINEL'}}):
+      new Uint8Array([3,id&255,id>>8,...encode('lq.Wrapper',{data:new Uint8Array([255])})]));
+    const read=f.bridge.read();
+    assert.equal(read.lastClientWin.method,method);assert.equal(read.lastClientWin.offered,true);
+    assert.equal(read.lastClientWin.delivery,response==='rejected'?'rejected':'unknown');
+    assert.equal(read.lastOwnWin,null);assert.equal(read.stats.bridgeActionSends,0);
+    assert.equal(JSON.stringify(read).includes('PRIVATE_ERROR_SENTINEL'),false);f.bridge.restore();
+  }
+});
+
+test('non-offered client win requests cannot link an authoritative own win',async()=>{
+  for(const method of ['.lq.FastTest.inputOperation','.lq.FastTest.inputChiPengGang']){
+    const f=fixture();await f.opened();
+    f.socket.send(requestFrame(19,method,{type:9}));const id=packetId(f.socket.sent.at(-1)!);
+    f.socket.receive(responseFrame(id,method));f.action('ActionHule',2,{hules:[{seat:0,zimo:false}]});
+    const read=f.bridge.read();assert.equal(read.lastClientWin.offered,false);
+    assert.equal(read.lastClientWin.priorAutoWinReadback,null);assert.equal(read.lastOwnWin.clientWinRequestId,null);
+    assert.equal(read.stats.bridgeActionSends,0);f.bridge.restore();
+  }
+});
+
+test('other and retired sockets cannot create current-game win diagnostics',async()=>{
+  for(const method of ['.lq.FastTest.inputOperation','.lq.FastTest.inputChiPengGang']){
+    const f=fixture();await f.opened();const other:any=new f.window.WebSocket('other');
+    other.send(requestFrame(19,method,{type:9}));other.receive(responseFrame(packetId(other.sent.at(-1)!),method));
+    assert.equal(f.bridge.read().stats.clientWinRequests,0);assert.equal(f.bridge.read().lastClientWin,null);
+    other.send(requestFrame(20,'.lq.FastTest.authGame',{account_id:42,game_uuid:'next-game',token:'PRIVATE_AUTH_SENTINEL'}));
+    const authId=packetId(other.sent.at(-1)!);other.receive(responseFrame(authId,'.lq.FastTest.authGame',{seat_list:[42]}));
+    f.socket.send(requestFrame(21,method,{type:9}));f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),method));
+    const read=f.bridge.read();assert.equal(read.stats.clientWinRequests,0);assert.equal(read.lastClientWin,null);
+    assert.equal(read.stats.bridgeActionSends,0);assert.equal(JSON.stringify(read).includes('PRIVATE_AUTH_SENTINEL'),false);f.bridge.restore();
+  }
+});
+
+test('a late previous-hand win receipt cannot replace the current request or revive its prior readback',async()=>{
+  for(const method of ['.lq.FastTest.inputOperation','.lq.FastTest.inputChiPengGang']){
+    const f=fixture();await f.opened();
+    f.action('ActionDiscardTile',2,{seat:1,tile:'2m',operation:{seat:0,operation_list:[{type:9}]}});
+    f.socket.send(requestFrame(19,method,{type:9}));const oldId=packetId(f.socket.sent.at(-1)!);
+    f.action('ActionHule',3,{hules:[{seat:1,zimo:true}]});f.action('ActionNewRound',0,{tiles:['1m'],md5:'next-hand'});
+    f.action('ActionDiscardTile',1,{seat:1,tile:'2m',operation:{seat:0,operation_list:[{type:9}]}});
+    f.socket.send(requestFrame(20,method,{type:9}));const currentId=packetId(f.socket.sent.at(-1)!);
+    f.socket.receive(responseFrame(oldId,method,{error:{code:7,message:'PRIVATE_OLD_RECEIPT'}}));
+    let read=f.bridge.read();assert.equal(read.lastClientWin.requestId,currentId);assert.equal(read.lastClientWin.delivery,'pending');
+    assert.equal(read.lastClientWin.sourceStream,1);assert.equal(read.lastClientWin.priorAutoWinReadback,null);
+    f.socket.receive(responseFrame(currentId,method));f.action('ActionHule',2,{hules:[{seat:0,zimo:false}]});
+    read=f.bridge.read();assert.equal(read.lastClientWin.delivery,'accepted');assert.equal(read.lastOwnWin.clientWinRequestId,currentId);
+    assert.equal(read.lastOwnWin.sourceStream,1);assert.equal(read.stats.bridgeActionSends,0);
+    assert.equal(JSON.stringify(read).includes('PRIVATE_OLD_RECEIPT'),false);f.bridge.restore();
+  }
+});
+
+test('unreadable call inputs preserve forwarding without fabricating a win record',async()=>{
+  const f=fixture();await f.opened();const sent=f.socket.sent.length,generation=f.bridge.read().generation;
+  f.socket.send(new Uint8Array([2,19,0,...encode('lq.Wrapper',{name:'.lq.FastTest.inputChiPengGang',data:new Uint8Array([255])})]));
+  const read=f.bridge.read();assert.equal(f.socket.sent.length,sent+1);assert.equal(read.reason,null);
+  assert.equal(read.generation,generation+1);assert.equal(read.lastClientWin,null);assert.equal(read.stats.clientWinRequests,0);
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.inputChiPengGang',{error:{code:7}}));
+  assert.equal(read.stats.bridgeActionSends,0);f.bridge.restore();
 });
 
 test('automatic timing rejects manual provenance, forged samples and wrong protocol steps', async () => {
@@ -698,21 +784,25 @@ test('phase 2 permits are revoked by client winning, ingress and reconnect',asyn
 });
 
 test('an immediate client win retains the preceding switch readback without weakening send fences',async()=>{
-  const f=fixture();await f.opened();
-  f.action('ActionDealTile',2,{seat:0,tile:'2m',left_tile_count:67,operation:{seat:0,operation_list:[{type:8}],time_fixed:300000}});
-  // Unity handles the offer immediately, before an asynchronous screenshot could run.
-  f.socket.send(requestFrame(22,'.lq.FastTest.inputOperation',{type:8}));
-  const id=packetId(f.socket.sent.at(-1)!);f.socket.receive(responseFrame(id,'.lq.FastTest.inputOperation'));
-  f.action('ActionHule',3,{hules:[{seat:0,zimo:true}]});
-  const result=f.bridge.read();
-  assert.equal(result.lastClientWin.autoWinVerifiedAtRequest,false);
-  assert.equal(result.lastClientWin.priorAutoWinReadback.state,'enabled');
-  assert.equal(result.lastClientWin.priorAutoWinReadback.step,1);
-  assert.equal(result.lastClientWin.step,2);assert.equal(result.lastOwnWin.clientWinRequestId,id);
-  assert.ok(result.lastClientWin.priorAutoWinReadback.ageAtRequestMs>=result.lastClientWin.priorAutoWinReadback.ageAtOfferMs);
-  f.action('ActionNewRound',0,{tiles:['1m'],md5:'next-hand'});
-  assert.equal(f.bridge.read().lastAutoWinReadback,null);assert.equal(f.bridge.read().lastClientWin,null);
-  f.bridge.restore();
+  for(const [method,type,zimo]of [['.lq.FastTest.inputOperation',8,true],['.lq.FastTest.inputChiPengGang',9,false]] as const){
+    const f=fixture();await f.opened();
+    f.action(zimo?'ActionDealTile':'ActionDiscardTile',2,{seat:zimo?0:1,tile:'2m',left_tile_count:67,
+      operation:{seat:0,operation_list:[{type}],time_fixed:300000}});
+    // Unity handles the offer immediately, before an asynchronous screenshot could run.
+    f.socket.send(requestFrame(22,method,{type}));
+    const id=packetId(f.socket.sent.at(-1)!);f.socket.receive(responseFrame(id,method));
+    f.action('ActionHule',3,{hules:[{seat:0,zimo}]});
+    const result=f.bridge.read();
+    assert.equal(result.lastClientWin.method,method);assert.equal(result.lastClientWin.autoWinVerifiedAtRequest,false);
+    assert.equal(result.lastClientWin.priorAutoWinReadback.state,'enabled');
+    assert.equal(result.lastClientWin.priorAutoWinReadback.step,1);
+    assert.equal(result.lastClientWin.step,2);assert.equal(result.lastOwnWin.clientWinRequestId,id);
+    assert.ok(result.lastClientWin.priorAutoWinReadback.ageAtRequestMs>=result.lastClientWin.priorAutoWinReadback.ageAtOfferMs);
+    assert.equal(result.stats.bridgeActionSends,0);
+    f.action('ActionNewRound',0,{tiles:['1m'],md5:'next-hand'});
+    assert.equal(f.bridge.read().lastAutoWinReadback,null);assert.equal(f.bridge.read().lastClientWin,null);
+    f.bridge.restore();
+  }
 });
 
 test('local toolbar input, keys, resizing and scrolling revoke final sends and listeners are removed',async()=>{

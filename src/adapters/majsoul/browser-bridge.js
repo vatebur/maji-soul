@@ -336,16 +336,18 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     let clientWinType = null, winRecord = null;
     if (!flow.retired && this === gameSocket && (packet.name === '.lq.FastTest.inputOperation' || packet.name === '.lq.FastTest.inputChiPengGang')) {
       tokens.clear(); generation++; // manual/client action revokes prepared program commands
-      if (packet.name === '.lq.FastTest.inputOperation') {
-        try {
-          const input = body(rpcMap[packet.name].req, packet.data);
-          if (input.type === 8 || input.type === 9) { stats.clientWinRequests++; clientWinType = input.type; }
-        } catch { fail('CLIENT_OPERATION_DECODE_FAILED'); }
+      try {
+        const input = body(rpcMap[packet.name].req, packet.data);
+        if (!input.cancel_operation && (input.type === 8 || input.type === 9)) { stats.clientWinRequests++; clientWinType = input.type; }
+      } catch {
+        // Retain the existing own-turn error handling. The added call-response
+        // diagnostic must not change forwarding or control on decode failure.
+        if (packet.name === '.lq.FastTest.inputOperation') fail('CLIENT_OPERATION_DECODE_FAILED');
       }
     }
     const id = allocate(flow), rewritten = packet.bytes.slice(); rewritten[1] = id & 255; rewritten[2] = id >> 8;
     if (clientWinType !== null) {
-      winRecord = { requestId:id,type:clientWinType,pageEpoch,sourceStream:actionStream,step:lastStep,observedAt:iso(),delivery:'pending',
+      winRecord = { requestId:id,method:packet.name,type:clientWinType,pageEpoch,sourceStream:actionStream,step:lastStep,observedAt:iso(),delivery:'pending',
         offered:operation?.step===lastStep && operation.value.seat===ownSeat && !!operation.value.operation_list?.some(o=>o.type===clientWinType),
         autoWinVerifiedAtRequest:autoWin?.state==='enabled' && autoWin.pageEpoch===pageEpoch && autoWin.generation===generation-1 &&
           autoWin.step===lastStep && performance.now()<autoWin.expiresMonoMs,
