@@ -79,6 +79,44 @@ test('kuikae bans all physical variants of a forbidden rank while riichi only pe
   for(const c of reach) { assert.equal(mapActionToRequest(c.action,state,offered).params.type,7); }
 });
 
+test('observed duplicate riichi tiles bind each physical copy once and retain the first raw index', () => {
+  const page=(0,eval)(`(${createOperationRules.toString()})`)() as ReturnType<typeof createOperationRules>;
+  for(const drawn of ['5s','2p'] as const) {
+    const tiles:TileCode[]=drawn==='5s'?['2p','2p',...filler.filter(t=>t!=='2p')]:['2p',...filler.filter(t=>t!=='2p'),'4s'];
+    const s=seed(tiles,3);
+    const before=normalize(s.projection,'ActionDiscardTile',{seat:3,tile:'9m',moqie:true,is_liqi:false,is_wliqi:false}).reduce(reduceObservation,s.projection);
+    // The real failing offer was type 1 [] plus type 7 ['2p','2p'].
+    const offered={seat:0,time_fixed:60000,time_add:0,operation_list:[{type:1,combination:[]},{type:7,combination:['2p','2p']}]};
+    const original=structuredClone(offered);
+    const p=normalize(before,'ActionDealTile',{seat:0,tile:drawn,left_tile_count:68,operation:offered},3).reduce(reduceObservation,before);
+    const window=p.state!.operationWindow!;assertWindow(p.state!,window);
+    const reach=window.candidates.filter(c=>c.action.kind==='riichi-discard');assert.equal(reach.length,2);
+    assert.equal(new Set(reach.map(c=>c.id)).size,2);assert.equal(new Set(reach.map(c=>c.action.kind==='riichi-discard'&&c.action.tile)).size,2);
+    assert.deepEqual(page.legalOperationActions(p.state!,offered,'w','e').map(c=>c.action),window.candidates.map(c=>c.action));
+    assert.equal(reach.filter(c=>c.action.kind==='riichi-discard'&&c.action.tsumogiri).length,drawn==='2p'?1:0);
+    for(const candidate of reach) {
+      const action=candidate.action;assert.equal(action.kind,'riichi-discard');if(action.kind!=='riichi-discard')throw Error('WRONG_KIND');
+      assert.deepEqual(action.operation,{type:7,index:0,combination:'2p'});
+      const expected={method:'.lq.FastTest.inputOperation',params:{type:7,tile:'2p',moqie:action.tsumogiri,timeuse:0}};
+      assert.deepEqual(mapActionToRequest(action,p.state!,offered),expected);assert.deepEqual(page.mapActionToRequest(action,p.state!,offered),expected);
+      const forged={...action,operation:{...action.operation,index:1}};
+      assert.throws(()=>mapActionToRequest(forged,p.state!,offered),/ACTION_NOT_LEGAL/);
+      assert.throws(()=>page.mapActionToRequest(forged,p.state!,offered),/ACTION_NOT_LEGAL/);
+    }
+    assert.deepEqual(offered,original);
+  }
+});
+
+test('duplicate riichi allowlists preserve red identity without relaxing indexed operations or discard restrictions', () => {
+  const state=seed(['5mr','5m',...filler]).projection.state!,offered=offer(7,['0m','0m','5m','5m']);
+  const candidates=legalOperationActions(state,offered,'w','e');assert.equal(candidates.length,2);
+  assert.deepEqual(candidates.map(c=>mapActionToRequest(c.action,state,offered).params.tile),['0m','5m']);
+  assert.deepEqual(candidates.map(c=>'operation'in c.action&&c.action.operation.index),[0,2]);
+  for(const [type,combination] of [[1,'2p'],[2,'3m|4m'],[3,'5m|5m'],[4,'5m|0m|5m|5m'],[5,'5m|5m|0m'],[6,'5m|5m|5m']] as const)
+    assert.throws(()=>legalOperationActions(state,offer(type,[combination,combination]),'w','e'),/AMBIGUOUS_COMBINATION_INDEX/);
+  assert.throws(()=>legalOperationActions(state,offer(7,['2p|2p','2p|2p']),'w','e'),/INVALID_PROTOCOL_COMBINATION/);
+});
+
 test('closed kan binds all four physical tiles and normalizes authority before the replacement draw', () => {
   const s=seed(['5m','5mr','5m','5m',...filler.slice(0,10)]),state=s.projection.state!;
   const c=legalOperationActions(state,offer(4,['5m|0m|5m|5m']),'w','e')[0]!;

@@ -44,7 +44,10 @@ export function createOperationRules(identify?: (value: unknown) => string) {
       requireThat((op.change_tiles === undefined || Array.isArray(op.change_tiles) && op.change_tiles.length === 0) &&
         (op.change_tile_states === undefined || Array.isArray(op.change_tile_states) && op.change_tile_states.length === 0) && (op.gap_type ?? 0) === 0, 'UNVERIFIED_OPERATION_RESTRICTIONS');
       requireThat(op.combination === undefined || Array.isArray(op.combination) && op.combination.length <= 64 && op.combination.every(c => typeof c === 'string'), 'INVALID_PROTOCOL_COMBINATION');
-      requireThat(new Set(op.combination ?? []).size === (op.combination?.length ?? 0), 'AMBIGUOUS_COMBINATION_INDEX');
+      // Riichi sends tile + moqie, not a combination index. The current client
+      // can repeat an allowed tile; retain its first slot as the exact witness.
+      // Index-addressed calls/kans (and unverified discard duplicates) stay strict.
+      if (op.type !== 7) requireThat(new Set(op.combination ?? []).size === (op.combination?.length ?? 0), 'AMBIGUOUS_COMBINATION_INDEX');
     }
     const make = (action: ActionSpec, authority: LegalAction['authority'] = 'executor'): LegalAction => ({
       id: `action-${digest([windowId, action]).slice(0, 24)}`, action, authority, label: action.kind, evidenceEventIds: [evidenceId],

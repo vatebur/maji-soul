@@ -718,14 +718,17 @@ test('live offers require a fresh synchronization before automatic timing can be
   assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
 });
 
-test('the phase 2 Page gate rejects a legal call before allocating any game send',async()=>{
-  const f=fixture(),state=phase2State(['3m','4m'],'2m'),input=await f.openedCustom(state,phase2Offer(2,['3m|4m']));
-  const before=f.socket.sent.length;
-  assert.throws(()=>f.bridge.prepare(input),/PHASE2_ACTIONS_DISABLED/);
-  assert.equal(f.socket.sent.length,before);assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+test('the phase 2 Page gate rejects legal calls and repeated riichi offers before allocating any game send',async()=>{
+  for(const [state,offered] of [[phase2State(['3m','4m'],'2m'),phase2Offer(2,['3m|4m'])],
+    [phase2State([]),phase2Offer(7,['2p','2p'])]] as const) {
+    const f=fixture(),input=await f.openedCustom(state,offered),before=f.socket.sent.length;
+    assert.throws(()=>f.bridge.prepare(input),/PHASE2_ACTIONS_DISABLED/);
+    assert.equal(f.socket.sent.length,before);assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+  }
 });
 
 test('phase 2 final sends select exact call, kan and riichi protocol candidates',async t=>{
+  const repeatedRiichi=phase2State([]);repeatedRiichi.ownConcealed.at(-1)!.code='2p';
   const added=phase2State(['5mr']);added.ownConcealed=added.ownConcealed.slice(0,11);added.players[0].concealedCount={known:true,value:11};
   added.drawnTileRef={known:true,value:added.ownConcealed.at(-1)!.instanceId};
   added.players[0].melds=[{id:'prior-pon',actor:0,kind:'pon',tiles:['5m','5m','5m'],fromSeat:2,calledTileIndex:1}];
@@ -737,6 +740,7 @@ test('phase 2 final sends select exact call, kan and riichi protocol candidates'
     {name:'closed-kan-index-1',state:phase2State(['5m','5mr','5m','5m','7s','7s','7s','7s']),offered:phase2Offer(4,['7s|7s|7s|7s','5m|0m|5m|5m']),selected:1,method:'.lq.FastTest.inputOperation',params:{type:4,index:1,timeuse:0}},
     {name:'added-kan-red',state:added,offered:phase2Offer(6,['5m|5m|5m']),selected:0,method:'.lq.FastTest.inputOperation',params:{type:6,index:0,timeuse:0}},
     {name:'riichi-red-physical',state:phase2State(['5mr']),offered:phase2Offer(7,['0m','9p']),selected:0,method:'.lq.FastTest.inputOperation',params:{type:7,tile:'0m',moqie:false,timeuse:0}},
+    {name:'riichi-repeated-tile-drawn-copy',state:repeatedRiichi,offered:phase2Offer(7,['2p','2p']),selected:1,method:'.lq.FastTest.inputOperation',params:{type:7,tile:'2p',moqie:true,timeuse:0}},
   ];
   for(const c of cases)await t.test(c.name,async()=>{
     const f=fixture(256,true),input=await f.openedCustom(c.state,c.offered,c.selected),prepared=f.bridge.prepare(input),before=f.socket.sent.length;

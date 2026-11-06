@@ -2269,6 +2269,375 @@
         "sameRoomContinuationAccepted": false
       },
       "reviewSourceSha256": "6ed8bfa8377b3c77fa4bfea34128d5b85c90e939d2fc7a6fa49ded2a301585e1"
+    },
+    {
+      "alias": "new-hand-auto-win-restored-observation-blocked",
+      "reportSha256": "58e0a4126f6e39458e2ea8f9ba834a105cdd6de58271dc048b60db43f17242d2",
+      "reportStatus": "blocked",
+      "reasonCode": "AMBIGUOUS_COMBINATION_INDEX",
+      "reasonSource": "operation-candidate-normalization-before-ledger-ingress",
+      "acceptedChecks": [
+        "AUTO_WIN_NEW_HAND_ENABLE_READBACK",
+        "LIVE_HAND_END_AND_NEW_HAND",
+        "LIVE_EXHAUSTIVE_DRAW_SETTLEMENT",
+        "LIVE_DEALER_ROTATION",
+        "ORIGINAL_LEDGER_CROSS_HAND_RECONCILIATION"
+      ],
+      "configuredObservationDurationMs": 1800000,
+      "endedBeforeObservationDeadline": true,
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": null,
+      "observationSettled": null,
+      "faultCount": 0,
+      "timing": null,
+      "attempt": null,
+      "lifecycleSource": "original-ledger",
+      "lifecycle": {
+        "handStarts": 2,
+        "handEnds": 2,
+        "matchEnds": 0,
+        "reconnects": 0,
+        "handOrdinal": 3,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false
+      },
+      "boundaries": [
+        {
+          "sequence": 66,
+          "type": "HandEnded",
+          "receivedAt": "2026-11-06T01:46:41.591Z",
+          "reason": "win",
+          "resultLabel": "荣和",
+          "winners": [
+            1
+          ],
+          "scores": [
+            25000,
+            30200,
+            25000,
+            19800
+          ]
+        },
+        {
+          "sequence": 67,
+          "type": "HandStarted",
+          "receivedAt": "2026-11-06T01:46:59.788Z",
+          "ordinal": 2,
+          "roundWind": "1z",
+          "handNumber": 2,
+          "dealer": 1,
+          "honba": 0,
+          "scores": [
+            25000,
+            30200,
+            25000,
+            19800
+          ]
+        },
+        {
+          "sequence": 234,
+          "type": "HandEnded",
+          "receivedAt": "2026-11-06T01:58:21.631Z",
+          "reason": "draw",
+          "resultLabel": "荒牌流局",
+          "winners": [],
+          "scores": [
+            24000,
+            29200,
+            28000,
+            18800
+          ]
+        },
+        {
+          "sequence": 235,
+          "type": "HandStarted",
+          "receivedAt": "2026-11-06T01:58:34.348Z",
+          "ordinal": 3,
+          "roundWind": "1z",
+          "handNumber": 3,
+          "dealer": 2,
+          "honba": 1,
+          "scores": [
+            24000,
+            29200,
+            28000,
+            18800
+          ]
+        }
+      ],
+      "autoWin": {
+        "readbackState": "unknown",
+        "readbackVerified": false,
+        "actualTriggerConfirmed": false,
+        "clientWinRequests": {
+          "before": 0,
+          "after": 0
+        },
+        "authoritativeOwnWins": {
+          "before": 0,
+          "after": 0
+        },
+        "manualRestoreCommands": 0,
+        "recoveries": [
+          {
+            "trigger": "initial-sync",
+            "status": "unverified",
+            "attempted": true,
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "sourceStream": 0,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "observedAt": "2026-11-06T01:36:38.903Z",
+              "pageEpoch": 1,
+              "generation": 6,
+              "step": 1,
+              "rgbaSha256": "c81c921fe5d5bcc078bf7cf92d328eb8b235baef0791f73521ca1944600d61e5",
+              "clicked": true
+            },
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "operationStep": 1,
+            "generationBefore": 5
+          },
+          {
+            "trigger": "new-hand",
+            "status": "unverified",
+            "attempted": true,
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "sourceStream": 1,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "observedAt": "2026-11-06T01:47:05.293Z",
+              "pageEpoch": 1,
+              "generation": 88,
+              "step": 6,
+              "rgbaSha256": "b4e090e0445e8767d2a639900e73a95b51d25ae4e96933c2af8c2ce814bc9c9c",
+              "clicked": true
+            },
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "operationStep": 6,
+            "generationBefore": 87
+          },
+          {
+            "trigger": "new-hand",
+            "status": "unverified",
+            "attempted": true,
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "sourceStream": 2,
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "observedAt": "2026-11-06T01:58:38.820Z",
+              "pageEpoch": 1,
+              "generation": 280,
+              "step": 4,
+              "rgbaSha256": "28e827ef603cfc15fcd4d417ccbcfb890cad811e464d6b5ec2d50a6adcf15be6",
+              "clicked": true
+            },
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "operationStep": 4,
+            "generationBefore": 279
+          }
+        ],
+        "newHandRestorationEvidence": [
+          {
+            "handOrdinal": 2,
+            "completedEnableReadbackObserved": true,
+            "attempted": true,
+            "clickedToEnable": true,
+            "readbackObservedAt": "2026-11-06T01:47:05.293Z",
+            "pageEpoch": 1,
+            "sourceStream": 1,
+            "operationStep": 6,
+            "generationBefore": 87,
+            "generationAfter": 88,
+            "finalStatus": "unverified",
+            "finalReasonCode": "AUTO_WIN_READBACK_STALE",
+            "currentAuthorization": false,
+            "screenshot": {
+              "alias": "second-hand-auto-win-restored",
+              "sourceSha256": "d9658fca2ceedeb9fcd28b57a10c0fb4d0fdbe4794318ba3a6f6257c7481ec42",
+              "bytes": 1447193,
+              "classifiedState": "enabled",
+              "fullScreenshotTracked": false
+            },
+            "laterOrdinaryInput": {
+              "sequence": 12,
+              "observedAt": "2026-11-06T01:47:37.232Z",
+              "readbackCleared": true
+            }
+          },
+          {
+            "handOrdinal": 3,
+            "completedEnableReadbackObserved": true,
+            "attempted": true,
+            "clickedToEnable": true,
+            "readbackObservedAt": "2026-11-06T01:58:38.820Z",
+            "pageEpoch": 1,
+            "sourceStream": 2,
+            "operationStep": 4,
+            "generationBefore": 279,
+            "generationAfter": 280,
+            "finalStatus": "unverified",
+            "finalReasonCode": "AUTO_WIN_READBACK_STALE",
+            "currentAuthorization": false,
+            "screenshot": {
+              "alias": "third-hand-auto-win-restored",
+              "sourceSha256": "5e57761da51cc58738b539733fb43de84bb68d0728e69e095d6264264eb5ba1d",
+              "bytes": 1444946,
+              "classifiedState": "enabled",
+              "fullScreenshotTracked": false
+            },
+            "laterOrdinaryInput": {
+              "sequence": 38,
+              "observedAt": "2026-11-06T01:59:53.255Z",
+              "readbackCleared": true
+            }
+          }
+        ],
+        "historicalReadbackCanRepairFinalStatus": false
+      },
+      "capture": null,
+      "retainedWireEvidence": {
+        "sourceSha256": "26ce08aa2d96895ce0eecb57e03efd87b401d61256e9e78b9dd58206460df2c4",
+        "eventCount": 248,
+        "handGroups": [
+          {
+            "ordinal": 1,
+            "firstStep": 2,
+            "lastStep": 57,
+            "count": 56
+          },
+          {
+            "ordinal": 2,
+            "firstStep": 0,
+            "lastStep": 142,
+            "count": 143
+          },
+          {
+            "ordinal": 3,
+            "firstStep": 0,
+            "lastStep": 48,
+            "count": 49
+          }
+        ],
+        "sourceStepChainsContiguous": true,
+        "lastWireStep": 48,
+        "lastLedgerStep": 47,
+        "lastWireActionUncommitted": true,
+        "fullReplayValidated": false
+      },
+      "failure": {
+        "layer": "operation-candidate-normalization-before-ledger-ingress",
+        "code": "AMBIGUOUS_COMBINATION_INDEX",
+        "operationType": 7,
+        "candidateEntryCount": 2,
+        "distinctListedTiles": 1,
+        "failedWireStep": 48,
+        "failedActionCommitted": false,
+        "privateFragmentSha256": "dfae7584681c34453e5b323f349fde7af5dda8beafbf6125c07aaa03ebd369cf",
+        "storageFaultCount": 0,
+        "programActionAttempted": false,
+        "fixValidatedByThisRun": false
+      },
+      "originalLedger": {
+        "strictStoredEventSchemasPassed": true,
+        "pureReducerMatchesCheckpoint": true,
+        "validatesOnlyCommittedPrefix": true,
+        "checkpointStateHash": "c799547db2ee56532d90025cb8a59d3ba2c2b339c1858a69df7014e6eac08c79",
+        "checkpointSequence": 288,
+        "checkpointSourceStep": 47,
+        "sessionEventCount": 288,
+        "sessionEventTypeCounts": {
+          "HandEnded": 2,
+          "HandStarted": 2,
+          "MeldDeclared": 4,
+          "OperationOffered": 39,
+          "RiichiAccepted": 1,
+          "SyncApplied": 1,
+          "TileDiscarded": 123,
+          "TileDrawn": 116
+        },
+        "sessionDecisionCount": 0,
+        "sessionAttemptCount": 0,
+        "sessionObservedOwnActions": 29,
+        "sessionConfirmations": 0,
+        "sessionFaultCount": 0,
+        "globalAttemptStatuses": {
+          "confirmed": 2,
+          "not-dispatched": 5
+        },
+        "globalConfirmations": 2,
+        "globalLocalSlots": 7,
+        "globalSourceSlots": 7,
+        "priorSessionSlotCount": 7,
+        "globalUnresolvedAttempts": 0,
+        "anomalies": {
+          "confirmedWithoutConfirmation": 0,
+          "confirmationForNonconfirmed": 0,
+          "attemptWithoutLocalSlot": 0,
+          "attemptWithoutSourceSlot": 0,
+          "sourceSlotScopeMismatch": 0,
+          "foreignKeyViolations": 0
+        },
+        "hands": [
+          {
+            "ordinal": 1,
+            "status": "finished",
+            "reason": "win",
+            "scores": [
+              25000,
+              30200,
+              25000,
+              19800
+            ]
+          },
+          {
+            "ordinal": 2,
+            "status": "finished",
+            "reason": "draw",
+            "scores": [
+              24000,
+              29200,
+              28000,
+              18800
+            ]
+          },
+          {
+            "ordinal": 3,
+            "status": "playing"
+          }
+        ],
+        "staleHandPermitChallengePerformed": false
+      },
+      "identity": {
+        "sameMatchAsContinuousHandObservation": false,
+        "sameMatchAcrossHands": true,
+        "sameLedgerSessionAcrossHands": true,
+        "originalLedgerReused": true,
+        "ledgerHandOrdinals": [
+          1,
+          2,
+          3
+        ],
+        "crossHandTransitionObserved": true,
+        "dealerRepeatObserved": false,
+        "dealerRotations": 2,
+        "matchEndObserved": false,
+        "completeMatchHistoryObserved": false,
+        "sameRoomContinuationAccepted": false
+      },
+      "reviewSourceSha256": "5fabdceb6f47eac3a52ad1bec558a4c35ce89c6b671c22e262069fb58e5848a2"
     }
   ],
   "countdownLayout": {
