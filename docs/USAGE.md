@@ -20,6 +20,27 @@ vfox exec nodejs@24.22.1 -- npm run verify
 
 已有插件不用重复 add。已启用 vfox shell 集成时，可在项目目录直接运行 npm／cargo；上述显式 `vfox exec` 适合没有 shell 集成的终端。`npm test` 中的受控 HTTP 测试需要回环监听权限，不访问真实模型。
 
+## 阶段 1 离线验收
+
+```sh
+npm run acceptance:offline
+```
+
+测试入口保留原 50 项（交接 10 项、手动输入后读回 12 项、UI 驱动 28 项），另覆盖合法候选、失败帧留存和归档完整性。测试通过模拟页面、合成画面和临时台账验证边界，也随 `npm test` 运行。只运行这一入口时无需回环监听、浏览器、原台账或下载协议缓存。
+
+归档已停止写入的观察记录时，指定源根目录、运行标签和一个尚不存在的输出目录。例如将既有 `ui-autowin-2` 的报告、审计和帧副本收拢到被 Git 忽略的目录：
+
+```sh
+npm run acceptance:archive -- data/validation/automation-20261106-4ahIRV ui-autowin-2 \
+  data/validation/ui-autowin-2-offline-archive --manual-frames /private/tmp
+```
+
+`--manual-frames` 仅用于旧记录中存放在独立目录的手动截图；归档按审计记录中的运行标签和序号查找帧。输出可能包含原始协议、截图及其他私有数据，请保存在 `data/`。归档保留原文件字节和原报告状态，并在 `manifest.json` 中登记相对路径、大小、SHA-256、缺失项及可识别的引用异常。命令成功表示副本写入完成。报告中的权威结算、输入归因与各门槛结果仍须各自核对。
+
+UI 驱动的逐次读回审计保留作用域、结果和失败原因；有截图的失败帧随记录保存。后续作用域失效的失败记录可能仍包含此前的 ACK，须按它实际对应的时点使用。每次脚本输入保留预留、输入前帧及指针结果，并对弃牌保留同场、同局、同游标的权威弃牌事实。跳过只核对窗口推进。手动读回 helper 由调用方提供 `retainFailureFrame` 持久化失败截图，文件应存入 `<label>-ui/`，并返回其文件名供审计和归档定位。
+
+上述 npm 入口只读本机证据或运行模拟测试。驱动和交接模块由单一受控观察端显式装配。驱动需传入证据目录、绝对台账路径和像素参考源。`createTilePixelReader` 读取调用方的 `sourceDirectory`、`sources` 和 `skipSourceName`。每条 `sources` 用 `name` 指向 `maji-<name>.png`，用 `sha256` 固定原始截图，用 `labels` 标记 13 或 14 个可见槽位，未知槽位填 `null`。参考图及标签由本机保管。真实操作继续遵循当前暂停安排。自动和牌真实触发和权威整场结束仍按[自动化门槛](./validation/automation-gates.md)验收。
+
 ## 状态重放、检查与预演
 
 ```sh

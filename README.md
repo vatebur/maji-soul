@@ -12,6 +12,7 @@ vfox install rust@1.93.1
 vfox exec nodejs@24.22.1 -- npm ci
 vfox exec nodejs@24.22.1 -- npm run doctor
 vfox exec nodejs@24.22.1 -- npm run verify
+vfox exec nodejs@24.22.1 -- npm run acceptance:offline
 vfox exec nodejs@24.22.1 -- npm start -- replay tests/fixtures/phase1-discard
 vfox exec nodejs@24.22.1 -- npm start -- dry-run tests/fixtures/phase1-discard --candidate 13
 ```
@@ -26,7 +27,7 @@ vfox exec nodejs@24.22.1 -- npm start -- dry-run tests/fixtures/phase1-discard -
 | 全部文档、阅读顺序与维护规则 | [文档导航](./docs/README.md) |
 | 如何实现、模块怎样协作 | [程序模型](./docs/design/DOMAIN_MODEL.md) → [架构设计](./docs/design/ARCHITECTURE.md) |
 | HTTP、事件流与内部协议 | [HTTP 与事件流](./docs/interfaces/API.md)、[内部接口](./docs/interfaces/INTERNAL_INTERFACES.md)、[OpenAPI](./docs/interfaces/openapi.json) |
-| 接下来做什么、如何验收 | [实施与验收](./docs/planning/IMPLEMENTATION.md)、[待补证据](./docs/planning/DESIGN_REVIEW.md#3-实施时仍需补证据) |
+| 接下来做什么、如何验收 | [实施与验收](./docs/planning/IMPLEMENTATION.md)、[阶段 1 离线验收与证据归档](./docs/USAGE.md#阶段-1-离线验收) |
 
 ## 首版目标
 
