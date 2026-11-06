@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { acceptLivePage } from '../src/app/live.ts';
 import { acceptLiveViaNode } from '../src/app/live-broker.ts';
 import { replay } from '../src/app/replay.ts';
+import { digest } from '../src/domain/game/value.ts';
 import { createLiveScenario as scenario, ScriptedPage } from './live-helpers.ts';
 
 test('invalid observation durations are rejected before output creation, child startup or Page calls', async () => {
@@ -81,6 +82,48 @@ test('sync-only assembly has no transmission even with a legal ordinary-discard 
     assert.equal(h.page.sends, 0); assert.equal(h.page.calls.includes('prepare'), false);
     assert.equal(report.counts.confirmations, 0); assert.equal(report.paused, true);
   } finally { await h.cleanup(); }
+});
+
+test('Stage 2 one-shot binds the exact riichi tile, requires opt-in and records a single accepted authoritative action', async t => {
+  for (const testCase of ['confirmed','disabled','stale','wrong-tile','count-mismatch'] as const) await t.test(testCase,async()=>{
+    const h=await scenario();
+    try {
+      h.page.phase2ActionsEnabled=testCase!=='disabled';
+      h.page.offerRiichi=true;
+      if (testCase==='count-mismatch') {
+        const evaluate=h.page.evaluate.bind(h.page);
+        h.page.evaluate=async (source,arg)=>{
+          const result=await evaluate(source,arg);
+          if (result.stats && h.page.sends) result.stats.bridgeActionSends=2;
+          return result;
+        };
+      }
+      const gameMatchKey=`game-${digest('contract-only-game-uuid').slice(0,32)}`;
+      const gameHandKey=`hand-${digest([gameMatchKey,'a'.repeat(64)]).slice(0,32)}`;
+      const report=await acceptLivePage(h.page,{...h.options,phase2ActionOnce:{
+        gameMatchKey,gameHandKey,step:testCase==='stale'?1:2,
+        kind:'riichi-discard',concealedIndex:13,tile:testCase==='wrong-tile'?'5m':'5mr',tsumogiri:true,
+      }});
+      if (testCase==='confirmed' || testCase==='count-mismatch') {
+        assert.ok('scope' in report,JSON.stringify(report));
+        assert.equal(report.status,testCase==='confirmed'?'passed':'blocked');
+        assert.equal(report.scope,'one-phase2-action');
+        assert.equal(report.attempt?.status,'confirmed');
+        assert.equal(report.attempt?.receipt?.delivery,'accepted');
+        assert.ok(report.attempt?.confirmationEventId);
+        assert.equal(report.phase2Evidence?.bridgeActionSends,testCase==='confirmed'?1:2);
+        assert.equal(report.phase2Evidence?.confirmations,1);
+        assert.equal(h.page.sends,1);
+      } else {
+        assert.ok('code' in report,JSON.stringify(report));
+        assert.equal(report.code,{'disabled':'PHASE2_ACTIONS_DISABLED','stale':'LIVE_ACTION_SCOPE_CHANGED',
+          'wrong-tile':'LIVE_ACTION_CANDIDATE_NOT_UNIQUE'}[testCase]);
+        assert.equal(h.page.sends,0);
+        assert.equal(h.page.calls.includes('prepare'),false);
+      }
+      assert.equal(h.page.controls.at(-1)?.paused,true);
+    } finally { await h.cleanup(); }
+  });
 });
 
 test('re-enabling the client switch re-acknowledges the original timing after local input revoked it', async () => {

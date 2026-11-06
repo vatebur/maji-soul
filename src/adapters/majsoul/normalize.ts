@@ -198,7 +198,8 @@ export function normalizeAction(name: string, payload: unknown, context: Normali
         // Standard riichi has one red five; revealing all four proves its presence.
         tiles = [code, code, code, code].map(t => t.replace('r', '') as TileCode);
         if (code[0] === '5' && code[1] !== 'z') {
-          requireThat(projection.room?.rules.verifiedOptions.redFives === true, 'RED_FIVE_RULE_UNVERIFIED');
+          const redFives = projection.room?.rules.verifiedOptions.redFives;
+          requireThat(redFives === true || redFives === 3, 'RED_FIVE_RULE_UNVERIFIED');
           tiles[0] = `${code.slice(0, 2)}r` as TileCode;
         }
       }

@@ -128,6 +128,17 @@ test('closed kan binds all four physical tiles and normalizes authority before t
   assert.equal(drawn.state!.ownConcealed.length,11); assertWindow(drawn.state!,drawn.state!.operationWindow!);
 });
 
+test('opponent closed five kan restores its red tile under the verified three-red room rule', () => {
+  const {projection} = seed(['1m','2m',...filler.slice(0,11)], 3);
+  const payload = {seat:3,type:3,tiles:'5m',doras:[]};
+  projection.room!.rules.verifiedOptions.redFives = 3;
+  const events = normalize(projection,'ActionAnGangAddGang',payload);
+  const meld = events.find(event=>event.type==='MeldDeclared');
+  assert.deepEqual(meld?.payload.meld.tiles,['5mr','5m','5m','5m']);
+  projection.room!.rules.verifiedOptions.redFives = 2;
+  assert.throws(()=>normalize(projection,'ActionAnGangAddGang',payload),/RED_FIVE_RULE_UNVERIFIED/);
+});
+
 test('added kan identifies one existing pon and the exact fourth tile including red identity', () => {
   const state=seed(['5mr',...filler.slice(0,10),'4s','6s','7s']).projection.state!;
   state.ownConcealed=state.ownConcealed.slice(0,11); state.players[0].concealedCount=known(11); state.drawnTileRef=known(state.ownConcealed[0]!.instanceId);
@@ -178,6 +189,37 @@ test('complete reconnect history rebuilds the current call source and rekeys con
   assert.equal(state.latestAction?.actor,3); assert.equal(state.latestAction?.tiles[0],'2m');
   assert.equal(state.latestAction?.eventId,state.players[3].river.at(-1)!.eventId);
   assert.equal(p.sequence,1);
+});
+
+test('restored pon keeps the same duplicate-tile binding after current-view rekeying', () => {
+  const operation = offer(3, ['5m|5m']);
+  const discard = (step: number, seat: Seat, tile: TileCode, moqie: boolean) => ({
+    name: 'ActionDiscardTile', step, payload: { seat, tile, moqie, is_liqi: false, is_wliqi: false },
+  });
+  const draw = (step: number, seat: Seat, left_tile_count: number, tile?: TileCode) => ({
+    name: 'ActionDealTile', step, payload: { seat, left_tile_count, ...(tile ? { tile } : {}) },
+  });
+  const called = discard(9, 1, '5m', true);
+  const actions = [
+    { name: 'ActionNewRound', step: 0, payload: { chang: 0, ju: 1, ben: 0, liqibang: 0,
+      tiles: ['5m', ...filler.slice(0, 11), '9s'], doras: ['4z'], scores: [25000, 25000, 25000, 25000],
+      left_tile_count: 69, opens: [] } },
+    discard(1, 1, '1z', false),
+    draw(2, 2, 68), discard(3, 2, '2z', true),
+    draw(4, 3, 67), discard(5, 3, '3z', true),
+    draw(6, 0, 66, '5m'), discard(7, 0, '9s', false),
+    draw(8, 1, 65), { ...called, payload: { ...called.payload, operation } },
+  ];
+  const sessionId = 'sync-duplicate-pon', room = buildPhase1Fixture().projection.room!;
+  const sync = normalizeSyncGame({ step: 10, is_end: false, game_restore: { actions } }, {
+    sessionId, room, gameMatchKey: 'game', gameHandKey: 'hand', ownSeat: 0, handOrdinal: 1,
+    syncId: 'sync', connectionEpoch: 1, receivedAt: at,
+  });
+  const state = reduceSync(initialProjection(sessionId), sync).state!;
+  const action = state.operationWindow!.candidates[0]!.action;
+  assert.deepEqual(mapActionToRequest(action, state, operation), {
+    method: '.lq.FastTest.inputChiPengGang', params: { type: 3, index: 0, timeuse: 0 },
+  });
 });
 
 test('restored pon and added-kan identities stay stable across session and connection generations', () => {

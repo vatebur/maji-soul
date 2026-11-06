@@ -116,6 +116,10 @@ export class LiveGameSession {
     const config = pageState.authSummary?.gameConfig;
     requireThat(config?.category === 1 && config.mode?.mode === 1 && config.mode.ai === true &&
       config.mode.detail_rule?.time_fixed === 300 && config.mode.detail_rule?.time_add === 0,'FRIEND_ROOM_READBACK_MISMATCH');
+    const configuredRedFives = this.#room.rules.verifiedOptions.redFives;
+    if (typeof configuredRedFives === 'number') {
+      requireThat(config.mode.detail_rule.dora_count === configuredRedFives, 'FRIEND_ROOM_READBACK_MISMATCH');
+    }
     const gameMatchKey = `game-${digest(pageState.gameUuid).slice(0,32)}`;
     const opening = raw.game_restore?.actions?.find((a:any)=>a.name==='ActionNewRound');
     requireThat(opening,'SYNC_HAND_START_REQUIRED');

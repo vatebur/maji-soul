@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { spike } from './app/spikes.ts';
 import { saveEvidence } from './observability/evidence.ts';
 import { inspectDatabase, replay } from './app/replay.ts';
-import { runEgoCommand } from './app/ego-cli.ts';
+import { runEgoCommand, type EgoLiveCommand } from './app/ego-cli.ts';
 
 const [command, probe, ...options] = process.argv.slice(2);
 try {
@@ -16,9 +16,10 @@ try {
     const path = await saveEvidence(evidence);
     console.log(JSON.stringify({ ...evidence, evidencePath: path }, null, 2));
     if (evidence.status === 'blocked') process.exitCode = 2;
-  } else if (['live-install', 'live-reconnect', 'live-sync', 'live-once', 'live-observe'].includes(command ?? '') && probe &&
-    options.length === (['live-install', 'live-reconnect'].includes(command ?? '') ? 1 : 2)) {
-    const result = runEgoCommand(command as 'live-install' | 'live-reconnect' | 'live-sync' | 'live-once' | 'live-observe', probe, options[0]!, options[1]);
+  } else if (['live-install', 'live-reconnect', 'live-sync', 'live-once', 'live-observe', 'live-action-once'].includes(command ?? '') && probe &&
+    (['live-install', 'live-reconnect'].includes(command ?? '') ?
+      options.length===1 || options.length===2 && options[1]==='--phase2' : options.length===2)) {
+    const result = runEgoCommand(command as EgoLiveCommand, probe, options[0]!, options[1]);
     process.stdout.write(result);
     if (result.includes('"status": "blocked"')) process.exitCode = 2;
   } else if ((command === 'replay' || command === 'dry-run') && probe) {
@@ -35,7 +36,7 @@ try {
   } else if (command === 'inspect' && probe && options.length === 1) {
     console.log(JSON.stringify(await inspectDatabase(probe, options[0]!), null, 2));
   } else {
-    console.log('maji-soul\n  doctor\n  spike storage|model|speech [--play]\n  replay <fixture-directory> [--out <new-directory>]\n  dry-run <fixture-directory> [--candidate <index>] [--out <new-directory>]\n  inspect <database> <session-id>\n  live-install <active-ego-space-id> <page-label>\n  live-reconnect <active-ego-space-id> <page-label>\n  live-sync <active-ego-space-id> <page-label> <absolute-options-json>\n  live-once <active-ego-space-id> <page-label> <absolute-options-json>\n  live-observe <active-ego-space-id> <page-label> <absolute-options-json>\n实场自动读回倒计时与和牌开关，仅同步或一次显式摸切；持续自动运行保持关闭。');
+    console.log('maji-soul\n  doctor\n  spike storage|model|speech [--play]\n  replay <fixture-directory> [--out <new-directory>]\n  dry-run <fixture-directory> [--candidate <index>] [--out <new-directory>]\n  inspect <database> <session-id>\n  live-install <active-ego-space-id> <page-label> [--phase2]\n  live-reconnect <active-ego-space-id> <page-label> [--phase2]\n  live-sync <active-ego-space-id> <page-label> <absolute-options-json>\n  live-once <active-ego-space-id> <page-label> <absolute-options-json>\n  live-observe <active-ego-space-id> <page-label> <absolute-options-json>\n  live-action-once <active-ego-space-id> <page-label> <absolute-options-json>\n实场自动读回倒计时与和牌开关；单步发送需要显式选择，持续自动运行保持关闭。');
     if (command && command !== 'help') process.exitCode = 1;
   }
 } catch (error) {

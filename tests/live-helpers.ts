@@ -18,6 +18,8 @@ export class ScriptedPage implements EgoPagePort {
   readonly databasePath: string;
   sends = 0;
   captureRace = false;
+  phase2ActionsEnabled = false;
+  offerRiichi = false;
   delivery: CallReceipt['delivery'] = 'accepted';
   autoWinState = 'enabled';
   autoWinNeedsEnable = false;
@@ -29,7 +31,11 @@ export class ScriptedPage implements EgoPagePort {
   async evaluate(_source: string | ((argument: any) => any), argument?: unknown): Promise<any> {
     const { method, argument: input } = argument as { method: string; argument: any };
     this.calls.push(method);
-    const cursor = { generation: this.sends + this.#inputGeneration, pageEpoch: 1, lastStep: 2 + this.sends, records: [] };
+    const operations = {seat:1,operation_list:this.offerRiichi ? [{type:1},{type:7,combination:['0m']}] : [{type:1}],
+      time_fixed:300000,time_add:0};
+    const cursor = { generation: this.sends + this.#inputGeneration, pageEpoch: 1, lastStep: 2 + this.sends, records: [],
+      phase2ActionsEnabled:this.phase2ActionsEnabled,stats:{bridgeActionSends:this.sends},
+      operation:{step:2,value:operations} };
     if (method === 'automaticTiming') {
       const raw = await this.evaluate(_source, { method: 'sync', argument: null });
       const previous = structuredClone(raw);
@@ -68,7 +74,7 @@ export class ScriptedPage implements EgoPagePort {
       } },
         { name: 'ActionDiscardTile', step: 1, payload: { seat: 0, tile: '9m', moqie: false, is_liqi: false, is_wliqi: false } },
         { name: 'ActionDealTile', step: 2, payload: { seat: 1, tile: '0m', left_tile_count: 68,
-          operation: { seat: 1, operation_list: [{ type: 1 }], time_fixed: 300000, time_add: 0 } } },
+          operation: operations } },
       ] } };
     if (method === 'ackSync') return { generation: 0, step: 2 };
     if (method === 'drain') {
@@ -94,7 +100,7 @@ export class ScriptedPage implements EgoPagePort {
       if (this.delivery === 'not-sent') return { callId: 'contract-page-refusal', delivery: 'not-sent', observedAt: new Date().toISOString() };
       this.sends++;
       if (this.delivery === 'accepted') this.#records.push({ kind: 'action', name: 'ActionDiscardTile', step: 3, receivedAt: new Date().toISOString(),
-        payload: { seat: 1, tile: '0m', moqie: true, is_liqi: false, is_wliqi: false } });
+        payload: { seat: 1, tile: '0m', moqie: true, is_liqi: this.prepared.action.action.kind==='riichi-discard', is_wliqi: false } });
       return { callId: 'contract-native-client-request-7', delivery: this.delivery, observedAt: new Date().toISOString() };
     }
     throw Error('UNSCRIPTED_PAGE_METHOD');

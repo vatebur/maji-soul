@@ -33,3 +33,26 @@ test('the observer CLI preserves explicit durations and allows the full bound pl
     }
   }
 });
+
+test('the CLI only forwards Stage 2 enabling and selection on explicit commands', async t => {
+  const exec=t.mock.method(childProcess,'execFileSync',()=> 'contract-output');
+  syncBuiltinESMExports();
+  t.after(()=>{exec.mock.restore();syncBuiltinESMExports();});
+  const run=async(command:Parameters<typeof runEgoCommand>[0],argument?:string)=>{
+    runEgoCommand(command,'1','p1',argument);
+    const input=(exec.mock.calls.at(-1)!.arguments[2] as ExecFileSyncOptions).input;
+    const execute=new Function('taskSpace','loadModule','console',
+      `return (async () => { ${String(input).replaceAll('import(', 'loadModule(')} })();`);
+    let observed:unknown;
+    await execute(async()=>({page:()=>({})}),async(specifier:string)=>{
+      if(specifier==='node:fs/promises')return {readFile:async()=>JSON.stringify({phase2ActionOnce:{kind:'pon'}})};
+      return {installLiveBridge:async(_page:unknown,_reconnect:boolean,options:unknown)=>{observed=options;},
+        acceptLiveViaNode:async(_page:unknown,options:unknown)=>{observed=options;}};
+    },{log(){}});
+    return observed;
+  };
+  assert.deepEqual(await run('live-install'),{phase2ActionsEnabled:false});
+  assert.deepEqual(await run('live-reconnect','--phase2'),{phase2ActionsEnabled:true});
+  assert.deepEqual(await run('live-sync','/options.json'),{discardOnce:false,observeMs:0});
+  assert.deepEqual(await run('live-action-once','/options.json'),{discardOnce:false,observeMs:0,phase2ActionOnce:{kind:'pon'}});
+});

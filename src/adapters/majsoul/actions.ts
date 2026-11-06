@@ -27,9 +27,9 @@ export function createOperationRules(identify?: (value: unknown) => string) {
   const protocolTile = (value: TileCode) => value.endsWith('r') ? `0${value[1]}` : value;
   const parts = (value: string) => { requireThat(typeof value === 'string' && value.length <= 64, 'INVALID_PROTOCOL_COMBINATION'); return value.split('|').map(tileCode); };
   const sameTiles = (a: TileCode[], b: TileCode[]) => canonical([...a].sort()) === canonical([...b].sort());
-  /** Identical physical copies have one deterministic binding; red fives never alias ordinary fives. */
+  /** Hand order survives sync rekeying and gives identical copies one stable binding. */
   function consume(state: GameState, codes: TileCode[]): string[] {
-    const available = [...state.ownConcealed].sort((a, b) => a.instanceId.localeCompare(b.instanceId));
+    const available = [...state.ownConcealed];
     return codes.map(code => {
       const at = available.findIndex(t => t.code === code); requireThat(at >= 0, 'COMBINATION_TILE_MISSING');
       return available.splice(at, 1)[0]!.instanceId;

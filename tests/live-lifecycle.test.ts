@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -109,6 +109,78 @@ test('maximum-length observer follows hand boundaries and stops at the full matc
       assert.equal(db.prepare('SELECT count(*) AS n FROM action_attempts').get()!.n,0);
     }finally{db.close();}
   }finally{await h.cleanup();}
+});
+
+test('opt-in observation holds real Actor fences across a committed new hand without opening the Page',async()=>{
+  const h=await scenario('sequence');
+  const evaluate=h.page.evaluate.bind(h.page);
+  h.page.evaluate=async(source,argument)=>{
+    const result=await evaluate(source,argument);
+    if(argument?.method!=='read')return result;
+    const control=h.page.controls.at(-1);
+    return {...result,paused:control?.paused,controlEpoch:control?.controlEpoch,queued:0,sourceStream:0,
+      stats:{bridgeActionSends:h.page.sends}};
+  };
+  try {
+    const report=await acceptLiveViaNode(h.page,{...h.options,verifyBoundaryFences:true},process.execPath);
+    assert.equal(report.status,'passed',JSON.stringify(report));
+    assert.equal(report.lifecycle.matchStatus,'finished');
+    assert.equal(report.boundaryFenceChallenge.status,'passed');
+    const challenge=report.boundaryFenceChallenge;
+    assert.equal(challenge.before.handOrdinal,1);
+    assert.ok(challenge.after.handOrdinal>challenge.before.handOrdinal);
+    assert.equal(challenge.before.gameMatchKey,challenge.after.gameMatchKey);
+    assert.notEqual(challenge.before.gameHandKey,challenge.after.gameHandKey);
+    assert.equal(challenge.before.connectionEpoch,challenge.after.connectionEpoch);
+    assert.ok(challenge.after.controlEpoch>challenge.before.controlEpoch);
+    assert.deepEqual(challenge.pageAtArm,{pageEpoch:1,sourceStream:0,step:2,paused:true,bridgeActionSends:0});
+    assert.equal(challenge.decisionCode,'DECISION_STALE');
+    assert.equal(challenge.permitCode,'PERMIT_INVALID');
+    assert.match(challenge.permitSha256,/^[a-f0-9]{64}$/);
+    assert.equal(h.page.controls.every(control=>control.paused),true);
+    assert.equal(h.page.calls.some(call=>['prepare','dispatch'].includes(call)),false);
+    assert.equal(report.counts.confirmations,0);
+    const db=new DatabaseSync(h.page.databasePath,{readOnly:true});
+    try {
+      const decision=db.prepare('SELECT snapshot FROM decisions WHERE decision_id=?').get(challenge.decisionId);
+      assert.equal(JSON.parse(decision!.snapshot as string).scope.handId,challenge.before.handId);
+      assert.equal(db.prepare('SELECT count(*) AS n FROM decisions').get()!.n,1);
+      assert.equal(db.prepare('SELECT count(*) AS n FROM action_attempts').get()!.n,0);
+      assert.equal(db.prepare('SELECT count(*) AS n FROM action_slots').get()!.n,0);
+    } finally { db.close(); }
+  } finally { await h.cleanup(); }
+});
+
+test('a timing proof arming failure is preserved while passive observation reaches the authoritative result',async()=>{
+  const h=await scenario('sequence');
+  const evaluate=h.page.evaluate.bind(h.page);
+  h.page.evaluate=async(source,argument)=>{
+    if(argument?.method==='automaticTiming')throw Error('COUNTDOWN_SAMPLE_STALE');
+    return evaluate(source,argument);
+  };
+  try {
+    const report=await acceptLivePage(h.page,{...h.options,verifyBoundaryFences:true});
+    assert.equal(report.status,'blocked',JSON.stringify(report));
+    assert.ok('lifecycle' in report);
+    assert.equal(report.lifecycle.matchStatus,'finished');
+    assert.deepEqual(report.boundaryFenceChallenge,{status:'arming-failed',code:'COUNTDOWN_SAMPLE_STALE'});
+    assert.equal(h.page.controls.every(control=>control.paused),true);
+    const db=new DatabaseSync(h.page.databasePath,{readOnly:true});
+    try {
+      assert.equal(db.prepare('SELECT count(*) AS n FROM decisions').get()!.n,0);
+      assert.equal(db.prepare('SELECT count(*) AS n FROM action_attempts').get()!.n,0);
+    } finally { db.close(); }
+  } finally { await h.cleanup(); }
+});
+
+test('the fence diagnostic refuses to arm alongside a send or without observation',async()=>{
+  const h=await scenario('sequence');
+  try {
+    for(const options of [{discardOnce:true},{pauseBeforeDispatch:true},{observeMs:0}])
+      await assert.rejects(acceptLivePage(h.page,{...h.options,verifyBoundaryFences:true,...options}),/INVALID_BOUNDARY_FENCE_CHALLENGE/);
+    assert.deepEqual(h.page.calls,[]);
+    await assert.rejects(access(h.options.outputDirectory),{code:'ENOENT'});
+  } finally { await h.cleanup(); }
 });
 
 test('finished restore needs no countdown or switch UI and archives a stopped match',async()=>{
