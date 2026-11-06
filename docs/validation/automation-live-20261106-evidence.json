@@ -2638,6 +2638,291 @@
         "sameRoomContinuationAccepted": false
       },
       "reviewSourceSha256": "5fabdceb6f47eac3a52ad1bec558a4c35ce89c6b671c22e262069fb58e5848a2"
+    },
+    {
+      "alias": "new-hand-recovery-second-setup-excluded",
+      "reportSha256": null,
+      "reportStatus": null,
+      "reasonCode": "CLIENT_AUTH_TIMEOUT",
+      "acceptedChecks": [],
+      "programActionSends": null,
+      "authoritativeProgramConfirmations": null,
+      "programPaused": null,
+      "observationSettled": null,
+      "timing": null,
+      "capture": null,
+      "attempt": null,
+      "exclusion": {
+        "code": "CLIENT_AUTH_TIMEOUT",
+        "sourceSha256": "1aec4ae25ca8fa7f257c4f25d6d775842ac5af26afb397f169d3547bbeb82630",
+        "stage": "waiting-for-client-authentication-after-fresh-reload",
+        "status": "blocked",
+        "timeoutMs": 30000,
+        "readySignalPresent": false,
+        "reportPresent": false,
+        "childStarted": false,
+        "prepareReached": false,
+        "dispatchReached": false,
+        "exactObservationTimesAvailable": false,
+        "artifactMtimesAreObservationTimes": false,
+        "recordedAfterFollowingObservation": true,
+        "countAsAutoWinTriggerEvidence": false,
+        "countAsLifecycleEvidence": false,
+        "gateAccepted": false
+      },
+      "followupUi": {
+        "errorCode": 1202,
+        "priorMatchReportedEnded": true,
+        "authSummaryLaterPresent": true,
+        "connected": false,
+        "pageEpoch": 3,
+        "bridgeSyncRequests": 0,
+        "bridgeActionSends": 0,
+        "rejoinErrorCode": 1100,
+        "roomReportedMissing": true,
+        "matchEndedObserved": false,
+        "sameRoomContinuationAccepted": false,
+        "screenshots": [
+          {
+            "alias": "prior-match-ended-ui-only",
+            "sourceSha256": "cab828b9b0a3bab04931c3ceb9d57e48c8a194493852279cd9f795083e8100af",
+            "bytes": 2047240,
+            "fullScreenshotTracked": false
+          },
+          {
+            "alias": "room-rejoin-rejected",
+            "sourceSha256": "5db0be63b512e12ade2651904937f59d72865e7ac467488446ebfea144f7842e",
+            "bytes": 2051047,
+            "fullScreenshotTracked": false
+          }
+        ]
+      },
+      "newRoomSetupIsSeparateAcceptanceTarget": true
+    },
+    {
+      "alias": "new-hand-recovery-third-observation-blocked",
+      "sourceRevision": "52fb65c",
+      "reportSha256": "e036044acb0b87b967f11aef620d6dced4c779975781583bdf5cc4bdef209f19",
+      "reportStatus": "blocked",
+      "reasonCode": "AUTO_WIN_READBACK_STALE",
+      "reasonSource": "initial-sync-auto-win-recovery",
+      "acceptedChecks": [],
+      "programActionSends": {
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 0,
+      "timing": null,
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 0,
+        "handEnds": 0,
+        "matchEnds": 0,
+        "reconnects": 0,
+        "handOrdinal": 1,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": false
+      },
+      "observation": {
+        "connected": true,
+        "queued": 0,
+        "reasonCode": null,
+        "overflow": false,
+        "drainedMatchesFinalCursor": true,
+        "finalGeneration": 144,
+        "finalPageEpoch": 1,
+        "finalSourceStep": 102
+      },
+      "autoWin": {
+        "lastReportedReadbackState": "enabled",
+        "readbackVerified": false,
+        "currentAuthorization": false,
+        "actualTriggerConfirmed": false,
+        "clientWinRequests": {
+          "before": 0,
+          "after": 0
+        },
+        "authoritativeOwnWins": {
+          "before": 0,
+          "after": 0
+        },
+        "recoveries": [
+          {
+            "trigger": "initial-sync",
+            "status": "unverified",
+            "attempted": true,
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "sourceStream": 0,
+            "operationStep": 5,
+            "generationBefore": 18,
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "observedAt": "2026-11-06T02:26:32.644Z",
+              "pageEpoch": 1,
+              "generation": 19,
+              "step": 5,
+              "rgbaSha256": "f47cf23fad707730ea66afa83f73c4bf4f3d80c14da31949f666d31cbce260d9",
+              "clicked": true
+            }
+          }
+        ],
+        "newHandRecoveryAttempts": 0,
+        "historicalReadbackCanRepairFinalStatus": false,
+        "firstOrdinaryInput": {
+          "sequence": 2,
+          "observedAt": "2026-11-06T02:29:31.077Z",
+          "readbackCleared": true
+        }
+      },
+      "capture": {
+        "eventCount": 106,
+        "eventsFileSha256": "9393232f194689299898ca3125d122726f74162098df53c5f276976833178757",
+        "manifestFileSha256": "aa9dba03b7e2ea044180713c167b03418ddf81193db6178a53b0314a92b2761f",
+        "expectedFileSha256": "0a2fb75d8680b7450bba0314a1a10a3aed09af930b0d6aefd43abee8f5164b47",
+        "manifestEventsSha256": "a1235caf39d7d8f9bb9465b535da2f9fb2e7c465057553bbdc51288bc81c2eef",
+        "expectedFinalStateHash": "f285b680f09bf47b3d3a500a1cc48b14b40b3c023b2cf6071162dfcbaaa0ec0c",
+        "originHandOrdinal": 1,
+        "archiveFinalHandOrdinal": 1,
+        "eventTypeCounts": {
+          "RoomVerified": 1,
+          "MatchStarted": 1,
+          "HandStarted": 1,
+          "TileDiscarded": 50,
+          "TileDrawn": 48,
+          "MeldDeclared": 3,
+          "DoraRevealed": 1,
+          "RiichiAccepted": 1
+        },
+        "initialHandStartSource": "majsoul-sync",
+        "liveHandStarts": 0,
+        "liveHandEnds": 0,
+        "liveMatchEnds": 0,
+        "containsExecutableWindow": false,
+        "strictSchemasAndSemanticDigestPassed": true,
+        "pureReducerMatchesExpected": true,
+        "captureMatchesStoredFactsAfterEpochRebase": true,
+        "ownDiscardFacts": 12,
+        "eventCountReconciliation": {
+          "ledgerEvents": 115,
+          "removedExecutableOffers": 15,
+          "replacedSyncRows": 1,
+          "expandedSyncFacts": 7,
+          "expandedSyncFactTypeCounts": {
+            "RoomVerified": 1,
+            "MatchStarted": 1,
+            "HandStarted": 1,
+            "TileDiscarded": 2,
+            "TileDrawn": 2
+          },
+          "resultingCaptureEvents": 106
+        }
+      },
+      "retainedWireEvidence": {
+        "sourceSha256": "341b54ddc7ac6050ca0a451d069dc8716ead155ad0aa9c9ad1b858583beb5cca",
+        "eventCount": 97,
+        "firstStep": 6,
+        "lastStep": 102,
+        "sourceStepChainContiguous": true,
+        "allSourceStepsRepresentedInLedger": true,
+        "liveHandBoundaries": 0,
+        "repeatedRiichiOfferCount": 0,
+        "repeatedRiichiFixExercised": false,
+        "riichiDiscard": {
+          "step": 84,
+          "actor": 0,
+          "ownSeat": 2,
+          "isOwn": false
+        }
+      },
+      "manualObservation": {
+        "sourceSha256": "776c6df81d9e3b03bdf5fa2243c13e74019658c1ff4b6fb8b0b9a76fd932d68a",
+        "commandCount": 19,
+        "successfulClicks": 13,
+        "screenshotCommands": 4,
+        "scopeRejectedClicks": 2,
+        "restoreCommands": 0,
+        "scopeRejectionsAreExecutorEvidence": false
+      },
+      "originalLedger": {
+        "readOnlyInspection": true,
+        "strictStoredEventSchemasPassed": true,
+        "pureReducerMatchesCheckpoint": true,
+        "checkpointMatchesReport": true,
+        "checkpointStateHash": "2fbc04bfb4f11a07e1cfd18bee6ac55093f3cf6a4cc2dc0d1464f82fce9734a5",
+        "checkpointSequence": 115,
+        "checkpointSourceStep": 102,
+        "sessionEventCount": 115,
+        "sessionEventTypeCounts": {
+          "SyncApplied": 1,
+          "TileDiscarded": 48,
+          "TileDrawn": 46,
+          "OperationOffered": 15,
+          "MeldDeclared": 3,
+          "DoraRevealed": 1,
+          "RiichiAccepted": 1
+        },
+        "sessionDecisionCount": 0,
+        "sessionAttemptCount": 0,
+        "sessionObservedActionFacts": 53,
+        "sessionObservedOwnActions": 12,
+        "sessionConfirmations": 0,
+        "sessionFaults": 0,
+        "globalAttemptStatuses": {
+          "confirmed": 2,
+          "not-dispatched": 5
+        },
+        "globalConfirmations": 2,
+        "globalLocalSlots": 7,
+        "globalSourceSlots": 7,
+        "priorSessionSlotCount": 7,
+        "currentMatchSourceSlots": 0,
+        "globalUnresolvedAttempts": 0,
+        "historicalAttemptBodiesMatchReports": true,
+        "historicalAttemptReportCount": 7,
+        "slotScopesMatchAttemptsAndDecisions": true,
+        "anomalies": {
+          "confirmedWithoutConfirmation": 0,
+          "confirmationForNonconfirmed": 0,
+          "attemptWithoutLocalSlot": 0,
+          "attemptWithoutSourceSlot": 0,
+          "sourceSlotScopeMismatch": 0,
+          "foreignKeyViolations": 0
+        },
+        "hands": [
+          {
+            "ordinal": 1,
+            "status": "playing"
+          }
+        ],
+        "staleHandPermitChallengePerformed": false
+      },
+      "identity": {
+        "sameMatchAsPriorHandRecoveryObservation": false,
+        "originalLedgerReused": true,
+        "ownSeat": 2,
+        "ledgerHandOrdinals": [
+          1
+        ],
+        "roundWind": "1z",
+        "handNumber": 1,
+        "dealer": 0,
+        "honba": 0,
+        "crossHandTransitionObserved": false,
+        "dealerRepeatObserved": false,
+        "matchEndObserved": false,
+        "completeMatchHistoryObserved": false,
+        "sameRoomContinuationAccepted": false
+      }
     }
   ],
   "countdownLayout": {
