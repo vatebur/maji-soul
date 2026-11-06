@@ -2923,6 +2923,498 @@
         "completeMatchHistoryObserved": false,
         "sameRoomContinuationAccepted": false
       }
+    },
+    {
+      "alias": "private-ui-observation-first-setup-excluded",
+      "reportSha256": null,
+      "reportStatus": null,
+      "reasonCode": "NATIVE_AUTH_WAIT_TIMEOUT",
+      "acceptedChecks": [],
+      "programActionSends": null,
+      "authoritativeProgramConfirmations": null,
+      "programPaused": null,
+      "observationSettled": null,
+      "timing": null,
+      "capture": null,
+      "attempt": null,
+      "exclusion": {
+        "code": "NATIVE_AUTH_WAIT_TIMEOUT",
+        "sourceSha256": "f3871763ef28cc32ede10b3f0ca5c746f17ea25de8d6ac5c63d9e44b1c2e657b",
+        "stage": "waiting-for-client-authentication-after-fresh-reload",
+        "status": "blocked",
+        "timeoutMs": 30000,
+        "readySignalPresent": false,
+        "reportPresent": false,
+        "childStarted": false,
+        "prepareReached": false,
+        "dispatchReached": false,
+        "countAsAutoWinTriggerEvidence": false,
+        "countAsLifecycleEvidence": false,
+        "gateAccepted": false
+      },
+      "followupUi": {
+        "errorCode": 1202,
+        "priorMatchReportedEnded": true,
+        "authSummaryLaterPresent": true,
+        "pageEpoch": 3,
+        "connected": false,
+        "reasonCode": "DISCONNECTED",
+        "bridgeSyncRequests": 0,
+        "bridgeActionSends": 0,
+        "pendingRpcCount": 0,
+        "matchEndedObserved": false,
+        "sameRoomContinuationAccepted": false,
+        "screenshot": {
+          "alias": "prior-match-ended-ui-only",
+          "sourceSha256": "541294d259cef8c7477929034d5241d169f4bb199e47013ea2cd6578a5cae464",
+          "bytes": 2063592,
+          "fullScreenshotTracked": false
+        }
+      },
+      "newRoomSetupIsSeparateAcceptanceTarget": true
+    },
+    {
+      "alias": "private-ui-observation-win-chain-missing-prior-proof",
+      "sourceRevision": "f3ba49a",
+      "reportSha256": "5224be042e4cc8659f2bc0e19ed9f84fac9b4ea16f06f205df0ec411acc5bbef",
+      "reportStatus": "blocked",
+      "reasonCode": "AUTO_WIN_READBACK_STALE",
+      "reasonSource": "latest-new-hand-auto-win-recovery",
+      "acceptedChecks": [],
+      "programActionSends": {
+        "counter": "bridgeActionSends",
+        "scope": "production-executor-rpc",
+        "before": 0,
+        "after": 0,
+        "delta": 0
+      },
+      "authoritativeProgramConfirmations": 0,
+      "programPaused": true,
+      "observationSettled": true,
+      "faultCount": 0,
+      "timing": null,
+      "attempt": null,
+      "lifecycle": {
+        "handStarts": 1,
+        "handEnds": 1,
+        "matchEnds": 0,
+        "reconnects": 0,
+        "handOrdinal": 2,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "matchEndPending": false,
+        "awaitingSettlement": false,
+        "recovering": false
+      },
+      "observation": {
+        "connected": true,
+        "queued": 0,
+        "reasonCode": null,
+        "overflow": false,
+        "drainedMatchesFinalCursor": true,
+        "finalGeneration": 180,
+        "finalPageEpoch": 1,
+        "finalSourceStep": 32
+      },
+      "inputAccounting": {
+        "bridgeZeroDoesNotMeanNoAutomatedUiInput": true,
+        "privateUiDriver": {
+          "auditSourceSha256": "dff3fffe91a1fa77e63d769310498d82b730d2a5a272b67f3bc4493ebb0e08ad",
+          "stateSourceSha256": "0e853cf1781e64d7d8f09e5f215955161ea7b9b0eb8ee35b9c1293de6abb4b5e",
+          "controlSourceSha256": "901a6b9045138126c4e8e6422cd030d2bd5afc1b797b6ef84df4e0661c1408fc",
+          "auditRecordCount": 112,
+          "clicks": 15,
+          "discardClicks": 12,
+          "skipClicks": 3,
+          "uniqueConsumedWindows": 15,
+          "pointerReleases": 15,
+          "matchedAuthoritativeDiscards": 12,
+          "skipWindowsAdvanced": 3,
+          "skipAdvancesAreAuthoritativeConfirmations": false,
+          "allBeforeScreenshotsMatchPlanHashes": true,
+          "pendingInput": false,
+          "pendingReadback": false,
+          "enabledAtEnd": false,
+          "finalStopCode": "UI_TABLE_ANCHOR_MISMATCH",
+          "productionExecutorEnabled": false
+        },
+        "rootDirectedUi": {
+          "auditSourceSha256": "016aa2760d2ae21f2ec66db442489df2163af32582632b80aaa5a0b2a0cab4f9",
+          "commandCount": 16,
+          "clicks": 3,
+          "discardClicks": 2,
+          "riichiSelectionClicks": 1,
+          "screenshotCommands": 12,
+          "autoWinVerifyCommands": 1,
+          "autoWinEnableCommands": 0,
+          "inputs": [
+            {
+              "auditSequence": 4,
+              "kind": "discard",
+              "sourceStream": 0,
+              "offerStep": 31,
+              "authoritativeStep": 32,
+              "tile": "8m",
+              "tsumogiri": false
+            },
+            {
+              "auditSequence": 12,
+              "kind": "riichi-selection",
+              "sourceStream": 0,
+              "offerStep": 95
+            },
+            {
+              "auditSequence": 13,
+              "kind": "riichi-discard",
+              "sourceStream": 0,
+              "offerStep": 95,
+              "authoritativeStep": 96,
+              "tile": "7p",
+              "tsumogiri": false
+            }
+          ]
+        },
+        "otherObservedOwnDiscards": {
+          "count": 2,
+          "recordedUiInputsMatched": false,
+          "timingConsistentWithNativeTimeout": true,
+          "originInferredFromTimingAndInputAudit": true,
+          "exactClientOrServerOriginProven": false,
+          "facts": [
+            {
+              "handOrdinal": 1,
+              "step": 8,
+              "receivedAt": "2026-11-06T03:47:32.105Z",
+              "tsumogiri": true
+            },
+            {
+              "handOrdinal": 2,
+              "step": 5,
+              "receivedAt": "2026-11-06T04:10:03.080Z",
+              "tsumogiri": true
+            }
+          ]
+        },
+        "authoritativeOwnDiscardCount": 16,
+        "discardCountReconciliation": "12 private UI + 2 root-directed UI + 2 other observed = 16"
+      },
+      "autoWin": {
+        "lastReportedReadbackState": "enabled",
+        "readbackVerified": false,
+        "currentAuthorization": false,
+        "actualTriggerConfirmed": false,
+        "clientWinRequests": {
+          "before": 0,
+          "after": 1
+        },
+        "authoritativeOwnWins": {
+          "before": 0,
+          "after": 1
+        },
+        "ownWinAttribution": {
+          "diagnosticSourceSha256": "94b65a46fd80566310bdcc0eb8a305997821f3bb76768e19e3afdf872a1f2756",
+          "overflow": false,
+          "snapshotCount": 1,
+          "request": {
+            "requestId": 109,
+            "method": ".lq.FastTest.inputChiPengGang",
+            "type": 9,
+            "pageEpoch": 1,
+            "sourceStream": 0,
+            "step": 102,
+            "observedAt": "2026-11-06T04:04:41.585Z",
+            "delivery": "accepted",
+            "receiptObservedAt": "2026-11-06T04:04:41.628Z",
+            "offered": true,
+            "autoWinVerifiedAtRequest": false,
+            "priorAutoWinReadback": null
+          },
+          "authority": {
+            "pageEpoch": 1,
+            "sourceStream": 0,
+            "step": 103,
+            "receivedAt": "2026-11-06T04:04:41.634Z",
+            "kind": "ron",
+            "clientWinRequestId": 109
+          },
+          "matchingClientWinRequestAndReceiptObserved": true,
+          "priorEnableProofMissing": true,
+          "attributionComplete": false,
+          "subsequentVerify": {
+            "auditSequence": 14,
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "canRepairRequestProof": false
+          }
+        },
+        "recoveries": [
+          {
+            "trigger": "initial-sync",
+            "status": "unverified",
+            "attempted": true,
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "sourceStream": 0,
+            "operationStep": 7,
+            "generationBefore": 11,
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "observedAt": "2026-11-06T03:42:33.400Z",
+              "pageEpoch": 1,
+              "generation": 12,
+              "step": 7,
+              "rgbaSha256": "a99bd7954915f2e3f5ff492fdcc0aaf7fa6fe998b41a22dde9d6511c566d9a17",
+              "clicked": true
+            }
+          },
+          {
+            "trigger": "new-hand",
+            "status": "unverified",
+            "attempted": true,
+            "connectionEpoch": 1,
+            "pageEpoch": 1,
+            "sourceStream": 1,
+            "operationStep": 4,
+            "generationBefore": 142,
+            "reasonCode": "AUTO_WIN_READBACK_STALE",
+            "readback": {
+              "source": "unity-button-pixels-v1",
+              "state": "enabled",
+              "observedAt": "2026-11-06T04:05:04.803Z",
+              "pageEpoch": 1,
+              "generation": 143,
+              "step": 4,
+              "rgbaSha256": "bbdb0de9139a9d98e1c093f9e965ece69604106588afd14ba2ca58b952988c8e",
+              "clicked": true
+            }
+          }
+        ],
+        "newHandRestorationEvidence": {
+          "handOrdinal": 2,
+          "attempted": true,
+          "clickedToEnable": true,
+          "completedEnableReadbackObserved": true,
+          "manualEnableCommands": 0,
+          "finalStatus": "unverified",
+          "finalReasonCode": "AUTO_WIN_READBACK_STALE",
+          "currentAuthorization": false,
+          "screenshot": {
+            "alias": "second-hand-auto-win-restored",
+            "auditSequence": 15,
+            "sourceSha256": "f33b5ca8c31c79c8a31aa709b4a4318bf45bc1fcbe493dbc4503a1dfd6447409",
+            "bytes": 1447344,
+            "classifiedState": "enabled",
+            "fullScreenshotTracked": false
+          }
+        },
+        "historicalReadbackCanRepairFinalStatus": false
+      },
+      "repeatedRiichiOffer": {
+        "sourceStream": 0,
+        "operationStep": 95,
+        "operationType": 7,
+        "listedEntryCount": 4,
+        "distinctListedTileCodes": 2,
+        "physicalCandidateCount": 3,
+        "uniqueCandidateCount": 3,
+        "normalDiscardCandidateCount": 14,
+        "candidateNormalizationObserved": true,
+        "offerCommittedSequence": 102,
+        "authoritativeRiichiDiscard": {
+          "sequence": 103,
+          "step": 96,
+          "tile": "7p",
+          "tsumogiri": false,
+          "riichiDeclaration": true,
+          "inputPath": "root-directed-ui"
+        },
+        "productionRiichiDispatchTested": false,
+        "completePhase2Acceptance": false
+      },
+      "boundaries": [
+        {
+          "sequence": 113,
+          "type": "HandEnded",
+          "receivedAt": "2026-11-06T04:04:41.634Z",
+          "step": 103,
+          "reason": "win",
+          "resultLabel": "荣和",
+          "scores": [
+            24000,
+            25000,
+            19800,
+            31200
+          ],
+          "winners": [
+            3
+          ]
+        },
+        {
+          "sequence": 114,
+          "type": "HandStarted",
+          "receivedAt": "2026-11-06T04:04:59.885Z",
+          "step": 0,
+          "ordinal": 2,
+          "roundWind": "1z",
+          "handNumber": 2,
+          "dealer": 1,
+          "honba": 0,
+          "scores": [
+            24000,
+            25000,
+            19800,
+            31200
+          ]
+        }
+      ],
+      "capture": {
+        "eventCount": 140,
+        "eventsFileSha256": "02377d19a7c4b65be68dfbca3b7de3df2c57ad6c742fbc64cc9d66ec3e4dd5af",
+        "manifestFileSha256": "602ca83faeca5ccb4c3b0e84e4a56f3b680f86c5a0da78fcb9af9bdfc9090273",
+        "expectedFileSha256": "1c8b4db1e855776093ca8df093d7c6b112fa81c07c8d8ea3ddf158012b4541ff",
+        "manifestEventsSha256": "c41c71fa1bd3bb38f71622d0072766df7a638c01f4a8f6eaded65645b2622593",
+        "expectedFinalStateHash": "92303d8a12d296e2bc1ae417446b141ae6fabc68ff5e94f8276142289abbfdb6",
+        "originHandOrdinal": 1,
+        "archiveFinalHandOrdinal": 2,
+        "eventTypeCounts": {
+          "RoomVerified": 1,
+          "MatchStarted": 1,
+          "HandStarted": 2,
+          "TileDiscarded": 67,
+          "TileDrawn": 65,
+          "RiichiAccepted": 2,
+          "HandEnded": 1,
+          "MeldDeclared": 1
+        },
+        "initialHandStartSource": "majsoul-sync",
+        "liveHandStarts": 1,
+        "liveHandEnds": 1,
+        "liveMatchEnds": 0,
+        "containsExecutableWindow": false,
+        "strictSchemasAndSemanticDigestPassed": true,
+        "pureReducerMatchesExpected": true,
+        "captureMatchesStoredFactsAfterEpochRebase": true,
+        "ownDiscardFacts": 16,
+        "eventCountReconciliation": {
+          "ledgerEvents": 152,
+          "removedExecutableOffers": 20,
+          "replacedSyncRows": 1,
+          "expandedSyncFacts": 9,
+          "expandedSyncFactTypeCounts": {
+            "RoomVerified": 1,
+            "MatchStarted": 1,
+            "HandStarted": 1,
+            "TileDiscarded": 3,
+            "TileDrawn": 3
+          },
+          "resultingCaptureEvents": 140
+        }
+      },
+      "retainedWireEvidence": {
+        "sourceSha256": "22cf71f078430ba4d8a6008a8f2abcf37cdde601ecc4ae177e952f16d59c0fb5",
+        "eventCount": 129,
+        "handGroups": [
+          {
+            "ordinal": 1,
+            "count": 96,
+            "firstStep": 8,
+            "lastStep": 103
+          },
+          {
+            "ordinal": 2,
+            "count": 33,
+            "firstStep": 0,
+            "lastStep": 32
+          }
+        ],
+        "sourceStepChainsContiguous": true,
+        "allSourceStepsRepresentedInLedger": true
+      },
+      "originalLedger": {
+        "readOnlyInspection": true,
+        "strictStoredEventSchemasPassed": true,
+        "pureReducerMatchesCheckpoint": true,
+        "checkpointMatchesReport": true,
+        "checkpointStateHash": "ed2fea6ddfe8fb8b7ba63d57a8ad4807c8f16b4c95c4aa0616baf639a20d8331",
+        "checkpointSequence": 152,
+        "checkpointSourceStep": 32,
+        "sessionEventCount": 152,
+        "sessionEventTypeCounts": {
+          "SyncApplied": 1,
+          "TileDiscarded": 64,
+          "TileDrawn": 62,
+          "OperationOffered": 20,
+          "RiichiAccepted": 2,
+          "HandEnded": 1,
+          "HandStarted": 1,
+          "MeldDeclared": 1
+        },
+        "sessionDecisionCount": 0,
+        "sessionAttemptCount": 0,
+        "sessionObservedActionFacts": 68,
+        "sessionObservedOwnActions": 16,
+        "sessionConfirmations": 0,
+        "sessionFaults": 0,
+        "globalAttemptStatuses": {
+          "confirmed": 2,
+          "not-dispatched": 5
+        },
+        "globalConfirmations": 2,
+        "globalLocalSlots": 7,
+        "globalSourceSlots": 7,
+        "priorSessionSlotCount": 7,
+        "currentMatchSourceSlots": 0,
+        "globalUnresolvedAttempts": 0,
+        "priorAttemptAndSlotSnapshotMatchesPreviousInspection": true,
+        "priorAttemptAndSlotSnapshotSha256": "99101f8c9ca88f9556702e8d08c0625d9037c2342ac83d5f9a1875ada14b81cf",
+        "anomalies": {
+          "confirmedWithoutConfirmation": 0,
+          "confirmationForNonconfirmed": 0,
+          "attemptWithoutLocalSlot": 0,
+          "attemptWithoutSourceSlot": 0,
+          "sourceSlotScopeMismatch": 0,
+          "foreignKeyViolations": 0
+        },
+        "hands": [
+          {
+            "ordinal": 1,
+            "status": "finished",
+            "reason": "win",
+            "winners": [
+              3
+            ],
+            "scores": [
+              24000,
+              25000,
+              19800,
+              31200
+            ]
+          },
+          {
+            "ordinal": 2,
+            "status": "playing"
+          }
+        ],
+        "staleHandPermitChallengePerformed": false
+      },
+      "identity": {
+        "sameMatchAsPreviousObservation": false,
+        "sameMatchAcrossHands": true,
+        "sameLedgerSessionAcrossHands": true,
+        "originalLedgerReused": true,
+        "ownSeat": 3,
+        "ledgerHandOrdinals": [
+          1,
+          2
+        ],
+        "crossHandTransitionObserved": true,
+        "dealerRepeatObserved": false,
+        "dealerRotations": 1,
+        "matchEndObserved": false,
+        "completeMatchHistoryObserved": false,
+        "sameRoomContinuationAccepted": false
+      }
     }
   ],
   "countdownLayout": {
