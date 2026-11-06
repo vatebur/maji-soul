@@ -3415,6 +3415,112 @@
         "completeMatchHistoryObserved": false,
         "sameRoomContinuationAccepted": false
       }
+    },
+    {
+      "alias": "detached-observer-overflow-tail-unavailable",
+      "evidenceKind": "tool-output-incident-summary",
+      "reportSha256": null,
+      "reportStatus": null,
+      "reasonCode": "BRIDGE_QUEUE_OVERFLOW",
+      "acceptedChecks": [],
+      "programActionSends": null,
+      "authoritativeProgramConfirmations": null,
+      "programPaused": null,
+      "observationSettled": null,
+      "timing": null,
+      "capture": null,
+      "attempt": null,
+      "incident": {
+        "sourceSha256": "080ba342fe6cc38bc473d57ace365b0a00e09f8fb17a510d78b94f79014925f8",
+        "sourceKind": "root-tool-output-summary",
+        "recordedAt": "2026-11-06T06:57:25.415Z",
+        "exactObservationTimeKnown": false,
+        "predecessorAlias": "private-ui-observation-win-chain-missing-prior-proof",
+        "observerHadEnded": true,
+        "pageReadSummary": {
+          "paused": true,
+          "pageEpoch": 61,
+          "generation": 498,
+          "nativeRestoreRevision": 2,
+          "sourceStream": 3,
+          "lastStep": 142,
+          "handEnded": true,
+          "matchEnded": true,
+          "connected": false,
+          "freshConnection": true,
+          "reason": "BRIDGE_QUEUE_OVERFLOW",
+          "queued": 256,
+          "pendingRpcCount": 0,
+          "bridgeActionSends": 0,
+          "phase2ActionsEnabled": false,
+          "ownSeat": 3
+        },
+        "rawQueueArchive": {
+          "attempted": true,
+          "failureCode": "TASK_SPACE_NOT_FOUND",
+          "failedBeforePageEvaluation": true,
+          "rawTailSaved": false,
+          "terminalScreenshotSaved": false,
+          "subsequentSpaceListEmpty": true
+        },
+        "replacementEnvironment": {
+          "newDedicatedSpaceCreated": true,
+          "existingUserAuthorization": true,
+          "restoresMissingHistory": false
+        },
+        "completeTail": false,
+        "authoritativeMatchEndConfirmed": false,
+        "completeMatchHistoryObserved": false,
+        "sameMatchHandoffAttempted": false,
+        "sameRoomContinuationAccepted": false,
+        "pageTerminalFlagsEstablishAcceptance": false
+      },
+      "precedingObservation": {
+        "reportSha256": "5224be042e4cc8659f2bc0e19ed9f84fac9b4ea16f06f205df0ec411acc5bbef",
+        "reportStatus": "blocked",
+        "reportUnchanged": true,
+        "captureEventCount": 140,
+        "captureRemainsPriorPrefixOnly": true,
+        "priorObservationSettled": true,
+        "priorClosureDoesNotCoverDetachedInterval": true
+      },
+      "originalLedger": {
+        "beforeRecoverySnapshotSha256": "0f0863c84bd34444518aee0460ab48bbff5f4b81e375461333d9439af3fbe959",
+        "beforeRecoverySnapshotRecordedAt": "2026-11-06T04:43:48.312Z",
+        "readOnlyRechecked": true,
+        "checkpointMatchesBeforeRecoverySnapshot": true,
+        "checkpointSequence": 152,
+        "checkpointSourceStep": 32,
+        "handOrdinal": 2,
+        "handStatus": "playing",
+        "matchStatus": "playing",
+        "sessionEventCount": 152,
+        "sessionAttemptCount": 0,
+        "sessionMatchEnds": 0,
+        "contiguousArchivedTail": {
+          "firstStep": 0,
+          "lastStep": 32,
+          "authoritativeFactCount": 33
+        },
+        "detachedTailIngested": false,
+        "globalAttemptStatuses": {
+          "confirmed": 2,
+          "not-dispatched": 5
+        },
+        "globalConfirmations": 2,
+        "globalLocalSlots": 7,
+        "globalSourceSlots": 7,
+        "globalUnresolvedAttempts": 0,
+        "attemptsSlotsAndConfirmationsMatchBeforeSnapshot": true,
+        "priorAttemptAndSlotSnapshotSha256": "99101f8c9ca88f9556702e8d08c0625d9037c2342ac83d5f9a1875ada14b81cf"
+      },
+      "limitations": {
+        "terminalProtocolPayloadRetained": false,
+        "terminalScreenshotRetained": false,
+        "missingTailReconstructableFromSummary": false,
+        "priorReportCanBeUpgraded": false,
+        "newGatePasses": 0
+      }
     }
   ],
   "countdownLayout": {
