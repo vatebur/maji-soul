@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
-import { bridgeCall, type EgoPagePort } from './ego-transport.ts';
+import { bridgeCall, type EgoPagePort, type AutoWinHandScope } from './ego-transport.ts';
 import { requireThat } from '../../domain/game/value.ts';
 
 export interface PixelImage { width: number; height: number; rgba: Uint8Array }
@@ -240,11 +240,15 @@ async function waitForRecoveryTable(page:EgoPagePort,profile:AutoWinProfile,scop
 }
 
 /** One verified click at most; unknown UI, stale epochs and failed readback close the gate. */
-export async function ensureAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE, enabled = true, purpose: 'initialize'|'resume'|'pause-cleanup'|'reconnect' = 'resume') {
+export async function ensureAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE, enabled = true,
+  purpose: 'initialize'|'resume'|'pause-cleanup'|'reconnect'|'new-hand' = 'resume', handScope?:AutoWinHandScope) {
   requireThat(purpose!=='pause-cleanup' || !enabled, 'AUTO_WIN_PURPOSE_INVALID');
+  requireThat(purpose==='new-hand' ? !!handScope : handScope===undefined,'AUTO_WIN_PURPOSE_INVALID');
   let recoveryScope:any=null,nativeRestore:NativeRestoreProof|null=null;
   if (purpose!=='pause-cleanup') {
     recoveryScope=await bridgeCall(page,'read');
+    if (handScope) requireThat(recoveryScope.pageEpoch===handScope.pageEpoch && recoveryScope.sourceStream===handScope.sourceStream &&
+      recoveryScope.generation===handScope.generation && recoveryScope.lastStep===handScope.step,'AUTO_WIN_READBACK_STALE');
     nativeRestore=await waitForNativeRestore(page,recoveryScope);
   }
   let readback=nativeRestore?await waitForRecoveryTable(page,profile,recoveryScope,nativeRestore):await inspectAutoWin(page,profile);

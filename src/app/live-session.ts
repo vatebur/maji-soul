@@ -17,7 +17,7 @@ const autoWinProtocolErrors = new Set(['BRIDGE_MISSING','BRIDGE_UNTRUSTED','BRID
   'CONTROL_BARRIER_FAILED','PROCESS_INSTANCE_STALE','FENCE_STALE','SOURCE_STEP_GAP','DISCONNECTED','CONNECTION_CHANGED','RECONNECT_REQUESTED']);
 
 export interface AutoWinRecovery {
-  trigger: 'initial-sync' | 'reconnect'; status: 'pending' | 'verified' | 'unverified' | 'not-required'; attempted: boolean;
+  trigger: 'initial-sync' | 'reconnect' | 'new-hand'; status: 'pending' | 'verified' | 'unverified' | 'not-required'; attempted: boolean;
   connectionEpoch: number; gameHandKey: string; pageEpoch: number; sourceStream: number | null; step: number; generation: number;
   code: string | null;
   readback: {source:'unity-button-pixels-v1'|null;state:'enabled'|'disabled'|'unknown';observedAt:string|null;
@@ -82,6 +82,7 @@ export class LiveGameSession {
   #timingDiagnostics: ReturnType<typeof summarizeTimingAcquisition> = null;
   #browserStatsBefore: ReturnType<typeof summarizeBrowserStats> = null;
   #autoWinRecoveries: AutoWinRecovery[] = [];
+  #pendingAutoWinRecovery: AutoWinRecovery | null = null;
   constructor(actor: GameActor, page: EgoPagePort, room: FriendRoom) {
     this.coordinator = new GameCoordinator(actor); this.#page = page; this.#room = room;
   }
@@ -140,22 +141,30 @@ export class LiveGameSession {
     this.#rememberCursor(cursor);
     this.#gameUuid = pageState.gameUuid;
     this.#recovering = false; this.#pendingResult = null;
+    this.#pendingAutoWinRecovery = null;
     this.segments.push({sync,subsequent:[]});
-    if (!collectExecutionProofs) await this.#restoreAutoWin(cursor,!!terminal,recovering);
+    if (!collectExecutionProofs) await this.#restoreAutoWin(cursor,this.#recordAutoWinRecovery(cursor,!!terminal,recovering?'reconnect':'initial-sync'));
     return {sync,cursor,timing,timingEvidence,autoWinReadback};
   }
-  async #restoreAutoWin(cursor:any,terminal:boolean,recovering:boolean) {
+  #recordAutoWinRecovery(cursor:any,terminal:boolean,trigger:AutoWinRecovery['trigger']):AutoWinRecovery {
     const p=this.actor.projection;
-    const recovery:AutoWinRecovery={trigger:recovering?'reconnect':'initial-sync',status:terminal?'not-required':'pending',attempted:false,
+    const recovery:AutoWinRecovery={trigger,status:terminal?'not-required':'pending',attempted:false,
       connectionEpoch:p.connectionEpoch,gameHandKey:p.gameHandKey!,pageEpoch:cursor.pageEpoch,
       sourceStream:diagnosticNumber(cursor.sourceStream),step:cursor.lastStep,generation:cursor.generation,code:null,readback:null};
     this.#autoWinRecoveries.push(recovery);
-    if (terminal) return;
+    return recovery;
+  }
+  async #restoreAutoWin(cursor:any,recovery:AutoWinRecovery) {
+    if (recovery.status==='not-required') return;
+    const p=this.actor.projection;
     requireThat(this.actor.control.paused && !this.actor.control.needsSync && p.state?.trust==='trusted','AUTO_WIN_RECOVERY_REQUIRES_SYNC');
     recovery.attempted=true;
     let fatal:unknown,failed=false;
     try {
-      const readback=await bridgeCall(this.#page,'ensureAutoWin',recovering?{purpose:'reconnect'}:undefined);
+      const argument=recovery.trigger==='new-hand' ? {purpose:'new-hand',expected:{pageEpoch:cursor.pageEpoch,
+        sourceStream:cursor.sourceStream,generation:cursor.generation,step:cursor.lastStep}}
+        : recovery.trigger==='reconnect' ? {purpose:'reconnect'} : undefined;
+      const readback=await bridgeCall(this.#page,'ensureAutoWin',argument);
       recovery.readback={source:readback.source==='unity-button-pixels-v1'?'unity-button-pixels-v1':null,
         state:['enabled','disabled','unknown'].includes(readback.state)?readback.state:'unknown',observedAt:diagnosticTime(readback.observedAt),
         pageEpoch:diagnosticNumber(readback.pageEpoch),generation:diagnosticNumber(readback.generation),step:diagnosticNumber(readback.step),
@@ -177,6 +186,32 @@ export class LiveGameSession {
     const batch=await bridgeCall(this.#page,'drain');
     await this.#consumeBatch(batch,false);
     if (failed) throw fatal;
+  }
+  async #restorePendingHandAutoWin(batch:any) {
+    const recovery=this.#pendingAutoWinRecovery,p=this.actor.projection;
+    if (!recovery || recovery.status!=='pending' || recovery.connectionEpoch!==p.connectionEpoch || recovery.gameHandKey!==p.gameHandKey ||
+      p.handStatus!=='playing' || p.matchStatus!=='playing' || p.matchEndPending || this.#pendingResult || this.#recovering ||
+      !this.actor.control.paused || this.actor.control.needsSync || p.state?.trust!=='trusted') return;
+    // SQLite ingress and the control barrier can outlast another page update.
+    // Defer until that ingress has been drained; never toggle an older hand.
+    const current=await bridgeCall(this.#page,'read');
+    if (current.pageEpoch!==recovery.pageEpoch || diagnosticNumber(current.sourceStream)!==recovery.sourceStream ||
+      current.pageEpoch!==batch.pageEpoch || current.sourceStream!==batch.sourceStream ||
+      current.generation!==batch.generation || current.lastStep!==batch.lastStep ||
+      !Number.isSafeInteger(current.sourceStream) || current.sourceStream<0 || !Number.isSafeInteger(current.lastStep) || current.lastStep<0 ||
+      current.paused!==true || current.connected!==true || !current.freshConnection || current.handEnded || current.matchEnded ||
+      current.reason || current.overflow || (current.queued ?? 0)!==0) return;
+    // Wait through the opening animation and other seats' automatic actions.
+    // This client offer only identifies a quiet UI opportunity; it does not
+    // create an executable opening window or authorize any game action.
+    const offered=current.operation?.value,operations=offered?.operation_list;
+    if (current.operation?.step!==current.lastStep || offered?.seat!==p.state.ownSeat || !Array.isArray(operations) ||
+      operations.length===0 || operations.some((operation:any)=>!Number.isSafeInteger(operation?.type) || operation.type<1 || operation.type>7)) return;
+    recovery.generation=current.generation;recovery.step=current.lastStep;
+    // One attempt per committed hand. A failure may follow a real click, so it
+    // must not be retried merely because the next pump sees the same hand.
+    this.#pendingAutoWinRecovery=null;
+    await this.#restoreAutoWin(current,recovery);
   }
   #validateAutoWinRecovery(batch:any) {
     const recovery=this.#autoWinRecoveries.at(-1),proof=recovery?.readback;
@@ -218,6 +253,7 @@ export class LiveGameSession {
       }
       return;
     }
+    const previousHand=this.actor.projection.gameHandKey;
     for (const record of batch.records) {
       requireThat(record.gameUuid === undefined || record.gameUuid === this.#gameUuid,'OBSERVED_MATCH_CHANGED');
       const projection = this.actor.projection;
@@ -250,6 +286,17 @@ export class LiveGameSession {
       }
     }
     this.#validateAutoWinRecovery(batch);
+    const p=this.actor.projection,terminal=p.handStatus==='finished' || p.matchStatus==='finished';
+    if (this.#pendingAutoWinRecovery && (terminal || this.#pendingAutoWinRecovery.gameHandKey!==p.gameHandKey)) {
+      this.#pendingAutoWinRecovery.status='not-required';this.#pendingAutoWinRecovery=null;
+    }
+    if (p.gameHandKey!==previousHand) {
+      // Publish pending immediately: a prior hand's verified/not-required result
+      // (or no initial recovery record) cannot make this hand pass observation.
+      const recovery=this.#recordAutoWinRecovery(batch,terminal,'new-hand');
+      this.#pendingAutoWinRecovery=terminal?null:recovery;
+    }
     await this.actor.awaitControlBarrier();
+    if (allowSynchronization) await this.#restorePendingHandAutoWin(batch);
   }
 }

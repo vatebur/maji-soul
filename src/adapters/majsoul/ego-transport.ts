@@ -11,15 +11,24 @@ export interface EgoPagePort {
   reload?(): Promise<any>;
 }
 export interface PageCursor { generation: number; pageEpoch: number; step: number }
+export interface AutoWinHandScope extends PageCursor { sourceStream: number }
 export function bridgeCall(page: EgoPagePort, method: string, argument?: unknown): Promise<any> {
   requireThat(['read', 'drain', 'pause', 'sync', 'ackSync', 'prepare', 'dispatch', 'reconnect', 'restore', 'ackAutoWin', 'ackTiming', 'ensureAutoWin', 'verifyAutoWin', 'automaticTiming'].includes(method), 'BRIDGE_METHOD_INVALID');
-  if (method === 'ensureAutoWin') requireThat(argument == null || typeof argument === 'object' && !Array.isArray(argument) &&
-    Object.keys(argument).length === 1 && (argument as {purpose?:unknown}).purpose === 'reconnect', 'AUTO_WIN_PURPOSE_INVALID');
+  if (method === 'ensureAutoWin' && argument != null) {
+    const options=argument as {purpose?:unknown;expected?:AutoWinHandScope},expected=options.expected;
+    requireThat(typeof argument==='object' && !Array.isArray(argument) && Object.hasOwn(argument,'purpose') &&
+      (Object.keys(argument).length===1 && options.purpose==='reconnect' ||
+       Object.keys(argument).length===2 && Object.hasOwn(argument,'expected') && options.purpose==='new-hand' && expected && typeof expected==='object' && !Array.isArray(expected) &&
+       Object.keys(expected).length===4 && ['pageEpoch','sourceStream','generation','step'].every(key=>
+         Object.hasOwn(expected,key) && Number.isSafeInteger(expected[key as keyof AutoWinHandScope]) && expected[key as keyof AutoWinHandScope]>=0) && expected.pageEpoch>0),
+    'AUTO_WIN_PURPOSE_INVALID');
+  }
   // The ego helper owns CDP; the pinned child forwards these bounded operations
   // over the same whitelist instead of creating another browser or OCR service.
   if (page.cdp && (method === 'ensureAutoWin' || method === 'verifyAutoWin')) {
     return import('./auto-win.ts').then(adapter => method === 'ensureAutoWin'
-      ? adapter.ensureAutoWin(page,undefined,true,argument ? 'reconnect':'resume') : adapter.verifyAutoWin(page));
+      ? adapter.ensureAutoWin(page,undefined,true,(argument as {purpose:'reconnect'|'new-hand'}|null)?.purpose ?? 'resume',
+          (argument as {expected?:AutoWinHandScope}|null)?.expected) : adapter.verifyAutoWin(page));
   }
   if (page.cdp && method === 'automaticTiming') return import('./automatic-timing.ts').then(adapter => adapter.collectAutomaticTiming(page));
   return page.evaluate(({ method, argument }) => {

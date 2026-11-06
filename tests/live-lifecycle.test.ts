@@ -13,6 +13,7 @@ import { GameActor } from '../src/application/game/actor.ts';
 import { StorageClient } from '../src/adapters/storage/client.ts';
 import { buildPhase1Fixture } from '../scripts/build-phase1-fixtures.ts';
 import { ScriptedPage } from './live-helpers.ts';
+import { bridgeCall } from '../src/adapters/majsoul/ego-transport.ts';
 
 /** Scripted wire/DOM port only; coordinator, actor, worker, ledger and capture are real. */
 class LifecyclePage extends ScriptedPage {
@@ -95,7 +96,9 @@ test('maximum-length observer follows hand boundaries and stops at the full matc
     assert.deepEqual(report.lifecycle,{handStarts:2,handEnds:3,matchEnds:1,reconnects:0,handOrdinal:3,
       handStatus:'finished',matchStatus:'finished',matchEndPending:false,awaitingSettlement:false,recovering:false});
     assert.equal(h.page.sends,0);assert.equal(report.counts.confirmations,0);
-    assert.equal(report.autoWinRecovery?.status,'unverified');assert.equal(report.autoWinRecovery?.code,'AUTO_WIN_READBACK_STALE');
+    assert.equal(report.autoWinRecovery?.trigger,'new-hand');assert.equal(report.autoWinRecovery?.status,'not-required');
+    assert.equal(report.autoWinRecovery?.attempted,false);
+    assert.equal(report.autoWinRecoveries[0].status,'unverified');assert.equal(report.autoWinRecoveries[0].code,'AUTO_WIN_READBACK_STALE');
     assert.equal(h.page.calls.filter(c=>c==='ensureAutoWin').length,1);assert.equal(h.page.calls.includes('prepare'),false);
     const replayed=await replay(report.captureDirectory,{outputDirectory:join(h.directory,'replay')});
     assert.equal(replayed.status,'passed');assert.equal(replayed.finalHandOrdinal,3);
@@ -384,5 +387,178 @@ test('a revoked, replaced, disabled or unknown readback invalidates recovery wit
       assert.equal(live.autoWinRecovery?.code,'AUTO_WIN_READBACK_STALE');assert.equal(page.ensureCalls,1);assert.equal(page.sends,0);
       assert.equal((await storage.inspect('negative-session')).counts.faults,0);
     }finally{await storage.close();await rm(directory,{recursive:true,force:true});}
+  });
+});
+
+class HandRecoveryPage extends AutoWinRecoveryPage {
+  opening:any;handEnded=false;matchEnded=false;operation:any=null;initialTerminal=false;
+  beforeRead:(()=>void)|undefined;beforeDrain:(()=>void)|undefined;afterEnsure:(()=>void)|undefined;
+  action(name:string,payload:any,step=this.lastStep+1) {
+    this.lastStep=step;this.generation++;
+    this.operation=payload.operation?{step,value:payload.operation}:null;
+    this.records.push({kind:'action',name,step,payload,receivedAt:this.at,
+      gameUuid:'contract-only-game-uuid',handSha256:this.opening.sha256});
+  }
+  endHand(final=false) {
+    this.action('ActionNoTile',{liujumanguan:false,gameend:final,scores:[]});
+    this.handEnded=true;this.lastReadback=null;
+    if (final) {
+      this.matchEnded=true;this.generation++;
+      this.records.push({kind:'match-end',receivedAt:this.at,gameUuid:'contract-only-game-uuid',handSha256:this.opening.sha256,
+        payload:{result:{players:[0,1,2,3].map(seat=>({seat,part_point_1:25000}))}}});
+    }
+  }
+  nextHand(commitment='b',dealer=0) {
+    if (!this.handEnded) this.endHand();
+    this.opening={...this.opening,ju:dealer,ben:this.opening.ben+1,sha256:commitment.repeat(64),
+      tiles:[...this.opening.tiles.slice(0,13),...(dealer===1?['9s']:[])],operation:dealer===1?{seat:1,operation_list:[{type:1}]}:null};
+    this.sourceStream++;this.handEnded=false;
+    this.action('ActionNewRound',structuredClone(this.opening),0);
+    this.autoWinState='disabled';this.autoWinNeedsEnable=true;this.lastReadback=null;
+  }
+  ownTurn(winning=false) {
+    this.action('ActionDiscardTile',{seat:0,tile:'9m',moqie:false,is_liqi:false,is_wliqi:false});
+    this.action('ActionDealTile',{seat:1,tile:'0m',left_tile_count:68,
+      operation:{seat:1,operation_list:[{type:winning?8:1}]}});
+  }
+  async evaluate(source:any,input?:any):Promise<any> {
+    const method=input?.method;
+    if (method==='read') {const next=this.beforeRead;this.beforeRead=undefined;next?.();}
+    if (method==='drain') this.beforeDrain?.();
+    const result=await super.evaluate(source,input);
+    if (method==='sync') {
+      this.opening=structuredClone(result.game_restore.actions[0].payload);
+      if (this.initialTerminal) {
+        result.game_restore.actions.push({name:'ActionNoTile',step:3,payload:{liujumanguan:false,gameend:false,scores:[]}});
+        result.step=4;this.lastStep=3;this.handEnded=true;
+      }
+    }
+    if (method==='read'||method==='drain') return {...result,paused:this.controls.at(-1)?.paused ?? true,
+      handEnded:this.handEnded,matchEnded:this.matchEnded,operation:this.operation};
+    if (method==='ensureAutoWin') {const next=this.afterEnsure;this.afterEnsure=undefined;next?.();}
+    return result;
+  }
+}
+
+async function handRecoveryScenario() {
+  const directory=await mkdtemp(join(tmpdir(),'maji-hand-auto-win-')),storage=new StorageClient(join(directory,'state.sqlite'));
+  const actor=await GameActor.open(storage,'hand-recovery-session','process'),page=new HandRecoveryPage(join(directory,'state.sqlite'));
+  actor.attachControlSink(control=>bridgeCall(page,'pause',control));
+  const live=new LiveGameSession(actor,page,buildPhase1Fixture().projection.room!);
+  return {directory,storage,actor,page,live,cleanup:async()=>{await actor.idle();await storage.close();await rm(directory,{recursive:true,force:true});}};
+}
+
+test('a new hand waits for its own non-winning window and restores once without reviving old decisions or permits',async t=>{
+  for(const dealer of [0,1])await t.test(dealer===0?'dealer-repeat-then-own-draw':'own-dealer-opening',async()=>{
+    const h=await handRecoveryScenario();
+    try {
+      await h.live.synchronize(true);await h.actor.resume();
+      const decision=await h.actor.freezeDecision(),oldHand=h.actor.projection.gameHandKey;
+      const permit=h.actor.issuePermit(decision.id,decision.legalActions[0]!.id,'previous-hand-permit');
+      h.page.nextHand('b',dealer);await h.live.pump();
+      if(dealer===0) {
+        assert.equal(h.live.autoWinRecovery?.status,'pending');assert.equal(h.live.autoWinRecovery?.attempted,false);
+        assert.equal(h.page.ensureCalls,1);assert.equal(h.page.autoWinState,'disabled');
+        h.page.ownTurn();await h.live.pump();
+      } else assert.equal(h.actor.projection.state!.operationWindow,undefined);
+      assert.equal(h.live.autoWinRecovery?.trigger,'new-hand');assert.equal(h.live.autoWinRecovery?.status,'verified');
+      assert.equal(h.live.autoWinRecovery?.gameHandKey,h.actor.projection.gameHandKey);
+      assert.notEqual(h.actor.projection.gameHandKey,oldHand);assert.equal(h.actor.projection.handOrdinal,2);
+      assert.equal(h.page.ensureCalls,2);assert.equal(h.live.autoWinRecovery?.readback?.clicked,true);
+      assert.deepEqual(h.page.ensureArguments.at(-1),{purpose:'new-hand',expected:{pageEpoch:1,sourceStream:1,
+        generation:h.live.autoWinRecovery!.generation,step:dealer===0?2:0}});
+      assert.throws(()=>h.actor.decision(decision.id),/DECISION_STALE/);
+      assert.throws(()=>h.actor.consumePermit(permit),/PERMIT_INVALID/);
+      await h.live.pump();assert.equal(h.page.ensureCalls,2);assert.equal(h.actor.control.paused,true);
+      assert.equal(h.page.sends,0);assert.equal(h.page.calls.includes('prepare'),false);
+      assert.equal((await h.storage.inspect('hand-recovery-session')).counts.outbox,0);
+    }finally{await h.cleanup();}
+  });
+});
+
+test('a winning first window keeps new-hand recovery pending without a competing toggle',async()=>{
+  const h=await handRecoveryScenario();
+  try {
+    await h.live.synchronize(false);h.page.nextHand();await h.live.pump();
+    h.page.ownTurn(true);await h.live.pump();
+    assert.equal(h.live.autoWinRecovery?.status,'pending');assert.equal(h.live.autoWinRecovery?.attempted,false);
+    assert.equal(h.page.ensureCalls,1);assert.equal(h.page.autoWinState,'disabled');assert.equal(h.page.sends,0);
+  }finally{await h.cleanup();}
+});
+
+test('new-hand readiness defers opposing, stale, empty, unknown or mixed winning offers without spending its attempt',async()=>{
+  const h=await handRecoveryScenario();
+  try {
+    await h.live.synchronize(false);h.page.nextHand('b',1);
+    const offer=structuredClone(h.page.operation);
+    const unavailable=[{...offer,value:{...offer.value,seat:0}},{...offer,step:1},
+      ...[[],[{type:0}],[{type:'1'}],[{type:1},{type:9}]].map(operation_list=>({...offer,value:{...offer.value,operation_list}}))];
+    for(const operation of unavailable) {
+      h.page.operation=operation;await h.live.pump();
+      assert.equal(h.live.autoWinRecovery?.status,'pending');assert.equal(h.live.autoWinRecovery?.attempted,false);
+      assert.equal(h.page.ensureCalls,1);assert.equal(h.page.sends,0);
+    }
+    h.page.operation=offer;await h.live.pump();
+    assert.equal(h.live.autoWinRecovery?.status,'verified');assert.equal(h.page.ensureCalls,2);assert.equal(h.page.sends,0);
+  }finally{await h.cleanup();}
+});
+
+test('a failed new-hand toggle is attempted once while later authority is still ingested',async()=>{
+  const h=await handRecoveryScenario();
+  try {
+    await h.live.synchronize(false);h.page.nextHand('b',1);h.page.uiError='AUTO_WIN_READBACK_FAILED';
+    await h.live.pump();assert.equal(h.live.autoWinRecovery?.status,'unverified');
+    assert.equal(h.live.autoWinRecovery?.code,'AUTO_WIN_READBACK_FAILED');assert.equal(h.live.autoWinRecovery?.attempted,true);
+    h.page.uiError=null;h.page.action('ActionDiscardTile',{seat:1,tile:'9s',moqie:false,is_liqi:false,is_wliqi:false});
+    await h.live.pump();await h.live.pump();
+    assert.equal(h.actor.projection.state!.players[1].river.length,1);assert.equal(h.page.ensureCalls,2);
+    assert.equal(h.live.autoWinRecovery?.status,'unverified');assert.equal(h.actor.control.paused,true);assert.equal(h.page.sends,0);
+  }finally{await h.cleanup();}
+});
+
+test('new-hand ingress during preflight or readback defers the replacement hand without recursive toggles',async t=>{
+  for(const phase of ['preflight','readback'])await t.test(phase,async()=>{
+    const h=await handRecoveryScenario();
+    try {
+      await h.live.synchronize(false);h.page.nextHand('b',1);
+      if(phase==='preflight')h.page.beforeRead=()=>h.page.nextHand('c',1);
+      else h.page.afterEnsure=()=>h.page.nextHand('c',1);
+      await h.live.pump();assert.equal(h.page.ensureCalls,phase==='preflight'?1:2);
+      assert.equal(h.live.autoWinRecovery?.status,'pending');assert.equal(h.live.autoWinRecovery?.attempted,false);
+      await h.live.pump();
+      assert.equal(h.actor.projection.handOrdinal,3);assert.equal(h.live.autoWinRecovery?.status,'verified');
+      assert.equal(h.live.autoWinRecovery?.gameHandKey,h.actor.projection.gameHandKey);
+      assert.equal(h.page.ensureCalls,phase==='preflight'?2:3);assert.equal(h.page.sends,0);
+      if(phase==='readback')assert.equal(h.live.autoWinRecoveries[1]!.status,'unverified');
+    }finally{await h.cleanup();}
+  });
+});
+
+test('a new hand ending in the same batch needs no toggle',async()=>{
+  const h=await handRecoveryScenario();
+  try {
+    await h.live.synchronize(false);h.page.nextHand('b',1);h.page.endHand(true);await h.live.pump();
+    assert.equal(h.actor.projection.matchStatus,'finished');assert.equal(h.live.autoWinRecovery?.trigger,'new-hand');
+    assert.equal(h.live.autoWinRecovery?.status,'not-required');assert.equal(h.live.autoWinRecovery?.attempted,false);
+    assert.equal(h.page.ensureCalls,1);assert.equal(h.page.sends,0);
+  }finally{await h.cleanup();}
+});
+
+test('new-hand recovery crosses stdio and pending cannot inherit an initial terminal hand exemption',async t=>{
+  for(const initiallyTerminal of [false,true])await t.test(initiallyTerminal?'pending-blocks-report':'new-hand-scope-over-stdio',async()=>{
+    const directory=await mkdtemp(join(tmpdir(),'maji-hand-auto-win-broker-'));
+    try {
+      const page=new HandRecoveryPage(join(directory,'state.sqlite'));page.initialTerminal=initiallyTerminal;
+      let drains=0;
+      page.beforeDrain=()=>{if(++drains===(initiallyTerminal?2:3))page.nextHand('b',initiallyTerminal?0:1);};
+      const report=await acceptLiveViaNode(page,{outputDirectory:join(directory,'run'),databasePath:page.databasePath,
+        room:buildPhase1Fixture().projection.room!,sourceVersion:'synthetic-new-hand-recovery',observeMs:150},process.execPath);
+      assert.equal(report.status,initiallyTerminal?'blocked':'passed');assert.equal(report.autoWinRecovery.trigger,'new-hand');
+      assert.equal(report.autoWinRecovery.status,initiallyTerminal?'pending':'verified');
+      assert.equal(report.autoWinRecovery.attempted,!initiallyTerminal);assert.equal(report.lifecycle.handOrdinal,2);
+      assert.equal(report.programPaused,true);assert.equal(page.sends,0);assert.equal(page.calls.includes('prepare'),false);
+      if(initiallyTerminal) {assert.equal(page.ensureCalls,0);assert.equal(report.autoWinRecoveries[0].status,'not-required');}
+      else assert.deepEqual(page.ensureArguments.at(-1),{purpose:'new-hand',expected:{pageEpoch:1,sourceStream:1,generation:3,step:0}});
+    }finally{await rm(directory,{recursive:true,force:true});}
   });
 });

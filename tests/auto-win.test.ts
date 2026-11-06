@@ -252,12 +252,41 @@ test('missing and unfinished native recovery fail closed with no screenshot or c
   assert.equal(unfinished.clicks,0);assert.equal(unfinished.captures,0);assert.equal(unfinished.acknowledgements.length,0);
 });
 
-test('the bridge routes only the explicit reconnect purpose through the native prerequisite',async()=>{
+test('the bridge routes the explicit reconnect purpose through the native prerequisite',async()=>{
   const page=new Page();page.nativeLifecycleTrace=undefined;
   await assert.rejects(bridgeCall(page,'ensureAutoWin',{purpose:'reconnect'}),/AUTO_WIN_RECOVERY_NOT_READY/);
   assert.equal(page.clicks,0);assert.equal(page.captures,0);
   for(const argument of [{purpose:'resume'},{purpose:'reconnect',extra:true},true,[]])
     assert.throws(()=>bridgeCall(page,'ensureAutoWin',argument),/AUTO_WIN_PURPOSE_INVALID/);
+});
+
+test('new-hand recovery checks its exact target before screenshots, clicks or acknowledgements',async()=>{
+  const expected={pageEpoch:1,sourceStream:0,generation:2,step:1};
+  for(const field of ['pageEpoch','sourceStream','generation','step'] as const) {
+    const page=new Page();
+    if(field==='pageEpoch')page.epoch++;
+    else page[field]++;
+    await assert.rejects(bridgeCall(page,'ensureAutoWin',{purpose:'new-hand',expected}),/AUTO_WIN_READBACK_STALE/);
+    assert.equal(page.captures,0);assert.equal(page.clicks,0);assert.equal(page.acknowledgements.length,0);
+  }
+  const page=new Page();page.generation=0;page.step=0;
+  const result=await bridgeCall(page,'ensureAutoWin',{purpose:'new-hand',expected:{...expected,generation:0,step:0}});
+  assert.equal(result.clicked,true);assert.equal(result.state,'enabled');assert.equal(page.clicks,1);
+  assert.ok(page.captures>=3);assert.equal(page.acknowledgements.length,1);
+});
+
+test('new-hand RPC arguments have a bounded four-field scope and cannot alter other purposes',async()=>{
+  const page=new Page(),expected={pageEpoch:1,sourceStream:0,generation:0,step:0};
+  const invalid=[{purpose:'new-hand'},{purpose:'new-hand',expected:null},{purpose:'new-hand',expected,extra:true},
+    {purpose:'reconnect',expected},{expected},{purpose:'new-hand',expected:{...expected,extra:true}},
+    {purpose:'new-hand',expected:{pageEpoch:1,sourceStream:0,step:0}},
+    Object.assign(Object.create({purpose:'new-hand'}),{expected,extra:true})];
+  for(const field of ['pageEpoch','sourceStream','generation','step'])
+    for(const value of [-1,0.5,Number.MAX_SAFE_INTEGER+1,'1'])invalid.push({purpose:'new-hand',expected:{...expected,[field]:value}} as any);
+  invalid.push({purpose:'new-hand',expected:{...expected,pageEpoch:0}});
+  for(const argument of invalid)assert.throws(()=>bridgeCall(page,'ensureAutoWin',argument),/AUTO_WIN_PURPOSE_INVALID/);
+  await assert.rejects(ensureAutoWin(page,profile,true,'new-hand'),/AUTO_WIN_PURPOSE_INVALID/);
+  assert.equal(page.reads,0);assert.equal(page.captures,0);assert.equal(page.clicks,0);
 });
 
 test('default and initialization calls cannot bypass native readiness while pause cleanup can close the switch',async()=>{
