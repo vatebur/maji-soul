@@ -2,7 +2,7 @@ import { Worker } from 'node:worker_threads';
 import { randomUUID } from 'node:crypto';
 import type { ActionAttempt, AuthoritativeSync, CallReceipt, DecisionMode, DecisionSnapshot, GameObservation } from '../../domain/game/types.ts';
 import { canonical, requireThat } from '../../domain/game/value.ts';
-import type { ReserveActionInput, StorageMethod, StoragePort, StorageRequests, StorageResults } from '../../ports/storage.ts';
+import type { ConsoleWrite, DeliveryStatus, ReplayFence, ReserveActionInput, StorageMethod, StoragePort, StorageRequests, StorageResults } from '../../ports/storage.ts';
 
 interface Pending { resolve: (result: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
 /** Bounded, fail-closed RPC client. A timed-out write has an unknown outcome: reopen and inspect its stable IDs. */
@@ -70,6 +70,26 @@ export class StorageClient implements StoragePort {
   inspect(sessionId: string) { return this.#call('inspect', { sessionId }); }
   inspectMatch(gameMatchKey: string) { return this.#call('inspectMatch', { gameMatchKey }); }
   async recordFault(sessionId: string, code: string, at: string): Promise<void> { await this.#call('recordFault', { sessionId, code, at }); }
+  openReplaySession(sessionId: string, runId: string, startedAt: string) { return this.#call('openReplaySession', { sessionId, runId, startedAt }); }
+  commitReplayEvent(sessionId: string, expectedSequence: number, observation: GameObservation, fence: ReplayFence) {
+    return this.#call('commitReplayEvent', { sessionId, expectedSequence, observation, ...fence });
+  }
+  readCommentaryContext(id: string) { return this.#call('readCommentaryContext', { id }); }
+  saveCommentary(input: StorageRequests['saveCommentary']) { return this.#call('saveCommentary', input); }
+  readDiscards(sessionId: string, limit = 100) { return this.#call('readDiscards', { sessionId, limit }); }
+  readProjection(sessionId: string) { return this.#call('readProjection', { sessionId }); }
+  readDecisions(sessionId: string, matchId: string | null, handId: string | null, after: number, limit: number) {
+    return this.#call('readDecisions', { sessionId, matchId, handId, after, limit });
+  }
+  readDecision(id: string) { return this.#call('readDecision', { id }); }
+  readConsole() { return this.#call('readConsole', {}); }
+  recentCommands() { return this.#call('recentCommands', {}); }
+  readCommand(id: string) { return this.#call('readCommand', { id }); }
+  saveConsole(revision: number, body: unknown, command: ConsoleWrite | null) { return this.#call('saveConsole', { revision, body, command }); }
+  markViewerSeen(id: string, at: string) { return this.#call('markViewerSeen', { id, at }); }
+  reserveDelivery(id: string, at: string) { return this.#call('reserveDelivery', { id, at }); }
+  finishDelivery(id: string, status: DeliveryStatus) { return this.#call('finishDelivery', { id, status }); }
+  cleanupOutput(cutoff: string) { return this.#call('cleanupOutput', { cutoff }); }
   async close(): Promise<void> {
     if (this.#closing || this.#unavailable) return;
     this.#closing = true;

@@ -5,8 +5,10 @@ import type { ActionAttempt, AuthoritativeSync, CallReceipt, DecisionMode, Decis
 import { eventIdFor, initialProjection, reduceObservation, reduceSync } from '../../domain/game/reducer.ts';
 import { canonical, cursorParts, digest, nextCursor, observationFingerprint, requireThat } from '../../domain/game/value.ts';
 import { array, integer, object, oneOf, parseObservation, parseSync, string, timestamp, validateView, validateWindow } from '../../schemas/game.ts';
+import { commentaryContext, renderCommentary, validateCommentary, type CommentaryRecord } from '../../application/live/commentary-contract.ts';
+import { discardText, type DiscardArchive } from '../../application/live/explanation.ts';
 import { expectedActionFor } from '../majsoul/actions.ts';
-import type { CommitResult, DispatchIntentResult, MatchInspection, ReserveActionInput, StorageInspection } from '../../ports/storage.ts';
+import type { CommitResult, DispatchIntentResult, MatchInspection, ReserveActionInput, StorageInspection, ConsoleWrite, DeliveryStatus, ReplayFence, StorageResults, StorageRequests } from '../../ports/storage.ts';
 
 const APP_ID = 0x4d414a49;
 const parse = <T>(value: unknown): T => { requireThat(typeof value === 'string', 'STORAGE_DATA_INVALID'); return JSON.parse(value) as T; };
@@ -58,7 +60,7 @@ export class StorageDatabase {
           this.#db.exec(readFileSync(new URL('./migrations/001-state.sql', import.meta.url), 'utf8'));
           this.#db.exec(`PRAGMA application_id=${APP_ID}; PRAGMA user_version=1;`);
         });
-      } else requireThat((version === 1 || version === 2) && appId === APP_ID, 'STORAGE_VERSION_UNSUPPORTED');
+      } else requireThat((version === 1 || version === 2 || version === 3 || version === 4) && appId === APP_ID, 'STORAGE_VERSION_UNSUPPORTED');
       if (!readOnly && this.#db.prepare('PRAGMA user_version').get()?.user_version === 1) {
         // Rebuild CHECK-constrained tables without changing the references from slot/fact tables.
         // Foreign keys must be disabled before opening the migration transaction.
@@ -70,6 +72,24 @@ export class StorageDatabase {
             this.#db.exec('PRAGMA user_version=2;');
           });
         } finally { this.#db.exec('PRAGMA foreign_keys=ON;'); }
+      }
+      if (!readOnly && this.#db.prepare('PRAGMA user_version').get()?.user_version === 2) {
+        this.#transaction(() => {
+          if (this.#db.prepare('PRAGMA user_version').get()?.user_version !== 2) return;
+          this.#db.exec(readFileSync(new URL('./migrations/003-live-output.sql', import.meta.url), 'utf8'));
+          const insert = this.#db.prepare('INSERT INTO discard_explanations (outbox_id, fact_text) VALUES (?, ?)');
+          for (const row of this.#db.prepare('SELECT outbox_id, payload FROM outbox').iterate()) {
+            insert.run(String(row.outbox_id), discardText(parse<ObservedAction>(row.payload)));
+          }
+          this.#db.exec('PRAGMA user_version=3;');
+        });
+      }
+      if (!readOnly && this.#db.prepare('PRAGMA user_version').get()?.user_version === 3) {
+        this.#transaction(() => {
+          if (this.#db.prepare('PRAGMA user_version').get()?.user_version !== 3) return;
+          this.#db.exec(readFileSync(new URL('./migrations/004-commentary.sql', import.meta.url), 'utf8'));
+          this.#db.exec('PRAGMA user_version=4;');
+        });
       }
     } catch (error) { this.#db.close(); throw error; }
   }
@@ -89,13 +109,18 @@ export class StorageDatabase {
   #putProjection(projection: GameProjection): void {
     this.#db.prepare('UPDATE checkpoints SET sequence=?, projection=? WHERE session_id=?').run(projection.sequence, canonical(projection), projection.sessionId);
   }
-  openSession(sessionId: string, processInstanceId: string, startedAt: string): GameProjection {
+  openSession(sessionId: string, processInstanceId: string, startedAt: string, replayRunId?: string): GameProjection {
     return this.#transaction(() => {
       const existing = this.#db.prepare('SELECT process_instance_id FROM sessions WHERE session_id=?').get(sessionId);
+      if (replayRunId) {
+        const marker = this.#db.prepare('SELECT run_id FROM console_replays WHERE session_id=?').get(sessionId);
+        requireThat(!existing || marker?.run_id === replayRunId && existing.process_instance_id === processInstanceId, 'REPLAY_SESSION_CONFLICT');
+      }
       if (!existing) {
         const p = initialProjection(sessionId);
         this.#db.prepare('INSERT INTO sessions VALUES (?, ?, ?, 0)').run(sessionId, processInstanceId, startedAt);
         this.#db.prepare('INSERT INTO checkpoints VALUES (?, 0, ?)').run(sessionId, canonical(p));
+        if (replayRunId) this.#db.prepare('INSERT INTO console_replays VALUES (?, ?, ?)').run(sessionId, replayRunId, new Date().toISOString());
       } else if (existing.process_instance_id !== processInstanceId) {
         this.#db.prepare('UPDATE sessions SET process_instance_id=?, recovery_required=1 WHERE session_id=?').run(processInstanceId, sessionId);
         const rows = this.#db.prepare("SELECT body FROM action_attempts WHERE session_id=? AND status IN ('prepared','dispatching','awaiting-confirmation')").all(sessionId);
@@ -118,12 +143,18 @@ export class StorageDatabase {
   #insertEvent(p: GameProjection, epoch: number, key: string, fingerprint: string, type: string, payload: unknown): void {
     this.#db.prepare('INSERT INTO game_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(eventIdFor(p.sessionId, p.sequence), p.sessionId, p.sequence, epoch, key, fingerprint, type, canonical(payload));
   }
-  commitGameEvent(sessionId: string, expectedSequence: number, observation: GameObservation): CommitResult {
+  commitGameEvent(sessionId: string, expectedSequence: number, observation: GameObservation, replay?: ReplayFence): CommitResult {
     return this.#transaction(() => {
       this.#owned(sessionId);
       const fingerprint = observationFingerprint(observation), existing = this.findObservation(sessionId, observation.connectionEpoch, observation.sourceDedupKey);
       if (existing) { requireThat(existing.fingerprint === fingerprint, 'SOURCE_DEDUP_CONFLICT'); return { projection: this.#projection(sessionId), duplicate: true }; }
       const current = this.#projection(sessionId); requireThat(current.sequence === expectedSequence, 'VERSION_CONFLICT');
+      if (replay) {
+        requireThat(this.readConsole().revision === replay.revision, 'CONSOLE_STATE_CONFLICT');
+        requireThat(this.#db.prepare('SELECT session_id FROM console_replays WHERE session_id=?').get(sessionId), 'REPLAY_SESSION_CONFLICT');
+        if (replay.mode !== null) current.pendingMode = replay.mode;
+        this.#db.prepare('UPDATE console_replays SET last_used_at=? WHERE session_id=?').run(new Date().toISOString(), sessionId);
+      }
       const projection = reduceObservation(current, observation);
       if (['HandStarted', 'HandEnded', 'MatchEnded'].includes(observation.type)) this.#assertLedgerProgress(projection);
       this.#insertEvent(projection, observation.connectionEpoch, observation.sourceDedupKey, fingerprint, observation.type, observation);
@@ -166,7 +197,11 @@ export class StorageDatabase {
       : { eventId, handId: p.state.handId, actor: o.payload.meld.actor, kind: 'meld', tiles: o.payload.meld.tiles, tsumogiri: { known: false, reason: 'NOT_A_DISCARD' }, origin: 'unknown', observedAt: o.receivedAt, meld: o.payload.meld };
     if (!existing) {
       this.#db.prepare('INSERT INTO observed_actions VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(factKey, eventId, p.sessionId, p.gameMatchKey, p.gameHandKey, o.sourceCursor, factHash, canonical(fact));
-      if (fact.actor === p.state.ownSeat && fact.kind === 'discard') this.#db.prepare('INSERT INTO outbox VALUES (?, ?, ?, ?, ?, ?)').run(`discard-${factKey}`, p.sessionId, factKey, p.sequence, 'OwnDiscardObserved', canonical(fact));
+      if (fact.actor === p.state.ownSeat && fact.kind === 'discard') {
+        const id = `discard-${factKey}`;
+        this.#db.prepare('INSERT INTO outbox VALUES (?, ?, ?, ?, ?, ?)').run(id, p.sessionId, factKey, p.sequence, 'OwnDiscardObserved', canonical(fact));
+        this.#db.prepare('INSERT INTO discard_explanations (outbox_id, fact_text) VALUES (?, ?)').run(id, discardText(fact));
+      }
     }
     const rows = this.#db.prepare("SELECT body FROM action_attempts WHERE game_match_key=? AND game_hand_key=? AND expected_cursor=? AND execution_mode IN ('contract-test','live') AND status IN ('awaiting-confirmation','uncertain')").all(p.gameMatchKey, p.gameHandKey, o.sourceCursor);
     for (const row of rows) {
@@ -178,7 +213,7 @@ export class StorageDatabase {
     if (fact.actor !== attempt.actor) return false;
     const expected = attempt.expectedAction;
     if (!expected || expected.kind === 'discard') return fact.kind === 'discard' && fact.tiles.length === 1 && fact.tiles[0] === (expected?.tile ?? attempt.tile) && fact.tsumogiri.known && fact.tsumogiri.value === (expected?.tsumogiri ?? attempt.tsumogiri) && (fact.riichiDeclaration ?? false) === (expected?.riichiDeclaration ?? false);
-    if (fact.kind !== 'meld' || !fact.meld) return false;
+    if (expected.kind === 'pass' || fact.kind !== 'meld' || !fact.meld) return false;
     const a = expected.meld, b = fact.meld;
     return a.kind === b.kind && a.fromSeat === b.fromSeat && a.upgradedFrom === b.upgradedFrom &&
       canonical([...a.tiles].sort()) === canonical([...b.tiles].sort()) &&
@@ -241,7 +276,7 @@ export class StorageDatabase {
       const candidate = snapshot.legalActions.find(a => a.id === input.actionId);
       requireThat(candidate?.authority === 'executor' && candidate.action.kind !== 'tsumo' && candidate.action.kind !== 'ron', 'ACTION_NOT_LEGAL');
       const action = candidate.action, expectedAction = expectedActionFor(action, p.state);
-      const representative = expectedAction.kind === 'discard' ? expectedAction.tile : expectedAction.meld.tiles[0]!;
+      const representative = expectedAction.kind === 'discard' ? expectedAction.tile : expectedAction.kind === 'meld' ? expectedAction.meld.tiles[0]! : null;
       if (input.executionMode !== 'dry-run') {
         const pending = this.#db.prepare("SELECT attempt_id FROM action_attempts WHERE game_match_key=? AND execution_mode IN ('contract-test','live') AND status IN ('prepared','dispatching','awaiting-confirmation','uncertain') LIMIT 1").get(row.game_match_key as string);
         requireThat(!pending, 'ACTION_RECONCILIATION_REQUIRED');
@@ -306,15 +341,17 @@ export class StorageDatabase {
       const attempt = this.#getAttempt(attemptId); requireThat(attempt, 'ATTEMPT_NOT_FOUND'); this.#owned(attempt.sessionId);
       requireThat(attempt.status !== 'simulated', 'SIMULATED_ATTEMPT');
       if (attempt.status === 'confirmed') return attempt;
-      // A known-not-sent failure is allowed before markDispatching. An accepted RPC never confirms a game action.
+      // Passing has no public action fact. Its accepted RPC settles only the
+      // cancellation request. Discards and melds still require authoritative facts.
       if (attempt.status === 'prepared') requireThat(receipt.delivery === 'not-sent', 'DISPATCH_INTENT_REQUIRED');
       if (attempt.status === 'not-dispatched' || attempt.status === 'rejected') return attempt;
       attempt.receipt = receipt;
-      if (attempt.status !== 'uncertain') attempt.status = receipt.delivery === 'not-sent' ? 'not-dispatched' : receipt.delivery === 'rejected' ? 'rejected' : receipt.delivery === 'unknown' ? 'uncertain' : 'awaiting-confirmation';
+      if (attempt.expectedAction?.kind === 'pass' && receipt.delivery === 'accepted') attempt.status = 'confirmed';
+      else if (attempt.status !== 'uncertain') attempt.status = receipt.delivery === 'not-sent' ? 'not-dispatched' : receipt.delivery === 'rejected' ? 'rejected' : receipt.delivery === 'unknown' ? 'uncertain' : 'awaiting-confirmation';
       this.#putAttempt(attempt);
       // Preserve a fact that beat the transport acknowledgement, but never attach it to
       // a command rejected by the final fence or explicitly rejected by the transport.
-      if (['sent', 'accepted', 'unknown'].includes(receipt.delivery)) this.#reconcileArchivedFact(attempt);
+      if (attempt.status !== 'confirmed' && ['sent', 'accepted', 'unknown'].includes(receipt.delivery)) this.#reconcileArchivedFact(attempt);
       return attempt;
     });
   }
@@ -397,6 +434,141 @@ export class StorageDatabase {
     requireThat(ledger.matchStatus!=='pending-result' || projection.matchEndPending || projection.matchStatus==='finished','MATCH_LEDGER_TERMINAL');
     requireThat(!ledger.matchResult || canonical(ledger.matchResult)===canonical(projection.matchResult),'MATCH_LEDGER_RESULT_CONFLICT');
   }
+  readDiscards(sessionId: string, limit: number): DiscardArchive[] {
+    return this.#db.prepare(`SELECT o.outbox_id, o.payload, x.fact_text, x.commentary, a.decision_id,
+      f.game_match_key FROM outbox o JOIN discard_explanations x USING(outbox_id)
+      JOIN observed_actions f USING(fact_key)
+      LEFT JOIN action_confirmations c USING(fact_key)
+      LEFT JOIN action_attempts a ON a.attempt_id=c.attempt_id
+      WHERE o.session_id=? ORDER BY MIN(o.sequence) OVER (PARTITION BY f.game_match_key, f.game_hand_key) DESC,
+        CAST(substr(f.source_cursor, instr(f.source_cursor, ':') + 1) AS INTEGER) DESC, o.rowid DESC LIMIT ?`).all(sessionId, limit).map(row => {
+      const fact = parse<ObservedAction>(row.payload);
+      const decisionId = row.decision_id === null ? null : String(row.decision_id);
+      const saved = row.commentary === null ? null : parse<CommentaryRecord>(row.commentary);
+      const commentary = saved?.decisionId === decisionId ? saved : null;
+      return { id: String(row.outbox_id), eventId: fact.eventId, sessionId, matchId: String(row.game_match_key),
+        handId: fact.handId, fact, recovered: fact.eventId.startsWith('sync-fact-'), factText: String(row.fact_text), decisionId, commentary };
+    });
+  }
+  readCommentaryContext(id: string) {
+    const row = this.#db.prepare(`SELECT o.payload, d.snapshot FROM outbox o
+      LEFT JOIN action_confirmations c USING(fact_key)
+      LEFT JOIN action_attempts a USING(attempt_id)
+      LEFT JOIN decisions d ON d.decision_id=a.decision_id
+      WHERE o.outbox_id=?`).get(id);
+    if (!row) return null;
+    return commentaryContext(id, parse<ObservedAction>(row.payload), row.snapshot === null ? null : parse<DecisionSnapshot>(row.snapshot));
+  }
+  saveCommentary(input: StorageRequests['saveCommentary']): CommentaryRecord {
+    return this.#transaction(() => {
+      const context = this.readCommentaryContext(input.id);
+      requireThat(context && context.contextHash === input.contextHash, 'COMMENTARY_CONTEXT_CHANGED');
+      const selection = validateCommentary(input.selection, context, input.personaChoices);
+      const row = this.#db.prepare('SELECT commentary FROM discard_explanations WHERE outbox_id=?').get(input.id)!;
+      const saved = row.commentary === null ? null : parse<CommentaryRecord>(row.commentary);
+      if (saved?.contextHash === context.contextHash) return saved;
+      const record: CommentaryRecord = { ...renderCommentary(context, selection), source: 'llm', claims: selection.claims,
+        contextHash: context.contextHash, decisionId: context.decision?.id ?? null,
+        createdAt: input.at, configRevision: input.configRevision, profileId: 'local' };
+      this.#db.prepare('UPDATE discard_explanations SET commentary=? WHERE outbox_id=?').run(canonical(record), input.id);
+      return record;
+    });
+  }
+  readProjection(sessionId: string) {
+    const row = this.#db.prepare(`SELECT p.projection, s.started_at, s.recovery_required,
+      (SELECT payload FROM game_events e WHERE e.session_id=s.session_id ORDER BY sequence DESC LIMIT 1) AS last_event
+      FROM sessions s JOIN checkpoints p USING(session_id) WHERE s.session_id=?`).get(sessionId);
+    if (!row) return null;
+    const event = row.last_event === null ? null : parse<GameObservation>(row.last_event);
+    return { projection: parse<GameProjection>(row.projection), observedAt: event?.receivedAt ?? String(row.started_at),
+      recoveryRequired: row.recovery_required === 1 };
+  }
+  readDecisions(sessionId: string, matchId: string | null, handId: string | null, after: number, limit: number): StorageResults['readDecisions'] {
+    return this.#db.prepare(`SELECT rowid, snapshot,
+      (SELECT status FROM action_attempts a WHERE a.decision_id=d.decision_id AND a.execution_mode<>'dry-run'
+       ORDER BY rowid DESC LIMIT 1) AS status
+      FROM decisions d WHERE session_id=? AND rowid<? AND (? IS NULL OR json_extract(snapshot,'$.scope.matchId')=?)
+      AND (? IS NULL OR json_extract(snapshot,'$.scope.handId')=?) ORDER BY rowid DESC LIMIT ?`)
+      .all(sessionId, after, matchId, matchId, handId, handId, limit).map(row => {
+        const snapshot = parse<DecisionSnapshot>(row.snapshot);
+        return { key: Number(row.rowid), scope: snapshot.scope, createdAt: snapshot.createdAt,
+          activeMode: snapshot.activeMode, status: this.#decisionStatus(row.status) };
+      });
+  }
+  #decisionStatus(status: unknown) {
+    if (status === 'confirmed' || status === 'uncertain') return status;
+    if (status === 'rejected' || status === 'not-dispatched') return 'failed';
+    return status ? 'executing' : 'pending';
+  }
+  readDecision(id: string): StorageResults['readDecision'] {
+    const row = this.#db.prepare('SELECT snapshot FROM decisions WHERE decision_id=?').get(id);
+    if (!row) return null;
+    const snapshot = parse<DecisionSnapshot>(row.snapshot);
+    const attempts = this.#db.prepare("SELECT body FROM action_attempts WHERE decision_id=? AND execution_mode<>'dry-run' ORDER BY rowid DESC LIMIT 100")
+      .all(id).map(r => parse<ActionAttempt>(r.body));
+    const confirmations = this.#db.prepare(`SELECT a.body AS attempt, f.body AS fact, c.matched_by
+      FROM action_confirmations c JOIN action_attempts a USING(attempt_id) JOIN observed_actions f USING(fact_key)
+      WHERE a.decision_id=? LIMIT 100`).all(id).map(r => ({
+        attempt: parse<ActionAttempt>(r.attempt), fact: parse<ObservedAction>(r.fact), matchedBy: r.matched_by === 'authoritative-sync' ? 'authoritative-sync' as const : 'authoritative-event' as const,
+      }));
+    return { snapshot, attempts, status: this.#decisionStatus(attempts[0]?.status), confirmations };
+  }
+  readConsole() {
+    const row = this.#db.prepare('SELECT revision, body FROM console_state WHERE singleton=1').get();
+    return row ? { revision: Number(row.revision), body: parse<unknown>(row.body) } : { revision: 0, body: null };
+  }
+  readCommand(id: string) {
+    const row = this.#db.prepare('SELECT fingerprint, body FROM console_commands WHERE command_id=?').get(id);
+    return row ? { fingerprint: String(row.fingerprint), body: parse<unknown>(row.body) } : null;
+  }
+  recentCommands(): unknown[] {
+    return this.#db.prepare('SELECT body FROM console_commands ORDER BY rowid DESC LIMIT 20').all().map(r => parse(r.body));
+  }
+  saveConsole(revision: number, body: unknown, command: ConsoleWrite | null) {
+    return this.#transaction(() => {
+      requireThat(this.readConsole().revision === revision, 'CONSOLE_STATE_CONFLICT');
+      if (command) this.#db.prepare('INSERT INTO console_commands VALUES (?, ?, ?, ?)').run(
+        command.id, command.fingerprint, command.at, canonical(command.body));
+      this.#db.prepare(`INSERT INTO console_state VALUES (1, ?, ?) ON CONFLICT(singleton)
+        DO UPDATE SET revision=excluded.revision, body=excluded.body`).run(revision + 1, canonical(body));
+      return revision + 1;
+    });
+  }
+  markViewerSeen(id: string, at: string) {
+    return this.#db.prepare('INSERT OR IGNORE INTO viewer_seen VALUES (?, ?)').run(id, at).changes === 1;
+  }
+  reserveDelivery(id: string, at: string) {
+    return this.#db.prepare("INSERT OR IGNORE INTO viewer_deliveries VALUES (?, ?, 'dispatching')").run(id, at).changes === 1;
+  }
+  finishDelivery(id: string, status: DeliveryStatus) {
+    this.#db.prepare("UPDATE viewer_deliveries SET status=? WHERE delivery_id=? AND status='dispatching'").run(status, id);
+  }
+  cleanupOutput(cutoff: string) {
+    return this.#transaction(() => {
+      // Only this service's replay sessions have a retention marker. Preserve
+      // every session in an active run and any row linked to an execution ledger.
+      const expired = this.#db.prepare(`SELECT r.session_id FROM console_replays r WHERE last_used_at<?
+        AND NOT EXISTS (SELECT 1 FROM console_state c WHERE json_extract(c.body,'$.run.id')=r.run_id
+          AND json_extract(c.body,'$.run.status')<>'stopped')
+        AND NOT EXISTS (SELECT 1 FROM decisions d WHERE d.session_id=r.session_id)
+        AND NOT EXISTS (SELECT 1 FROM action_attempts a WHERE a.session_id=r.session_id)
+        AND NOT EXISTS (SELECT 1 FROM action_confirmations c JOIN observed_actions f USING(fact_key) WHERE f.session_id=r.session_id)
+        ORDER BY last_used_at LIMIT 25`).all(cutoff);
+      for (const row of expired) {
+        const id = String(row.session_id);
+        this.#db.prepare('DELETE FROM discard_explanations WHERE outbox_id IN (SELECT outbox_id FROM outbox WHERE session_id=?)').run(id);
+        for (const table of ['outbox','observed_actions','storage_faults','game_events','checkpoints','console_replays','sessions'])
+          this.#db.prepare(`DELETE FROM ${table} WHERE session_id=?`).run(id);
+        this.#owners.delete(id);
+      }
+      return {
+        replays: expired.length,
+        messages: Number(this.#db.prepare('DELETE FROM viewer_seen WHERE received_at<?').run(cutoff).changes),
+        commands: Number(this.#db.prepare('DELETE FROM console_commands WHERE accepted_at<?').run(cutoff).changes),
+        deliveries: Number(this.#db.prepare("DELETE FROM viewer_deliveries WHERE created_at<? AND status NOT IN ('dispatching','uncertain')").run(cutoff).changes),
+      };
+    });
+  }
   recordFault(sessionId: string, code: string, at: string): void {
     this.#transaction(() => { this.#owned(sessionId); this.#db.prepare('INSERT INTO storage_faults (session_id, code, occurred_at) VALUES (?, ?, ?)').run(sessionId, code, at); this.#db.prepare('UPDATE sessions SET recovery_required=1 WHERE session_id=?').run(sessionId); });
   }
@@ -405,6 +577,15 @@ export class StorageDatabase {
   dispatch(method: unknown, payload: unknown): unknown {
     requireThat(!this.#readOnly || ['findObservation', 'getAttempt', 'inspect', 'inspectMatch', 'close'].includes(String(method)), 'STORAGE_READ_ONLY');
     switch (method) {
+      case 'openReplaySession': {
+        const p = object(payload, ['sessionId', 'runId', 'startedAt']); string(p.sessionId); string(p.runId); timestamp(p.startedAt);
+        return this.openSession(p.sessionId, p.sessionId, p.startedAt, p.runId);
+      }
+      case 'commitReplayEvent': {
+        const p = object(payload, ['sessionId', 'expectedSequence', 'observation', 'revision', 'mode']);
+        string(p.sessionId); integer(p.expectedSequence); integer(p.revision, 0, Number.MAX_SAFE_INTEGER); oneOf(p.mode, [null, 'engine', 'llm']);
+        return this.commitGameEvent(p.sessionId, p.expectedSequence, parseObservation(p.observation), { revision: p.revision, mode: p.mode as DecisionMode | null });
+      }
       case 'openSession': { const p = object(payload, ['sessionId', 'processInstanceId', 'startedAt']); string(p.sessionId); string(p.processInstanceId); timestamp(p.startedAt); return this.openSession(p.sessionId, p.processInstanceId, p.startedAt); }
       case 'findObservation': { const p = object(payload, ['sessionId', 'epoch', 'dedupKey']); string(p.sessionId); integer(p.epoch); string(p.dedupKey, 256); return this.findObservation(p.sessionId, p.epoch, p.dedupKey); }
       case 'commitGameEvent': { const p = object(payload, ['sessionId', 'expectedSequence', 'observation']); string(p.sessionId); integer(p.expectedSequence); return this.commitGameEvent(p.sessionId, p.expectedSequence, parseObservation(p.observation)); }
@@ -418,6 +599,31 @@ export class StorageDatabase {
       case 'inspect': { const p = object(payload, ['sessionId']); string(p.sessionId); return this.inspect(p.sessionId); }
       case 'inspectMatch': { const p = object(payload, ['gameMatchKey']); string(p.gameMatchKey); return this.inspectMatch(p.gameMatchKey); }
       case 'recordFault': { const p = object(payload, ['sessionId', 'code', 'at']); string(p.sessionId); string(p.code, 80); requireThat(/^[A-Z][A-Z0-9_]*$/.test(p.code), 'INVALID_FAULT_CODE'); timestamp(p.at); this.recordFault(p.sessionId, p.code, p.at); return null; }
+      case 'readCommentaryContext': { const p = object(payload, ['id']); string(p.id); return this.readCommentaryContext(p.id); }
+      case 'saveCommentary': {
+        const p = object(payload, ['id', 'contextHash', 'selection', 'personaChoices', 'configRevision', 'at']);
+        string(p.id); string(p.contextHash, 64); timestamp(p.at); integer(p.configRevision, 0, Number.MAX_SAFE_INTEGER);
+        array(p.personaChoices, phrase => string(phrase, 100), 20);
+        return this.saveCommentary(p as unknown as StorageRequests['saveCommentary']);
+      }
+      case 'readDiscards': { const p = object(payload, ['sessionId', 'limit']); string(p.sessionId); integer(p.limit, 1, 100); return this.readDiscards(p.sessionId, p.limit); }
+      case 'readProjection': { const p = object(payload, ['sessionId']); string(p.sessionId); return this.readProjection(p.sessionId); }
+      case 'readDecisions': {
+        const p = object(payload, ['sessionId', 'matchId', 'handId', 'after', 'limit']);
+        string(p.sessionId); if (p.matchId !== null) string(p.matchId); if (p.handId !== null) string(p.handId);
+        integer(p.after, 1, Number.MAX_SAFE_INTEGER); integer(p.limit, 1, 101);
+        return this.readDecisions(p.sessionId, p.matchId, p.handId, p.after, p.limit);
+      }
+      case 'readDecision': case 'readCommand': { const p = object(payload, ['id']); string(p.id); return this[method](p.id); }
+      case 'readConsole': case 'recentCommands': object(payload, []); return this[method]();
+      case 'saveConsole': {
+        const p = object(payload, ['revision', 'body', 'command']); integer(p.revision, 0, Number.MAX_SAFE_INTEGER);
+        if (p.command !== null) { const c = object(p.command, ['id', 'at', 'fingerprint', 'body']); string(c.id, 128); timestamp(c.at); string(c.fingerprint, 64); }
+        return this.saveConsole(p.revision, p.body, p.command as ConsoleWrite | null);
+      }
+      case 'markViewerSeen': case 'reserveDelivery': { const p = object(payload, ['id', 'at']); string(p.id); timestamp(p.at); return this[method](p.id, p.at); }
+      case 'finishDelivery': { const p = object(payload, ['id', 'status']); string(p.id); oneOf(p.status, ['simulated','published','blocked','expired','uncertain','failed']); this.finishDelivery(p.id, p.status as DeliveryStatus); return null; }
+      case 'cleanupOutput': { const p = object(payload, ['cutoff']); timestamp(p.cutoff); return this.cleanupOutput(p.cutoff); }
       case 'close': object(payload, []); this.close(); return null;
       default: throw new Error('STORAGE_METHOD_UNSUPPORTED');
     }

@@ -1,4 +1,6 @@
-import type { ActionAttempt, AuthoritativeSync, CallReceipt, DecisionMode, DecisionSnapshot, ExecutionMode, GameObservation, GameProjection } from '../domain/game/types.ts';
+import type { CommentaryContext, CommentaryRecord, CommentarySelection } from '../application/live/commentary-contract.ts';
+import type { DiscardArchive } from '../application/live/explanation.ts';
+import type { ActionAttempt, AuthoritativeSync, CallReceipt, DecisionMode, DecisionSnapshot, ExecutionMode, GameObservation, GameProjection, ObservedAction } from '../domain/game/types.ts';
 
 export interface CommitResult { projection: GameProjection; duplicate: boolean }
 export interface DispatchIntentResult { attempt: ActionAttempt; transitioned: boolean; rejectionCode?: string }
@@ -38,7 +40,27 @@ export interface StoragePort {
 }
 
 // Fixed RPC whitelist: worker transport cannot execute arbitrary SQL or call arbitrary methods.
+export interface ReplayFence { revision: number; mode: DecisionMode | null }
+export type DeliveryStatus = 'simulated' | 'published' | 'blocked' | 'expired' | 'uncertain' | 'failed';
+export interface ConsoleWrite { id: string; fingerprint: string; at: string; body: unknown }
+
 export interface StorageRequests {
+  readCommentaryContext: { id: string };
+  saveCommentary: { id: string; contextHash: string; selection: CommentarySelection; personaChoices: string[]; configRevision: number; at: string };
+  openReplaySession: { sessionId: string; runId: string; startedAt: string };
+  commitReplayEvent: { sessionId: string; expectedSequence: number; observation: GameObservation } & ReplayFence;
+  readDiscards: { sessionId: string; limit: number };
+  readProjection: { sessionId: string };
+  readDecisions: { sessionId: string; matchId: string | null; handId: string | null; after: number; limit: number };
+  readDecision: { id: string };
+  readConsole: Record<string, never>;
+  recentCommands: Record<string, never>;
+  readCommand: { id: string };
+  saveConsole: { revision: number; body: unknown; command: ConsoleWrite | null };
+  markViewerSeen: { id: string; at: string };
+  reserveDelivery: { id: string; at: string };
+  finishDelivery: { id: string; status: DeliveryStatus };
+  cleanupOutput: { cutoff: string };
   openSession: { sessionId: string; processInstanceId: string; startedAt: string };
   findObservation: { sessionId: string; epoch: number; dedupKey: string };
   commitGameEvent: { sessionId: string; expectedSequence: number; observation: GameObservation };
@@ -56,8 +78,22 @@ export interface StorageRequests {
   recordFault: { sessionId: string; code: string; at: string };
   close: Record<string, never>;
 }
+export type DecisionStatus = 'confirmed' | 'uncertain' | 'failed' | 'executing' | 'pending';
 export interface StorageResults {
-  openSession: GameProjection;
+  readCommentaryContext: CommentaryContext | null;
+  saveCommentary: CommentaryRecord;
+  readDiscards: DiscardArchive[];
+  readProjection: { projection: GameProjection; observedAt: string; recoveryRequired: boolean } | null;
+  readDecisions: { key: number; scope: DecisionSnapshot['scope']; createdAt: string; activeMode: DecisionMode; status: DecisionStatus }[];
+  readDecision: { snapshot: DecisionSnapshot; attempts: ActionAttempt[]; status: DecisionStatus;
+    confirmations: { attempt: ActionAttempt; fact: ObservedAction; matchedBy: 'authoritative-event' | 'authoritative-sync' }[] } | null;
+  readConsole: { revision: number; body: unknown };
+  recentCommands: unknown[];
+  readCommand: { fingerprint: string; body: unknown } | null;
+  saveConsole: number;
+  markViewerSeen: boolean; reserveDelivery: boolean; finishDelivery: null;
+  cleanupOutput: { replays: number; messages: number; commands: number; deliveries: number };
+  openSession: GameProjection; openReplaySession: GameProjection; commitReplayEvent: CommitResult;
   findObservation: { fingerprint: string; sequence: number } | null;
   commitGameEvent: CommitResult; commitSync: CommitResult; setPendingMode: GameProjection;
   saveDecision: null;
