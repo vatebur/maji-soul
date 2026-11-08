@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>雀魂直播控制台</title>
+  <link rel="stylesheet" href="/ui.css">
+  <script type="module" src="/ui.js"></script>
+</head>
+<body>
+  <main>
+    <header class="heading">
+      <div><p class="eyebrow">MAJI SOUL · 本机直播工具</p><h1>雀魂直播控制台</h1><p id="connection" role="status">正在连接…</p></div>
+      <a class="button" href="/obs" target="_blank" rel="noopener">打开 OBS 字幕 ↗</a>
+    </header>
+    <p id="error" role="alert" hidden></p>
+    <section id="console" hidden>
+      <div class="columns">
+        <section class="panel">
+          <h2>对局与运行</h2>
+          <p id="source"></p>
+          <p id="run"></p>
+          <p id="game"></p>
+          <p id="automation-status" role="status"></p>
+          <div class="actions" id="automation-actions" hidden>
+            <button data-command="automation/set" id="automation-toggle" aria-pressed="false">启用自动出牌</button>
+            <span>启用后自动继续下一场，达到场数或时长上限后停止。</span>
+          </div>
+          <div class="actions" id="game-reset-actions" hidden>
+            <button data-command="display/reset">重置对局显示</button>
+            <span>清除旧对局显示，等待新对局；历史记录保留。</span>
+          </div>
+          <div class="actions" id="run-actions">
+            <button data-command="control/start">开始回放</button>
+            <button data-command="control/pause">暂停</button>
+            <button data-command="control/resume">恢复</button>
+            <button data-command="control/stop-after-match">本场后停止</button>
+            <button data-command="control/end">结束回放</button>
+            <label>下小局模式 <select id="next-mode"><option value="engine">专用引擎</option><option value="llm">LLM</option></select></label>
+            <button data-command="control/next-mode">应用模式</button>
+          </div>
+        </section>
+        <section class="panel">
+          <h2>播报与互动</h2>
+          <p id="speech"></p>
+          <p id="interaction"></p>
+          <p id="bili-source"></p>
+          <p id="receipts"></p>
+          <p id="commentary"></p>
+          <div class="actions">
+            <button data-command="speech/mute" id="mute">静音</button>
+            <button data-command="speech/clear">清空待播</button>
+          </div>
+        </section>
+      </div>
+      <section class="panel relay-panel" aria-labelledby="relay-heading">
+        <h2 id="relay-heading">干净画面转播</h2>
+        <p id="relay-status" role="status">未启动</p>
+        <p id="relay-help">将当前雀魂页面送到 OBS，不包含蓝色控制遮罩。声音继续使用 OBS 的音频采集。</p>
+        <div class="actions">
+          <button data-command="relay/set" id="relay-toggle" aria-pressed="false">启动转播</button>
+          <a class="button" id="relay-open" target="_blank" rel="noopener" hidden>打开画面 ↗</a>
+          <button id="relay-copy" type="button" disabled>复制 OBS 地址</button>
+          <label><input id="relay-preview-toggle" type="checkbox"> 显示预览</label>
+        </div>
+        <label class="relay-address" id="relay-address-label" hidden>OBS 浏览器源地址
+          <input id="relay-address" readonly aria-label="OBS 浏览器源地址">
+        </label>
+        <p id="relay-dimensions"></p>
+        <img id="relay-preview" class="relay-preview" alt="雀魂实时画面预览" hidden>
+      </section>
+      <div class="columns">
+        <section class="panel">
+          <h2>直播配置</h2>
+          <form id="settings">
+            <label>最多场数 <input id="matches" type="number" min="1" max="100" required></label>
+            <label>时长上限（分钟） <input id="minutes" type="number" min="1" max="1440" step="any" required></label>
+            <label>直播间号 <input id="room" inputmode="numeric" pattern="[1-9][0-9]{0,19}" maxlength="20"></label>
+            <label>语音 <select id="voice"></select></label>
+            <label>模型解说 <select id="commentary-profile"><option value="disabled">事实模板</option></select></label>
+            <label>思路生成最小间隔（秒） <input id="commentary-interval" type="number" min="1" max="300" step="1" required aria-describedby="commentary-interval-help"></label>
+            <p class="wide" id="commentary-interval-help">默认 15 秒，可设置 1–300 秒。保存后生效；有新的局面变化时才生成对局思路。</p>
+            <label class="wide">角色风格 <input id="persona-style" maxlength="2000"></label>
+            <label class="wide">角色口头禅 <input id="phrase" maxlength="100"></label>
+            <label class="wide">禁词规则（JSON 数组） <textarea id="rules" rows="4" spellcheck="false" required></textarea></label>
+            <label class="check"><input id="dry-run" type="checkbox"> 弹幕预演</label>
+            <label class="check"><input id="show-scores" type="checkbox"> OBS 显示分数</label>
+            <label>OBS 配色 <select id="theme"><option value="dark">深色</option><option value="light">浅色</option></select></label>
+            <div class="actions wide"><button type="submit">保存配置</button><button type="button" id="reload">重新加载</button></div>
+          </form>
+        </section>
+        <section class="panel">
+          <h2>己方弃牌档案</h2>
+          <ol id="discards" class="history"></ol>
+        </section>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>雀魂干净画面 · OBS 转播</title>
+<style>
+  html,body { margin:0; width:100%; height:100%; overflow:hidden; background:#000; }
+  img { display:block; width:100%; height:100%; object-fit:contain; }
+</style>
+<img id="video" alt="" src="/stream.mjpeg">
+<script>
+  // Reconnect when the source is restarted, without putting status text on air.
+  const video = document.getElementById('video');
+  let retry;
+  const reconnect = () => {
+    clearTimeout(retry);
+    retry = setTimeout(() => { video.src = '/stream.mjpeg?t=' + Date.now(); }, 1000);
+  };
+  video.onerror = reconnect;
+  setInterval(async () => {
+    try {
+      const stats = await fetch('/stats').then(response => response.json());
+      if (stats.running && stats.clients === 0) reconnect();
+    } catch { reconnect(); }
+  }, 2000);
+</script>
+</html>
