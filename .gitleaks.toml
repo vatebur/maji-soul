@@ -1,0 +1,11 @@
+# Keep the default rules and exempt only the known, non-secret fixture hand ID.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "Public hand identifier in the sanitized phase 1 replay fixture"
+condition = "AND"
+paths = ['''(^|/)tests/fixtures/phase1-live-discard/events\.jsonl$''']
+regexes = ['''^hand-861891f20699cd0516f3b6e5f968abfc$''']
