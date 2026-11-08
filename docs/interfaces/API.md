@@ -2,14 +2,20 @@
 
 [文档导航](../README.md) · 接口
 
-契约版本：v1，设计日期：2026-11-05（Asia/Shanghai）。状态：待实现。本文件依据 [需求](../planning/PLAN.md)、[模型](../design/DOMAIN_MODEL.md) 和 [架构](../design/ARCHITECTURE.md)，定义本机控制台与 OBS 使用的接口。字段与路径的机器可读定义见 [openapi.json](./openapi.json)，模块、Worker 和 Rust runner 的通信见 [INTERNAL_INTERFACES.md](./INTERNAL_INTERFACES.md)。
+契约版本：v1，设计日期：2026-11-05（Asia/Shanghai）。状态：回放演练和台账跟随已实现，实场控制仍以阶段验收为准。本文件依据 [需求](../planning/PLAN.md)、[模型](../design/DOMAIN_MODEL.md) 和 [架构](../design/ARCHITECTURE.md)，定义本机控制台与 OBS 使用的接口。字段与路径的机器可读定义见 [openapi.json](./openapi.json)，模块、Worker 和 Rust runner 的通信见 [INTERNAL_INTERFACES.md](./INTERNAL_INTERFACES.md)。
 
 本轮 [Live2D 接入设计](../research/LIVE2D.md) 是可选扩展：当前 v1 不含角色配置、模型／音频资源读取、播放租约和浏览器回执接口。启用前须补齐专用身份、租约续约／撤销、失联停播、代际校验、回执去重和错误契约；HTTP 部分同步 OpenAPI，WebSocket 部分另有严格消息 schema。现有 `/obs` 与 OBS SSE 继续只读，控制台凭证不交给角色播放页面。
+
+当前装配通过 `npm start -- console` 启动。运行命令用于回放演练；普通台账跟随模式只读游戏事实，游戏运行控制命令返回 `UNSUPPORTED_CAPABILITY`。本机控制台提供同步命令完成结果、持久命令去重和快照流。真实游戏的开局／同步命令状态仍按下文目标契约验收。
+
+模型解说通过 `models.commentaryProfile` 的 `disabled`／`local` 切换，`local` 只引用本机环境变量中已有的模型配置，未配置时返回 `UNSUPPORTED_CAPABILITY`。`GET /api/output/status` 的 `commentary` 返回 enabled、available、pendingCount、busy 和最近一次来源／脱敏错误码。`GET /api/discards` 同时返回 source、evidenceIds、limitations、createdAt，增强解释保持原档案 ID。模型故障不影响基础事实档案和字幕。思路生成最小间隔由 `models.commentaryIntervalMs` 设置，默认 15000 毫秒，范围 1000–300000 毫秒；保存后重新安排待处理生成，不中断正在生成的思路。
+
+`GET /api/output/status` 的 `bilibili.mode` 为 unavailable／simulated／relay／direct。直连时同时返回 connection、roomId（解析后的实际房间）、accountId、receivedCount、droppedCount、gap、errorCode。账号已登录且弹幕认证成功才显示 connected，Cookie 与连接 token 不进入任何响应。`readOnly.bilibiliCredentialsConfigured` 表示当前装配具备真实来源配置，不等于已登录成功或已发送。真实回发仍受 interaction.dryRun 控制。
 
 ## 目录
 
 - [1. 基本约定](#1-基本约定)
-- [2. 本机身份与权限](#2-本机身份与权限)
+- [2. 控制台访问](#2-控制台访问)
 - [3. 命令、幂等与并发](#3-命令幂等与并发)
 - [4. 运行控制接口](#4-运行控制接口)
 - [5. 查询与配置接口](#5-查询与配置接口)
@@ -42,28 +48,17 @@
 
 错误响应使用相同的元信息，将 `data` 换为 `error`，二者不能同时存在。健康检查、HTML 页面、SSE 和 `204` 响应按各自定义处理。
 
-## 2. 本机身份与权限
+## 2. 控制台访问
 
-控制台使用本机会话 Cookie；OBS 只访问无需控制身份的精简只读投影。
+控制台无需登录；打开普通 `consoleUrl` 即可查询状态、订阅事件和提交控制命令。不设置会话 Cookie，不要求启动令牌或 `X-CSRF-Token`。原 `/api/auth/session` 接口已移除。
 
-| 接口 | 身份 | 请求与结果 |
-| --- | --- | --- |
-| `POST /api/auth/session` | 一次性启动令牌 | `{bootstrapToken}`；`200` 返回 `csrfToken / expiresAt` 并设置 Cookie |
-| `GET /api/auth/session` | 控制台 Cookie | `200` 返回当前 `csrfToken / expiresAt`，用于页面刷新后的会话恢复 |
-| `DELETE /api/auth/session` | Cookie＋CSRF | 注销，清除 Cookie，`204`；重复注销无额外副作用 |
-| `GET /healthz` | 无 | `200` 表示 HTTP 主进程可响应，不代表游戏已就绪 |
-| `GET /obs`、`GET /api/obs/*` | 无，只读 | 仅输出已过滤的播出内容，不下发控制凭证 |
-| 其他 `/api/*` | 控制台 Cookie | 业务写请求还要求 `X-CSRF-Token` |
-
-启动链接把短期令牌放在 URL fragment，页面交换后立即移除 fragment；令牌不进入查询参数、访问日志和 OBS 地址。令牌默认 60 秒有效且只可消费一次；会话默认 12 小时有效，主进程重启失效。两项都是本机身份设计参数，不是游戏规则。
-
-Cookie 名为 `maji_console`，使用 `HttpOnly; SameSite=Strict; Path=/api`；本机 HTTP 不宣称启用了 HTTPS 的 Secure 属性。登录和写请求检查规范的本机 Origin；不开放跨域 CORS。CLI 在本机调用同一应用命令入口，不通过另一个匿名 HTTP 写接口绕过状态机。
+服务仍绑定本机回环地址。浏览器写请求检查同源 Origin，不开放跨域 CORS；本机 API 客户端可以不发送 Origin。OBS 继续输出精简只读投影。命令字段、幂等、状态机和游戏动作校验保持生效。
 
 ## 3. 命令、幂等与并发
 
 ### 3.1 业务写请求
 
-除身份建立／注销外，所有业务写请求必须包含：
+所有业务写请求必须包含：
 
 | 字段 | 约束 | 含义 |
 | --- | --- | --- |
@@ -77,7 +72,7 @@ Cookie 名为 `maji_console`，使用 `HttpOnly; SameSite=Strict; Path=/api`；�
 
 第一次收到的命令只接受过去 5 分钟以内、最多超前 30 秒的 `issuedAt`。命令记录至少保留 7 天，未决命令保留至对账完成；记录被清理后，原请求也因时间过期而不能重新执行。客户端不得重复使用旧 ID 构造新意图。
 
-HTTP 重试不等于重发游戏动作。执行器仍使用小局／窗口提交槽位；同一命令即使经历重连、重新登录或进程恢复，也不能创建第二次模糊结果的外部提交。
+HTTP 重试不等于重发游戏动作。执行器仍使用小局／窗口提交槽位；同一命令即使经历重连或进程恢复，也不能创建第二次模糊结果的外部提交。
 
 ### 3.2 命令查询与完成状态
 
@@ -164,6 +159,8 @@ next-mode 请求示例：
 | `GET /api/commands/{commandId}` | 不透明命令 ID | `CommandView` |
 | `GET /api/config` | 无 | `ConfigView`，包含 revision、可编辑值和只读能力状态 |
 | `PATCH /api/config` | `commandId, issuedAt, sessionId, expectedRevision, changes` | `CommandView`，成功结果包含新 revision 与各组生效时点 |
+| `GET /api/discards` | 可选 `sessionId`，缺省为当前台账会话 | 最近 100 条己方弃牌事实文本、证据 ID 与已确认决策 ID |
+| `GET /api/output/status` | 无 | 当前来源、最近一次语音完成结果和弹幕交付状态 |
 | `GET /api/capabilities` | 无 | 可用中文声音、已配置模型 profile、TTS provider 和支持的游戏能力 |
 | `GET /api/decisions` | `sessionId` 必填；可选 `matchId / handId / cursor / limit` | 决策摘要列表和 nextCursor |
 | `GET /api/decisions/{decisionId}` | 决策 ID | 冻结记录、尝试、权威确认和解说 |
@@ -196,7 +193,7 @@ changes 为显式定义的嵌套部分对象：省略保留原值，对象按字
 | `moderation` | rules（首版 literal 匹配，drop／replace） | 更新规则修订，所有待发布文字／音频重新检查 |
 | `interaction` | roomId、globalIntervalMs、viewerCooldownMs、replyMaxChars、dryRun | 调度后续任务；发送前再检查；房号变化取消旧房间待发内容 |
 | `speech` | provider、voiceId | 必须来自 capabilities；后续合成使用，新音色不重播旧内容 |
-| `models` | decisionProfile、commentaryProfile | 选择已在本机配置的别名，不接收密钥、URL 或任意模型执行路径 |
+| `models` | decisionProfile、commentaryProfile、commentaryIntervalMs | 选择已在本机配置的别名，不接收密钥、URL 或任意模型执行路径 |
 | `output` | theme、showScores | 下一次展示投影生效 |
 | `retention` | days | 后续清理使用；保护活动与未决记录 |
 
@@ -229,6 +226,8 @@ changes 为显式定义的嵌套部分对象：省略保留原值，对象按字
 
 ## 6. 语音控制
 
+当前语音提供方为 `fish`，`GET /api/capabilities` 的音色列表来自服务端 `FISH_REFERENCE_ID`。`--audio` 启用合成与本机播放，密钥不通过 HTTP 配置；不加入情绪提示。旧系统语音设置在控制台重启时自动迁移并递增配置修订，客户端应读取新的 revision。
+
 | 接口 | 请求字段（加 commandId／issuedAt） | 行为与完成条件 |
 | --- | --- | --- |
 | `POST /api/speech/mute` | `sessionId`（可 null）、`muted` | true 取消待播／在合成内容并停止当前声音；false 只允许后续有效内容进入播放 |
@@ -242,7 +241,7 @@ clear 递增 `queueEpoch`，使旧合成结果无效；它不递增当前播放�
 
 ### 7.1 OBS 投影
 
-`GET /api/obs/snapshot` 返回 `{ projection, state }`；state 只包含 `runStatus / activeMode / pendingMode / game / subtitle / interaction / muted`。`subtitle` 和 `interaction` 是带 contentId、文本与时间的当前播出卡片，无内容时 null。game 使用与控制台一致的公共局面卡。
+`GET /api/obs/snapshot` 返回 `{ projection, state }`；state 只包含 `runStatus / activeMode / pendingMode / game / subtitle / interaction / muted / theme`。`subtitle` 和 `interaction` 是带 contentId、文本与时间的当前播出卡片，无内容时 null。game 使用与控制台一致的公共局面卡。
 
 此 DTO 采用白名单构造，不能把控制台对象删几个字段后直接发送。它不含 controlEpoch、配置、完整手牌／候选、原始弹幕、凭证、音频文件绝对路径或控制令牌。首版 OBS 页面只展示；默认音频来自本机单播放器。
 
@@ -298,8 +297,7 @@ data: {"projection":{"epoch":"epoch-example","revision":24,"cursor":"console.epo
 | HTTP | code | 处理 |
 | --- | --- | --- |
 | 400 | `INVALID_JSON` | 修正请求；没有执行 |
-| 401 | `AUTH_REQUIRED`, `AUTH_EXPIRED`, `BOOTSTRAP_INVALID` | 重新建立本机身份 |
-| 403 | `ORIGIN_FORBIDDEN`, `CSRF_INVALID` | 检查调用来源，不重试业务动作 |
+| 403 | `ORIGIN_FORBIDDEN` | 检查调用来源，不重试业务动作 |
 | 404 | `NOT_FOUND` | 检查 ID；未知命令不等同于证明外部游戏未发生动作 |
 | 409 | `IDEMPOTENCY_CONFLICT` | 不得用相同 ID 改请求 |
 | 409 | `SESSION_MISMATCH`, `CONTROL_EPOCH_MISMATCH`, `CONFIG_REVISION_MISMATCH` | 刷新状态后，以新 ID 表达新的用户意图 |
@@ -320,3 +318,25 @@ data: {"projection":{"epoch":"epoch-example","revision":24,"cursor":"console.epo
 实现阶段至少覆盖：请求字段／大小校验、同 ID 同请求与冲突请求、时效／保留清理、异步失败查询、旧 session／版本拒绝、暂停在存储失败时仍关闸、模式切换与 HandStarted 的先后顺序、配置事务和限额锁存、语音 clear／mute 的代际区别、SSE 快照订阅间隙与 reset、OBS 字段白名单。
 
 OpenAPI 负责 HTTP 形状、示例和可导入定义；事件游标、外部动作确认和竞态等语义以本文件和 [内部接口](./INTERNAL_INTERFACES.md) 为准。所有文件随契约变更一起更新；当前文档未表示已有服务通过了这些验证。
+
+
+## 实场自动出牌开关
+
+通过 `--space --page --live-options` 装配后，`POST /api/automation/set` 接受 `{commandId, issuedAt, sessionId, enabled}`。无需登录，沿用来源校验和命令去重；未装配时返回 `409 UNSUPPORTED_CAPABILITY`。成功响应表示启动或停止请求已交给执行器，实际进度由快照流更新。
+
+`ConsoleState.automation` 包含 `available`、`enabled`、`status`（idle／starting／playing／waiting／stopping／stopped／faulted）、`completedMatches`、`sessionId` 和可选的 `errorCode`。新的对局会话自动成为控制台查询和字幕档案的来源。达到启用时的运行上限、整场失败或不确定的开局回执时，不再开始下一场。进程恢复不自动启用。
+
+### 干净画面转播
+
+实场装配增加 `POST /api/relay/set`，请求为 `{commandId, issuedAt, sessionId, enabled}`，沿用同源检查、严格布尔校验和持久命令去重；未装配返回 `409 UNSUPPORTED_CAPABILITY`。命令结果 `kind` 为 `relay-control`，表示启停请求已处理；异步采集结果通过快照中的 `ConsoleState.relay` 更新。
+
+`relay` 包含 `available`、`enabled`、`status`（idle／starting／live／stopped／faulted）、`obsUrl`、`previewUrl`、`fps`、`dimensions`（width／height 或 null）、`errorCode`。`RELAY_PORT_IN_USE` 表示独立服务占用了默认转播端口；`RELAY_START_FAILED` 表示启动失败；`RELAY_CAPTURE_FAILED` 表示采集进程已退出。错误不修改自动对局状态，停止转播也不会停止自动出牌。转播上传令牌不进入控制台或 OBS 投影。
+
+转播服务只监听 `127.0.0.1:17362`，`/obs` 为 OBS 浏览器源页面，`/stream.mjpeg` 为只读画面流；与控制台 `/obs` 的字幕源区分。退出控制台会关闭其拥有的转播服务，进程恢复不自动启动。转播不发送游戏操作，也不接管用户控制权。
+
+
+## 重置对局显示
+
+`POST /api/display/reset` 接受 `{commandId, issuedAt, sessionId}`，用于实场跟随模式。自动出牌正在启动、执行、等待或停止时返回 `409 AUTOMATION_ACTIVE`；停止后可重置。成功返回 `kind: display-reset`、`sessionId: null`。
+
+重置后控制台和 OBS 清除当前游戏、房间、字幕及当前弃牌列表，暂停引用旧会话。重置状态在配置保存、刷新和控制台重启后仍生效；自动出牌产生新会话后恢复显示。历史台账及决策记录保留，可通过指定历史会话 ID 查询。该命令不操作雀魂页面。

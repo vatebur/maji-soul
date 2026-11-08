@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AI 雀魂直播本机 API",
-    "version": "1.0.0-design",
-    "description": "待实现的 v1 HTTP 契约；不代表服务已运行。行为语义见 API.md，内部进程契约见 INTERNAL_INTERFACES.md。日期：2026-11-05。"
+    "version": "1.0.0",
+    "description": "本机回放演练与台账跟随接口。实场运行控制仍按 API.md 的目标契约和验收门槛推进。"
   },
   "servers": [
     {
@@ -16,11 +16,7 @@
       }
     }
   ],
-  "security": [
-    {
-      "consoleCookie": []
-    }
-  ],
+  "security": [],
   "paths": {
     "/healthz": {
       "get": {
@@ -67,179 +63,6 @@
         }
       }
     },
-    "/api/auth/session": {
-      "post": {
-        "operationId": "createConsoleSession",
-        "summary": "交换一次性本机启动令牌",
-        "tags": [
-          "auth"
-        ],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "成功",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AuthResponse"
-                },
-                "examples": {
-                  "example": {
-                    "$ref": "#/components/examples/Auth"
-                  }
-                }
-              }
-            },
-            "headers": {
-              "Set-Cookie": {
-                "description": "maji_console=<opaque>; HttpOnly; SameSite=Strict; Path=/api",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error"
-          },
-          "409": {
-            "$ref": "#/components/responses/Error"
-          },
-          "410": {
-            "$ref": "#/components/responses/Error"
-          },
-          "413": {
-            "$ref": "#/components/responses/Error"
-          },
-          "422": {
-            "$ref": "#/components/responses/Error"
-          },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "500": {
-            "$ref": "#/components/responses/Error"
-          },
-          "503": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error"
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AuthRequest"
-              }
-            }
-          }
-        }
-      },
-      "get": {
-        "operationId": "getConsoleSession",
-        "summary": "恢复控制台身份元信息",
-        "tags": [
-          "auth"
-        ],
-        "security": [
-          {
-            "consoleCookie": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "成功",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AuthResponse"
-                },
-                "examples": {
-                  "example": {
-                    "$ref": "#/components/examples/Auth"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error"
-          },
-          "410": {
-            "$ref": "#/components/responses/Error"
-          },
-          "422": {
-            "$ref": "#/components/responses/Error"
-          },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "500": {
-            "$ref": "#/components/responses/Error"
-          },
-          "503": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      },
-      "delete": {
-        "operationId": "deleteConsoleSession",
-        "summary": "注销本机控制台会话",
-        "tags": [
-          "auth"
-        ],
-        "security": [
-          {
-            "consoleCookie": [],
-            "csrfToken": []
-          }
-        ],
-        "responses": {
-          "401": {
-            "$ref": "#/components/responses/Error"
-          },
-          "403": {
-            "$ref": "#/components/responses/Error"
-          },
-          "404": {
-            "$ref": "#/components/responses/Error"
-          },
-          "410": {
-            "$ref": "#/components/responses/Error"
-          },
-          "422": {
-            "$ref": "#/components/responses/Error"
-          },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "500": {
-            "$ref": "#/components/responses/Error"
-          },
-          "503": {
-            "$ref": "#/components/responses/Error"
-          },
-          "204": {
-            "description": "已注销并清除 Cookie"
-          }
-        }
-      }
-    },
     "/api/console/snapshot": {
       "get": {
         "operationId": "getConsoleSnapshot",
@@ -247,11 +70,7 @@
         "tags": [
           "console"
         ],
-        "security": [
-          {
-            "consoleCookie": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -267,9 +86,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -302,11 +118,7 @@
         "tags": [
           "commands"
         ],
-        "security": [
-          {
-            "consoleCookie": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -322,9 +134,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -367,12 +176,7 @@
         "tags": [
           "control"
         ],
-        "security": [
-          {
-            "consoleCookie": [],
-            "csrfToken": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -395,9 +199,6 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
@@ -448,12 +249,7 @@
         "tags": [
           "control"
         ],
-        "security": [
-          {
-            "consoleCookie": [],
-            "csrfToken": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -476,9 +272,6 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
@@ -529,12 +322,7 @@
         "tags": [
           "control"
         ],
-        "security": [
-          {
-            "consoleCookie": [],
-            "csrfToken": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -557,9 +345,6 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
@@ -610,12 +395,7 @@
         "tags": [
           "control"
         ],
-        "security": [
-          {
-            "consoleCookie": [],
-            "csrfToken": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -638,9 +418,6 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
@@ -691,12 +468,7 @@
         "tags": [
           "control"
         ],
-        "security": [
-          {
-            "consoleCookie": [],
-            "csrfToken": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -719,9 +491,6 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
@@ -777,12 +546,7 @@
         "tags": [
           "control"
         ],
-        "security": [
-          {
-            "consoleCookie": [],
-            "csrfToken": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -805,9 +569,6 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
@@ -858,11 +619,7 @@
         "tags": [
           "config"
         ],
-        "security": [
-          {
-            "consoleCookie": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -873,9 +630,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -906,12 +660,7 @@
         "tags": [
           "config"
         ],
-        "security": [
-          {
-            "consoleCookie": [],
-            "csrfToken": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -934,9 +683,6 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
@@ -1003,11 +749,7 @@
         "tags": [
           "capabilities"
         ],
-        "security": [
-          {
-            "consoleCookie": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -1018,9 +760,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -1053,11 +792,7 @@
         "tags": [
           "decisions"
         ],
-        "security": [
-          {
-            "consoleCookie": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -1068,9 +803,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -1150,11 +882,7 @@
         "tags": [
           "decisions"
         ],
-        "security": [
-          {
-            "consoleCookie": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -1165,9 +893,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Error"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -1210,12 +935,7 @@
         "tags": [
           "speech"
         ],
-        "security": [
-          {
-            "consoleCookie": [],
-            "csrfToken": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -1238,9 +958,6 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
@@ -1290,12 +1007,7 @@
         "tags": [
           "speech"
         ],
-        "security": [
-          {
-            "consoleCookie": [],
-            "csrfToken": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "成功",
@@ -1318,9 +1030,6 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/Error"
-          },
-          "401": {
             "$ref": "#/components/responses/Error"
           },
           "403": {
@@ -1437,14 +1146,17 @@
         "tags": [
           "console"
         ],
-        "security": [
-          {
-            "consoleCookie": []
-          }
-        ],
+        "security": [],
         "responses": {
-          "401": {
-            "$ref": "#/components/responses/Error"
+          "200": {
+            "description": "SSE；无有效游标时发送完整 reset，心跳不推进序号",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -1466,16 +1178,6 @@
           },
           "503": {
             "$ref": "#/components/responses/Error"
-          },
-          "200": {
-            "description": "SSE；无有效游标时发送完整 reset，心跳不推进序号",
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
           }
         },
         "parameters": [
@@ -1524,6 +1226,16 @@
         ],
         "security": [],
         "responses": {
+          "200": {
+            "description": "SSE；无有效游标时发送完整 reset，心跳不推进序号",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "404": {
             "$ref": "#/components/responses/Error"
           },
@@ -1541,16 +1253,6 @@
           },
           "503": {
             "$ref": "#/components/responses/Error"
-          },
-          "200": {
-            "description": "SSE；无有效游标时发送完整 reset，心跳不推进序号",
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
           }
         },
         "parameters": [
@@ -1586,21 +1288,271 @@
           }
         }
       }
+    },
+    "/api/discards": {
+      "get": {
+        "operationId": "readDiscards",
+        "summary": "读取已归档的己方弃牌",
+        "tags": [
+          "console"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscardsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ],
+        "security": []
+      }
+    },
+    "/api/output/status": {
+      "get": {
+        "operationId": "readOutputStatus",
+        "summary": "读取最新语音与弹幕交付状态",
+        "tags": [
+          "console"
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/automation/set": {
+      "post": {
+        "operationId": "setAutomationEnabled",
+        "summary": "启用或停止实场自动出牌与连续对局",
+        "tags": [
+          "control"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutomationRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/relay/set": {
+      "post": {
+        "operationId": "setRelayEnabled",
+        "summary": "启动或停止干净画面转播（不影响自动对局）",
+        "tags": [
+          "control"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelayRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/display/reset": {
+      "post": {
+        "operationId": "resetGameDisplay",
+        "summary": "重置旧对局显示并等待新会话，保留历史台账",
+        "tags": [
+          "control"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收，等待命令定义的完成条件",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisplayResetRequest"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
-    "securitySchemes": {
-      "consoleCookie": {
-        "type": "apiKey",
-        "in": "cookie",
-        "name": "maji_console"
-      },
-      "csrfToken": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-CSRF-Token"
-      }
-    },
     "schemas": {
       "Id": {
         "type": "string",
@@ -1843,11 +1795,7 @@
             "type": "string",
             "enum": [
               "INVALID_JSON",
-              "AUTH_REQUIRED",
-              "AUTH_EXPIRED",
-              "BOOTSTRAP_INVALID",
               "ORIGIN_FORBIDDEN",
-              "CSRF_INVALID",
               "NOT_FOUND",
               "IDEMPOTENCY_CONFLICT",
               "SESSION_MISMATCH",
@@ -1959,59 +1907,6 @@
             "required": [
               "status",
               "buildVersion"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "apiVersion",
-          "requestId",
-          "at",
-          "data"
-        ],
-        "additionalProperties": false
-      },
-      "AuthRequest": {
-        "type": "object",
-        "properties": {
-          "bootstrapToken": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 512
-          }
-        },
-        "required": [
-          "bootstrapToken"
-        ],
-        "additionalProperties": false
-      },
-      "AuthResponse": {
-        "type": "object",
-        "properties": {
-          "apiVersion": {
-            "const": 1
-          },
-          "requestId": {
-            "$ref": "#/components/schemas/Id"
-          },
-          "at": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "data": {
-            "type": "object",
-            "properties": {
-              "csrfToken": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512
-              },
-              "expiresAt": {
-                "$ref": "#/components/schemas/Timestamp"
-              }
-            },
-            "required": [
-              "csrfToken",
-              "expiresAt"
             ],
             "additionalProperties": false
           }
@@ -2448,6 +2343,15 @@
           },
           {
             "$ref": "#/components/schemas/SpeechResult"
+          },
+          {
+            "$ref": "#/components/schemas/AutomationControlResult"
+          },
+          {
+            "$ref": "#/components/schemas/RelayControlResult"
+          },
+          {
+            "$ref": "#/components/schemas/DisplayResetResult"
           }
         ]
       },
@@ -2468,7 +2372,10 @@
               "control.end",
               "config.patch",
               "speech.mute",
-              "speech.clear"
+              "speech.clear",
+              "automation.set",
+              "relay.set",
+              "display.reset"
             ]
           },
           "sessionId": {
@@ -2921,7 +2828,10 @@
         "type": "object",
         "properties": {
           "provider": {
-            "$ref": "#/components/schemas/Id"
+            "type": "string",
+            "enum": [
+              "fish"
+            ]
           },
           "voiceId": {
             "$ref": "#/components/schemas/Id"
@@ -2937,7 +2847,10 @@
         "type": "object",
         "properties": {
           "provider": {
-            "$ref": "#/components/schemas/Id"
+            "type": "string",
+            "enum": [
+              "fish"
+            ]
           },
           "voiceId": {
             "$ref": "#/components/schemas/Id"
@@ -2955,11 +2868,19 @@
           },
           "commentaryProfile": {
             "$ref": "#/components/schemas/Id"
+          },
+          "commentaryIntervalMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000,
+            "default": 15000,
+            "description": "对局思路生成的最小间隔，单位毫秒。"
           }
         },
         "required": [
           "decisionProfile",
-          "commentaryProfile"
+          "commentaryProfile",
+          "commentaryIntervalMs"
         ],
         "additionalProperties": false
       },
@@ -2971,6 +2892,13 @@
           },
           "commentaryProfile": {
             "$ref": "#/components/schemas/Id"
+          },
+          "commentaryIntervalMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000,
+            "default": 15000,
+            "description": "对局思路生成的最小间隔，单位毫秒。"
           }
         },
         "required": [],
@@ -3168,7 +3096,10 @@
                 "const": "east"
               },
               "displayTimeSetting": {
-                "const": "300+0"
+                "enum": [
+                  "300+0",
+                  "5+20"
+                ]
               },
               "protocolVersion": {
                 "anyOf": [
@@ -3620,19 +3551,23 @@
             "type": "object",
             "properties": {
               "kind": {
-                "const": "riichi"
+                "const": "riichi-discard"
               },
-              "discardTile": {
+              "tile": {
                 "$ref": "#/components/schemas/Id"
               },
               "tsumogiri": {
                 "type": "boolean"
+              },
+              "operation": {
+                "$ref": "#/components/schemas/OperationSelection"
               }
             },
             "required": [
               "kind",
-              "discardTile",
-              "tsumogiri"
+              "tile",
+              "tsumogiri",
+              "operation"
             ],
             "additionalProperties": false
           },
@@ -3642,12 +3577,6 @@
               "kind": {
                 "const": "chi"
               },
-              "fromSeat": {
-                "$ref": "#/components/schemas/Seat"
-              },
-              "calledTile": {
-                "$ref": "#/components/schemas/TileCode"
-              },
               "consumed": {
                 "type": "array",
                 "items": {
@@ -3655,13 +3584,37 @@
                 },
                 "minItems": 2,
                 "maxItems": 2
+              },
+              "tiles": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TileCode"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "operation": {
+                "$ref": "#/components/schemas/OperationSelection"
+              },
+              "fromSeat": {
+                "$ref": "#/components/schemas/Seat"
+              },
+              "calledTileIndex": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              },
+              "upgradedFrom": {
+                "$ref": "#/components/schemas/Id"
               }
             },
             "required": [
               "kind",
+              "consumed",
+              "tiles",
+              "operation",
               "fromSeat",
-              "calledTile",
-              "consumed"
+              "calledTileIndex"
             ],
             "additionalProperties": false
           },
@@ -3671,12 +3624,6 @@
               "kind": {
                 "const": "pon"
               },
-              "fromSeat": {
-                "$ref": "#/components/schemas/Seat"
-              },
-              "calledTile": {
-                "$ref": "#/components/schemas/TileCode"
-              },
               "consumed": {
                 "type": "array",
                 "items": {
@@ -3684,13 +3631,37 @@
                 },
                 "minItems": 2,
                 "maxItems": 2
+              },
+              "tiles": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TileCode"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "operation": {
+                "$ref": "#/components/schemas/OperationSelection"
+              },
+              "fromSeat": {
+                "$ref": "#/components/schemas/Seat"
+              },
+              "calledTileIndex": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              },
+              "upgradedFrom": {
+                "$ref": "#/components/schemas/Id"
               }
             },
             "required": [
               "kind",
+              "consumed",
+              "tiles",
+              "operation",
               "fromSeat",
-              "calledTile",
-              "consumed"
+              "calledTileIndex"
             ],
             "additionalProperties": false
           },
@@ -3700,12 +3671,6 @@
               "kind": {
                 "const": "open-kan"
               },
-              "fromSeat": {
-                "$ref": "#/components/schemas/Seat"
-              },
-              "calledTile": {
-                "$ref": "#/components/schemas/TileCode"
-              },
               "consumed": {
                 "type": "array",
                 "items": {
@@ -3713,13 +3678,37 @@
                 },
                 "minItems": 3,
                 "maxItems": 3
+              },
+              "tiles": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TileCode"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "operation": {
+                "$ref": "#/components/schemas/OperationSelection"
+              },
+              "fromSeat": {
+                "$ref": "#/components/schemas/Seat"
+              },
+              "calledTileIndex": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              },
+              "upgradedFrom": {
+                "$ref": "#/components/schemas/Id"
               }
             },
             "required": [
               "kind",
+              "consumed",
+              "tiles",
+              "operation",
               "fromSeat",
-              "calledTile",
-              "consumed"
+              "calledTileIndex"
             ],
             "additionalProperties": false
           },
@@ -3729,18 +3718,42 @@
               "kind": {
                 "const": "closed-kan"
               },
-              "tiles": {
+              "consumed": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Id"
                 },
                 "minItems": 4,
                 "maxItems": 4
+              },
+              "tiles": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TileCode"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "operation": {
+                "$ref": "#/components/schemas/OperationSelection"
+              },
+              "fromSeat": {
+                "$ref": "#/components/schemas/Seat"
+              },
+              "calledTileIndex": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              },
+              "upgradedFrom": {
+                "$ref": "#/components/schemas/Id"
               }
             },
             "required": [
               "kind",
-              "tiles"
+              "consumed",
+              "tiles",
+              "operation"
             ],
             "additionalProperties": false
           },
@@ -3750,17 +3763,45 @@
               "kind": {
                 "const": "added-kan"
               },
-              "meldId": {
-                "$ref": "#/components/schemas/Id"
+              "consumed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "minItems": 1,
+                "maxItems": 1
               },
-              "tile": {
+              "tiles": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TileCode"
+                },
+                "minItems": 4,
+                "maxItems": 4
+              },
+              "operation": {
+                "$ref": "#/components/schemas/OperationSelection"
+              },
+              "fromSeat": {
+                "$ref": "#/components/schemas/Seat"
+              },
+              "calledTileIndex": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              },
+              "upgradedFrom": {
                 "$ref": "#/components/schemas/Id"
               }
             },
             "required": [
               "kind",
-              "meldId",
-              "tile"
+              "consumed",
+              "tiles",
+              "operation",
+              "fromSeat",
+              "calledTileIndex",
+              "upgradedFrom"
             ],
             "additionalProperties": false
           },
@@ -3793,18 +3834,10 @@
             "properties": {
               "kind": {
                 "const": "ron"
-              },
-              "fromSeat": {
-                "$ref": "#/components/schemas/Seat"
-              },
-              "winningTile": {
-                "$ref": "#/components/schemas/TileCode"
               }
             },
             "required": [
-              "kind",
-              "fromSeat",
-              "winningTile"
+              "kind"
             ],
             "additionalProperties": false
           },
@@ -4731,8 +4764,7 @@
           "decisionId",
           "observedAction",
           "matchedBy",
-          "confirmedAt",
-          "resultingStateVersion"
+          "confirmedAt"
         ],
         "additionalProperties": false
       },
@@ -5074,7 +5106,10 @@
             "const": "east"
           },
           "displayTimeSetting": {
-            "const": "300+0"
+            "enum": [
+              "300+0",
+              "5+20"
+            ]
           },
           "computerSeats": {
             "const": 3
@@ -5482,6 +5517,12 @@
             },
             "minItems": 0,
             "maxItems": 20
+          },
+          "automation": {
+            "$ref": "#/components/schemas/AutomationState"
+          },
+          "relay": {
+            "$ref": "#/components/schemas/RelayState"
           }
         },
         "required": [
@@ -5605,6 +5646,13 @@
           },
           "muted": {
             "type": "boolean"
+          },
+          "theme": {
+            "type": "string",
+            "enum": [
+              "dark",
+              "light"
+            ]
           }
         },
         "required": [
@@ -5614,7 +5662,8 @@
           "game",
           "subtitle",
           "interaction",
-          "muted"
+          "muted",
+          "theme"
         ],
         "additionalProperties": false
       },
@@ -5713,6 +5762,750 @@
           "command"
         ],
         "additionalProperties": false
+      },
+      "DiscardsResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "$ref": "#/components/schemas/Id"
+                    },
+                    "eventId": {
+                      "$ref": "#/components/schemas/Id"
+                    },
+                    "sessionId": {
+                      "$ref": "#/components/schemas/Id"
+                    },
+                    "handId": {
+                      "$ref": "#/components/schemas/Id"
+                    },
+                    "decisionId": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "observedAt": {
+                      "$ref": "#/components/schemas/Timestamp"
+                    },
+                    "text": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 0,
+                          "maxLength": 2000
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "fact-template",
+                        "llm"
+                      ]
+                    },
+                    "evidenceIds": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Id"
+                      },
+                      "minItems": 1,
+                      "maxItems": 12
+                    },
+                    "limitations": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 2000
+                      },
+                      "minItems": 0,
+                      "maxItems": 3
+                    },
+                    "createdAt": {
+                      "$ref": "#/components/schemas/Timestamp"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "eventId",
+                    "sessionId",
+                    "handId",
+                    "decisionId",
+                    "observedAt",
+                    "text",
+                    "source",
+                    "evidenceIds",
+                    "limitations",
+                    "createdAt"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 0,
+                "maxItems": 100
+              }
+            },
+            "required": [
+              "items"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "OutputStatusResponse": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "const": 1
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "replay",
+                  "follow"
+                ]
+              },
+              "lastSpeech": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "speechId": {
+                        "$ref": "#/components/schemas/Id"
+                      },
+                      "contentIds": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "minItems": 1,
+                        "maxItems": 4
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "completed",
+                          "cancelled",
+                          "failed",
+                          "expired"
+                        ]
+                      },
+                      "finishedAt": {
+                        "$ref": "#/components/schemas/Timestamp"
+                      }
+                    },
+                    "required": [
+                      "speechId",
+                      "contentIds",
+                      "outcome",
+                      "finishedAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lastDelivery": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "deliveryId": {
+                        "$ref": "#/components/schemas/Id"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "simulated",
+                          "published",
+                          "blocked",
+                          "expired",
+                          "uncertain",
+                          "failed"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "deliveryId",
+                      "status"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "commentary": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "available": {
+                    "type": "boolean"
+                  },
+                  "pendingCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 16
+                  },
+                  "busy": {
+                    "type": "boolean"
+                  },
+                  "last": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "fact-template",
+                              "llm"
+                            ]
+                          },
+                          "code": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "maxLength": 100
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "archiveId": {
+                            "$ref": "#/components/schemas/Id"
+                          },
+                          "finishedAt": {
+                            "$ref": "#/components/schemas/Timestamp"
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "code",
+                          "archiveId",
+                          "finishedAt"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "available",
+                  "pendingCount",
+                  "busy",
+                  "last"
+                ],
+                "additionalProperties": false
+              },
+              "bilibili": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "unavailable",
+                      "simulated",
+                      "relay",
+                      "direct"
+                    ]
+                  },
+                  "connection": {
+                    "type": "string",
+                    "enum": [
+                      "disconnected",
+                      "connecting",
+                      "connected",
+                      "recovering"
+                    ]
+                  },
+                  "roomId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "accountId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "receivedCount": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "droppedCount": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "gap": {
+                    "type": "boolean"
+                  },
+                  "errorCode": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 100
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "source",
+              "lastSpeech",
+              "lastDelivery",
+              "commentary",
+              "bilibili"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "apiVersion",
+          "requestId",
+          "at",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "OperationSelection": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 63
+          },
+          "combination": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "type",
+          "index",
+          "combination"
+        ],
+        "additionalProperties": false
+      },
+      "AutomationRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId",
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "AutomationState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "available",
+          "enabled",
+          "status",
+          "completedMatches",
+          "sessionId"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "starting",
+              "playing",
+              "waiting",
+              "stopping",
+              "stopped",
+              "faulted"
+            ]
+          },
+          "completedMatches": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errorCode": {
+            "type": "string"
+          }
+        }
+      },
+      "AutomationControlResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "available",
+          "enabled",
+          "status",
+          "completedMatches",
+          "sessionId",
+          "kind"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "starting",
+              "playing",
+              "waiting",
+              "stopping",
+              "stopped",
+              "faulted"
+            ]
+          },
+          "completedMatches": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errorCode": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "automation-control"
+          }
+        }
+      },
+      "RelayRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId",
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "RelayState": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "starting",
+              "live",
+              "stopped",
+              "faulted"
+            ]
+          },
+          "obsUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previewUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fps": {
+            "type": "number",
+            "minimum": 0
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "width": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "height": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "width",
+                  "height"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "available",
+          "enabled",
+          "status",
+          "obsUrl",
+          "previewUrl",
+          "fps",
+          "dimensions",
+          "errorCode"
+        ],
+        "additionalProperties": false
+      },
+      "RelayControlResult": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "starting",
+              "live",
+              "stopped",
+              "faulted"
+            ]
+          },
+          "obsUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previewUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fps": {
+            "type": "number",
+            "minimum": 0
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "width": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "height": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "width",
+                  "height"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "const": "relay-control"
+          }
+        },
+        "required": [
+          "available",
+          "enabled",
+          "status",
+          "obsUrl",
+          "previewUrl",
+          "fps",
+          "dimensions",
+          "errorCode",
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "DisplayResetRequest": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "commandId",
+          "issuedAt",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      },
+      "DisplayResetResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "sessionId"
+        ],
+        "properties": {
+          "kind": {
+            "const": "display-reset"
+          },
+          "sessionId": {
+            "type": "null"
+          }
+        }
       }
     },
     "responses": {
@@ -5745,17 +6538,6 @@
           "data": {
             "status": "alive",
             "buildVersion": "design"
-          }
-        }
-      },
-      "Auth": {
-        "value": {
-          "apiVersion": 1,
-          "requestId": "req-example",
-          "at": "2026-11-05T10:00:00.000Z",
-          "data": {
-            "csrfToken": "example-placeholder-token",
-            "expiresAt": "2026-11-05T22:00:00.000Z"
           }
         }
       },
@@ -5873,7 +6655,8 @@
               "game": null,
               "subtitle": null,
               "interaction": null,
-              "muted": false
+              "muted": false,
+              "theme": "dark"
             }
           }
         }

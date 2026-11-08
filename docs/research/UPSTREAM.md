@@ -19,7 +19,7 @@
 | 雀魂客户端资源 | 当前 Unity 4.0.51，bundle 与协议摘要见版本清单 | 原服务的公开下载资源，仅用于本机兼容性验证；没有声明其可再分发，未提交提取出的完整 proto／资源 |
 | ego-browser / 系统中文声音 / OBS | 当前本机安装 | 调用本机工具；没有复制或分发浏览器、系统声音、OBS 程序 |
 | Live2D / VRM / Cubism / 角色素材 | 本轮未引入 | 阶段 0 不提前搭建角色前端，无角色资产可用／授权的验收声明 |
-| B站适配候选／DSH | 本轮未复制代码 | 不依赖 DSH 宿主，尚无已采用弹幕源码 |
+| B站协议参考／WBI 排列 | [dsh-bili-live 0e7a393 的 lib/bili.js](https://github.com/newmegame/-dsh-bili-live/blob/0e7a393c10007d392ba733c902579876574e2e1b/lib/bili.js) | 2026-11-06 读取上游 MIT 许可并保留[全文](./licenses/dsh-bili-live-LICENSE.txt)；采用 WBI 排列和接口字段参考。自行实现有界解析、身份核验、游标、取消和严格回执，使用 Node 原生 WebSocket，不引入 DSH 宿主、上游自制 WebSocket 或访问失败后的旧接口回退 |
 
 [`rust-dependencies.json`](./rust-dependencies.json) 记录本次目标平台 Cargo metadata 中 112 项依赖的版本、来源及许可声明；它是元数据清单，不是逐文件许可审计。Rust 的完整解析与 checksum 在 [`Cargo.lock`](../../native/engine-runner/Cargo.lock)，npm 依赖在 [`package-lock.json`](../../package-lock.json)。分发二进制前需处理这些依赖的实际许可文件／声明，尤其是嵌入的权重；本轮不作“可任意分发”的结论。
 

@@ -193,6 +193,10 @@ interface DecisionProvider {
 
 `cancel(taskId, generation)` 使本机任务失效；即使结果已经生成，也不得恢复旧决策、旧提问或已取消的内容。请求超时预算取配置与剩余动作／内容寿命的较小值。
 
+当前 console 装配使用 `CommentaryService`，解说和历史问答均采用 `{claims, personaText?, limitations}` 的受限结果，尚未实现自由聊天。服务从弃牌 outbox 经权威确认查找原始 DecisionSnapshot，未确认的尝试不作为动作归因。事实模板限于已观察弃牌、唯一合法动作／立直后强制摸切、保留红五、对手立直数及己方分数；具体牌张和数值由服务端渲染，personaText 只能选配置中的口头禅。超出模板范围保留限制说明。
+
+生成工作独立于回放推进，最多 16 个等待任务，观众问答优先于尚未开始的弃牌解说。单任务预算最多 8 秒且受内容到期时间约束。模型适配器支持既有三种 JSON 模式，请求最大 256 KiB、响应最大 64 KiB。`ModelBroker(2)` 在单进程内保留一个决策名额，独立 console 与游戏进程不共享供应商限额，真实服务容量仍需验证。清空／静音通过语音队列代际阻止迟到解说和问答进入播放器。
+
 ## 4. Rust 引擎 Runner 协议
 
 ### 4.1 帧格式
@@ -281,6 +285,12 @@ interface EngineDecision {
 
 源端发送超时若不能证明未接受，返回 uncertain；只有明确未发送、规则／房间仍匹配且未过期时，Gateway 才可按节流计划重试同一 deliveryId。自己发出的消息通过已验证账号身份与有限回声缓存排除，不靠显示名匹配。
 
+当前支持直连 BilibiliDirect 和[本机转发器契约](../USAGE.md#b-站本机转发器契约)。`BiliPort.mode` 为 simulated／relay／direct；可选 status 提供连接、实际房间、账号、收取数、跳过数、缺口和脱敏错误码，disconnect 撤销当前连接。预演与出站共用交付入口，转发器的发送账号必须与入站身份同域。
+
+直连先读取本机私有 Cookie 文件，通过 nav 验证账号，room_init 解析实际房号，签名后从 getDanmuInfo 获取允许域名的 WSS 地址与短期认证参数。只在 op=8 且 code=0 后标记 connected；每 30 秒发心跳，90 秒无回执断开。报文支持 v0／v1 与 zlib／Brotli 批次，限制单帧大小、解压总量、递归深度和待解码数量。消息环最多 256 条，每次 read 最多 50 条，游标缺失、重连或溢出显式标记 gap。只接受带源 id_str、稳定 uid 和源时间的 DANMU_MSG，隐私隐藏身份不猜测补全。认证失败／访问拒绝不切换旧接口绕过。
+
+直连发送前重新验证账号，仅发一个 POST；在 SQLite 交付记录已占用后才进入发送，平台 code=0 且带 id_str 才返回 published。没有可确认消息 ID 时保持 uncertain；收到明确拒绝映射 failed。断线／换房撤销旧连接与旧发送许可，旧连接回调不能污染新房间。
+
 ### 5.2 ModerationPort 与内容发布
 
 `evaluate({text, displayName?, channel, contextRef}, revision)` 返回：
@@ -314,7 +324,7 @@ interface AudioArtifact {
   artifactId: string;
   speechId: string;
   contentIds: string[];
-  mediaType: 'audio/wav' | 'audio/aiff';
+  mediaType: 'audio/wav' | 'audio/aiff' | 'audio/mpeg';
   durationMs?: number;
   textDigest: string;
   moderationRevision: number;
@@ -332,6 +342,8 @@ interface PlaybackRequest {
 `SpeechPort.synthesize(ApprovedSpeechText, signal)` 返回 AudioArtifact；`PlaybackPort.play(PlaybackRequest, signal)` 返回 `{speechId, playbackEpoch, outcome, startedAt?, finishedAt, error?}`，outcome 为 completed／cancelled／failed／uncertain。音频路径由 ArtifactStore 根据 artifactId 解析，不接受模型或观众传入任意本机路径。
 
 合成完成先验证 queueEpoch、过期时间、内容仍被需要和当前禁词规则；播放前再次验证。只有播放器的真实结束才可记 speech published／completed。合成失败不影响文字档案；cancelled 不计入播完。
+
+当前运行适配器为 `fishSpeech`：`SpeechPort.synthesize(text, voiceId, signal)` 调用 Fish `/v1/tts`，返回已验证非空的私有 MP3 路径，随后本机 `afplay` 播放、`release` 删除。请求和响应消费共用取消／30 秒超时信号，响应上限 8 MiB；不添加情绪标签，移除方括号指令。API 密钥仅从服务进程环境读取，不进入控制台配置与投影。`speech.provider` 当前为 `fish`，音色列表来自 `FISH_REFERENCE_ID`；旧 `macos` 配置启动时迁移并增加配置修订。上方 artifact／播放回执结构仍是独立 ArtifactStore 的设计契约。
 
 `stop({speechId, playbackEpoch})` 只停止所指播放实例，旧停止请求不能终止新的声音。`clearPending()` 增加 queueEpoch 并取消未播内容，保留当前播放许可；`setMuted(true)` 同时撤销 queueEpoch 与 playbackEpoch，停止当前播放。每个时刻只有一个播放器持有有效许可。
 
@@ -437,6 +449,10 @@ StoragePort 是唯一写入 SQLite 的边界，事务请求是带类型的方法
 | `retain` | 按引用保护活动／未决记录，清理超期数据与音频元数据 | 清理摘要，不含原始内容 |
 
 上述调用的 expected 版本与数据库实际记录不符返回 `VERSION_CONFLICT`；调用者刷新状态后重新决定。存储 worker 不自行重新执行失败的副作用。操作先写意图再发送，发送后确认另一个事务，不能声称数据库事务覆盖了远端游戏。
+
+迁移 003 将己方弃牌模板与 outbox 在同一 SQLite 事务写入，并从旧 outbox 补建。语音工作与回发在事务外推进。
+
+迁移 004 在原弃牌档案增加 commentary。`readCommentaryContext` 返回已确认动作、关联的冻结决策及允许模板；`saveCommentary` 在事务内重新计算 contextHash、验证模板和证据集合，幂等保存同一档案的增强结果。晚到的动作确认使旧上下文失效，旧请求不能覆盖新决策证据；历史问答不改写原口播档案。
 
 outbox 通知为 `{outboxId, eventId, sequence, type, scope, occurredAt, payload}`，payload 为已提交且脱敏的领域事实。消费是至少一次；消费游标、模板和幂等记录在同一事务中提交。语音、TTS、模型请求、弹幕发送均在事务外，根据持久化任务／交付记录启动。
 
