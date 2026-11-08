@@ -6,7 +6,7 @@ import { normalizeAction, normalizeNewRound, normalizeMatchEnd, type NormalizeCo
 
 export interface SyncGameContext {
   sessionId: string; room: FriendRoom; gameMatchKey: string; gameHandKey: string; ownSeat: Seat; handOrdinal: number;
-  syncId: string; connectionEpoch: number; receivedAt: string; sourceStream?: string; timing?: VerifiedOperationTiming;
+  syncId: string; connectionEpoch: number; receivedAt: string; sourceStream?: string; timing?: VerifiedOperationTiming; akagi?: boolean;
 }
 function record(value: unknown): Record<string, unknown> {
   requireThat(value !== null && typeof value === 'object' && !Array.isArray(value), 'INVALID_PROTOCOL_OBJECT');
@@ -66,7 +66,7 @@ export function normalizeSyncGame(value: unknown, context: SyncGameContext): Aut
   for (let i = first; i < actions.length; i++) {
     const action = actions[i]!, last = i === actions.length - 1;
     const normalization: NormalizeContext = { projection, sourceStream, step: action.step as number,
-      receivedAt: context.receivedAt, connectionEpoch: context.connectionEpoch, source: 'majsoul-sync', historyReplay: !last,
+      receivedAt: context.receivedAt, connectionEpoch: context.connectionEpoch, source: 'majsoul-sync', historyReplay: !last, akagi: context.akagi === true,
       ...(last && context.timing ? { timing: context.timing } : {}) };
     const events = action.name === 'ActionNewRound'
       ? normalizeNewRound(payloadFor(action), { ...normalization, ownSeat: context.ownSeat, gameHandKey: context.gameHandKey, handOrdinal: 1 })

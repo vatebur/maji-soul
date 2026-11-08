@@ -6,7 +6,7 @@ import type { LiveAcceptanceOptions } from './live.ts';
 import { validateObservationDuration } from './live-observation.ts';
 
 /** Run inside ego's documented Node environment; browser control stays in this process. */
-export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptanceOptions, runtime: string): Promise<any> {
+export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptanceOptions, runtime: string, signal?: AbortSignal): Promise<any> {
   const observeMs = validateObservationDuration(options.observeMs);
   const child = spawn(runtime, [fileURLToPath(new URL('./live-child.ts', import.meta.url))], { stdio: ['pipe', 'pipe', 'pipe'] });
   // Child diagnostics never enter page data or the report (and cannot expose raw frames).
@@ -15,6 +15,10 @@ export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptan
   const lines = createInterface({ input: child.stdout });
   let chain = Promise.resolve(), report: unknown;
   child.stdin.write(JSON.stringify({ kind: 'start', options }) + '\n');
+  const stop = () => { child.stdin.write(JSON.stringify({ kind: 'stop' }) + '\n'); void bridgeCall(page, 'pause').catch(() => {}); };
+  signal?.addEventListener('abort', stop, { once: true });
+  if (signal?.aborted) stop();
+  child.once('close', () => signal?.removeEventListener('abort', stop));
   return await new Promise((resolve, reject) => {
     let settled = false;
     const abort = (code: string) => {

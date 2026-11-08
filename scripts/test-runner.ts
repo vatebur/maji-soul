@@ -22,3 +22,35 @@ test('runner rejects stale process epochs and unsupported rules without changing
   assert.equal(responses[2].error.code,'UNSUPPORTED_RULES');
   assert.equal(responses[3].result.cursor,0);
 });
+
+test('the production Akagi adapter maps the dealer opening from captured history to a hand discard', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { AkagiRunner } = await import('../src/adapters/engine/akagi.ts');
+  const { initialProjection, reduceObservation } = await import('../src/domain/game/reducer.ts');
+  const { parseObservation } = await import('../src/schemas/game.ts');
+  const [room, match, opening] = (await readFile(new URL('../tests/fixtures/phase1-live-discard/events.jsonl', import.meta.url),'utf8'))
+    .trim().split('\n').slice(0,3).map(line => parseObservation(JSON.parse(line)));
+  const projection = [room!, match!, opening!].reduce(reduceObservation, initialProjection('akagi-capture-test'));
+  assert.ok(opening?.type === 'HandStarted');
+  const state = projection.state!;
+  const scope = { sessionId: state.sessionId, matchId: state.matchId, handId: state.handId, decisionId: 'akagi-capture-decision' };
+  const legalActions = state.ownConcealed.map(({ instanceId }) => ({
+    id: instanceId, action: { kind: 'discard' as const, tile: instanceId, tsumogiri: false },
+    authority: 'executor' as const, label: 'discard', evidenceEventIds: [opening.observationId],
+  }));
+  const runner = new AkagiRunner();
+  try {
+    await runner.init();
+    const action = await runner.decide({
+      schemaVersion: 1, id: scope.decisionId, scope, windowId: 'akagi-capture-window',
+      stateVersion: state.stateVersion, connectionEpoch: state.connectionEpoch, controlEpoch: 0,
+      createdAt: opening.receivedAt, actionDeadline: opening.receivedAt, activeMode: 'engine',
+      state, legalActions, unknownFields: [], contextEventIds: [], sourceCursor: projection.sourceCursor!,
+    }, [opening]);
+    assert.ok(legalActions.includes(action as typeof legalActions[number]));
+    assert.equal(action.action.kind,'discard');
+    assert.equal(action.action.tsumogiri,false);
+  } finally {
+    runner.close();
+  }
+});

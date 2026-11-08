@@ -16,7 +16,7 @@ test('the stdio broker hosts a real Node child and SQLite worker for sync-only a
     assert.equal(h.page.controls.at(-1)?.paused, true);
     const raw = new DatabaseSync(h.page.databasePath, { readOnly: true });
     try {
-      assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 2);
+      assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 4);
       assert.equal(raw.prepare('SELECT count(*) AS n FROM sessions').get()?.n, 1);
       assert.equal(raw.prepare('SELECT count(*) AS n FROM action_attempts').get()?.n, 0);
       const state = JSON.parse(raw.prepare('SELECT projection FROM checkpoints').get()!.projection as string);
@@ -83,5 +83,29 @@ test('an unavailable child runtime fails with a safe error before any gameplay R
   try {
     await assert.rejects(acceptLiveViaNode(h.page, h.options, '/definitely-missing-maji-node'), /LIVE_NODE_UNAVAILABLE/);
     assert.equal(h.page.calls.every(method => method === 'pause'), true);
+  } finally { await h.cleanup(); }
+});
+
+
+test('console stop is forwarded to the real child and closes a long observation early', async () => {
+  const h = await createLiveScenario();
+  const cancellation = new AbortController();
+  let stopped = false;
+  const page: EgoPagePort = { evaluate: async (source, argument) => {
+    const result = await h.page.evaluate(source, argument);
+    if (!stopped && (argument as {method:string}).method === 'drain') {
+      stopped = true;
+      cancellation.abort();
+    }
+    return result;
+  } };
+  try {
+    const began = Date.now();
+    const report = await acceptLiveViaNode(page, { ...h.options, observeMs: 60_000 }, process.execPath, cancellation.signal);
+    assert.equal(stopped, true);
+    assert.ok(Date.now() - began < 10_000);
+    assert.equal(report.programPaused, true);
+    assert.equal(h.page.sends, 0);
+    assert.equal(h.page.controls.at(-1)?.paused, true);
   } finally { await h.cleanup(); }
 });

@@ -44,7 +44,7 @@ export function validateRoom(value: unknown): asserts value is FriendRoom {
   const room = object(value, ['roomId', 'rules', 'autoWin']); string(room.roomId);
   oneOf(room.autoWin, ['verified-on', 'verified-off', 'unknown']);
   const rules = object(room.rules, ['players', 'length', 'displayTimeSetting', 'computerSeats', 'verifiedOptions', 'protocolVersion']);
-  oneOf(rules.players, [4]); oneOf(rules.length, ['east']); oneOf(rules.displayTimeSetting, ['300+0']); oneOf(rules.computerSeats, [3]); string(rules.protocolVersion);
+  oneOf(rules.players, [4]); oneOf(rules.length, ['east']); oneOf(rules.displayTimeSetting, ['300+0', '5+20']); oneOf(rules.computerSeats, [3]); string(rules.protocolVersion);
   requireThat(rules.verifiedOptions && typeof rules.verifiedOptions === 'object' && !Array.isArray(rules.verifiedOptions), 'INVALID_RULES');
   const entries = Object.entries(rules.verifiedOptions); requireThat(entries.length > 0 && entries.length <= 64, 'INVALID_RULES');
   for (const [key, v] of entries) { string(key, 64); if (typeof v === 'string') string(v); else if (typeof v === 'number') requireThat(Number.isFinite(v), 'INVALID_RULES'); else boolean(v); }
@@ -67,6 +67,7 @@ export function validateWindow(value: unknown): asserts value is OperationWindow
       if (action.fromSeat !== undefined) seat(action.fromSeat);
       if (action.calledTileIndex !== undefined) integer(action.calledTileIndex, 0, 3);
       if (action.upgradedFrom !== undefined) string(action.upgradedFrom);
+    } else if (kind === 'pass') { object(a.action, ['kind']); oneOf(a.authority, ['executor']);
     } else { object(a.action, ['kind']); oneOf(kind, ['tsumo', 'ron']); oneOf(a.authority, ['client-auto-win']); }
   }, 64);
   requireThat(new Set((value as OperationWindow).candidates.map(c => c.id)).size === (value as OperationWindow).candidates.length, 'DUPLICATE_CANDIDATE');

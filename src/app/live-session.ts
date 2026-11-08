@@ -72,25 +72,28 @@ function summarizeTimingAcquisition(value: unknown) {
 export class LiveGameSession {
   readonly coordinator: GameCoordinator;
   readonly segments: LiveSegment[] = [];
+  readonly forcedRiichiDiscards = new Set<string>();
   readonly counts = { handStarts:0, handEnds:0, matchEnds:0, reconnects:0 };
   #page: EgoPagePort;
   #room: FriendRoom;
+  #akagi: boolean;
   #gameUuid: string | null = null;
   #recovering = false;
   #pendingResult: any = null;
   #cursor: {generation:number;pageEpoch:number;lastStep:number|null} | null = null;
+  #settlementDiagnostics: {name:string;step:number;before:number[];payload:Record<string,unknown>} | null = null;
   #timingDiagnostics: ReturnType<typeof summarizeTimingAcquisition> = null;
   #browserStatsBefore: ReturnType<typeof summarizeBrowserStats> = null;
   #autoWinRecoveries: AutoWinRecovery[] = [];
   #pendingAutoWinRecovery: AutoWinRecovery | null = null;
-  constructor(actor: GameActor, page: EgoPagePort, room: FriendRoom) {
-    this.coordinator = new GameCoordinator(actor); this.#page = page; this.#room = room;
+  constructor(actor: GameActor, page: EgoPagePort, room: FriendRoom, akagi = false) {
+    this.coordinator = new GameCoordinator(actor); this.#page = page; this.#room = room; this.#akagi = akagi;
   }
   get recovering() { return this.#recovering; }
   get awaitingSettlement() { return this.#pendingResult !== null; }
   get actor() { return this.coordinator.actor; }
   get cursor() { return this.#cursor && {...this.#cursor}; }
-  get diagnostics() { return structuredClone({timing:this.#timingDiagnostics,browserStatsBefore:this.#browserStatsBefore}); }
+  get diagnostics() { return structuredClone({timing:this.#timingDiagnostics,browserStatsBefore:this.#browserStatsBefore,settlement:this.#settlementDiagnostics}); }
   get autoWinRecovery() { return structuredClone(this.#autoWinRecoveries.at(-1) ?? null); }
   get autoWinRecoveries() { return structuredClone(this.#autoWinRecoveries); }
   #rememberCursor(value: any) {
@@ -100,22 +103,51 @@ export class LiveGameSession {
     requireThat(typeof opening?.sha256 === 'string' && /^[0-9a-f]{64}$/.test(opening.sha256),'HAND_IDENTITY_UNVERIFIED');
     return `hand-${digest([gameMatchKey,opening.sha256]).slice(0,32)}`;
   }
-  async synchronize(collectExecutionProofs = true) {
+  async synchronize(collectExecutionProofs = true, refreshWindow = false) {
+    const expected = refreshWindow ? this.cursor : null;
+    if (refreshWindow) {
+      requireThat(this.#akagi && expected && collectExecutionProofs, 'AKAGI_WINDOW_CHANGED');
+      // Sampling may race a higher-priority call from another seat. Keep the
+      // committed actor usable for ingest until the page acknowledges this exact
+      // scope. The page and actor both remain paused throughout sampling.
+      this.actor.suspendForBoundary();
+    }
+
     const recovering=this.#recovering;
     // A failed collection on reconnect cannot inherit an earlier proof.
     this.#timingDiagnostics=null;this.#browserStatsBefore=null;
-    const token = this.actor.beginSync(); await this.actor.awaitControlBarrier();
+    let token = refreshWindow ? undefined : this.actor.beginSync();
+    await this.actor.awaitControlBarrier();
     const acquisition = collectExecutionProofs ? await bridgeCall(this.#page,'automaticTiming')
       : {raw:await bridgeCall(this.#page,'sync'),evidence:null};
     this.#timingDiagnostics=summarizeTimingAcquisition(acquisition);
     const raw = acquisition.raw, pageState = await bridgeCall(this.#page,'read');
     this.#browserStatsBefore=summarizeBrowserStats(pageState.stats);
+    if (expected) {
+      requireThat(pageState.pageEpoch === expected.pageEpoch && pageState.generation === expected.generation &&
+        pageState.lastStep === expected.lastStep && raw.step - 1 === expected.lastStep &&
+        !pageState.reason && !pageState.overflow && pageState.queued === 0, 'AKAGI_WINDOW_CHANGED');
+      await bridgeCall(this.#page,'ackSync',{generation:raw.generation,step:raw.step-1});
+      token = this.actor.beginSync();
+      await this.actor.awaitControlBarrier();
+    }
+    requireThat(token, 'SYNC_REQUIRED');
     requireThat(typeof pageState.gameUuid === 'string' && pageState.gameUuid.length > 0 && [0,1,2,3].includes(pageState.ownSeat),'GAME_IDENTITY_UNVERIFIED');
     requireThat(raw.gameUuid === undefined || raw.gameUuid === pageState.gameUuid,'SYNC_IDENTITY_CHANGED');
     requireThat(this.#gameUuid === null || this.#gameUuid === pageState.gameUuid,'OBSERVED_MATCH_CHANGED');
     const config = pageState.authSummary?.gameConfig;
+    const shortClock = this.#room.rules.displayTimeSetting === '5+20';
+    requireThat(!shortClock || this.#akagi, 'FRIEND_ROOM_CLOCK_UNSUPPORTED');
+    const [fixed, add] = shortClock ? [5, 20] : [300, 0];
     requireThat(config?.category === 1 && config.mode?.mode === 1 && config.mode.ai === true &&
-      config.mode.detail_rule?.time_fixed === 300 && config.mode.detail_rule?.time_add === 0,'FRIEND_ROOM_READBACK_MISMATCH');
+      config.mode.detail_rule?.time_fixed === fixed && config.mode.detail_rule?.time_add === add,'FRIEND_ROOM_READBACK_MISMATCH');
+    if (this.#akagi) {
+      requireThat(pageState.akagiEnabled === true && pageState.phase2ActionsEnabled === true, 'AKAGI_BRIDGE_DISABLED');
+      requireThat(pageState.authSummary.otherSeatsAreRobots === true, 'AKAGI_COMPUTER_SEATS_UNVERIFIED');
+      const rules = config.mode.detail_rule;
+      requireThat(rules.dora_count === 3 && rules.shiduan === 1 && rules.init_point === 25000 &&
+        this.#room.rules.verifiedOptions.redFives === 3, 'AKAGI_ROOM_RULES_UNVERIFIED');
+    }
     const configuredRedFives = this.#room.rules.verifiedOptions.redFives;
     if (typeof configuredRedFives === 'number') {
       requireThat(config.mode.detail_rule.dora_count === configuredRedFives, 'FRIEND_ROOM_READBACK_MISMATCH');
@@ -129,7 +161,7 @@ export class LiveGameSession {
     const timingEvidence = terminal ? null : acquisition.evidence as SyncCountdownEvidence | null;
     const timing = timingEvidence ? deriveSyncOperationTiming(raw,token.connectionEpoch,timingEvidence) : undefined;
     if (timing && this.#timingDiagnostics) this.#timingDiagnostics.verified=true;
-    await bridgeCall(this.#page,'ackSync',{generation:raw.generation,step:raw.step-1});
+    if (!expected) await bridgeCall(this.#page,'ackSync',{generation:raw.generation,step:raw.step-1});
     let autoWinReadback: any = null;
     if (collectExecutionProofs && !terminal) {
       autoWinReadback = await bridgeCall(this.#page,'ensureAutoWin');
@@ -138,7 +170,7 @@ export class LiveGameSession {
     }
     const room: FriendRoom = {...this.#room,autoWin:autoWinReadback ? 'verified-on':'unknown'};
     const sync = normalizeSyncGame(raw,{...token,sessionId:this.actor.projection.sessionId,room,gameMatchKey,gameHandKey,
-      ownSeat:pageState.ownSeat,handOrdinal,receivedAt:raw.receivedAt,...(timing?{timing}:{})});
+      ownSeat:pageState.ownSeat,handOrdinal,receivedAt:raw.receivedAt,akagi:this.#akagi,...(timing?{timing}:{})});
     await this.coordinator.applySync(sync);
     const cursor = await bridgeCall(this.#page,'drain');
     requireThat(!cursor.reason && !cursor.overflow && cursor.records.length === 0 && cursor.lastStep === raw.step-1,'SYNC_CAPTURE_RACE');
@@ -230,7 +262,18 @@ export class LiveGameSession {
     }
   }
   async #ingest(observations: GameObservation[]) {
+    const state = this.actor.projection.state;
+    const draw = state?.drawnTileRef;
+    // In riichi the client can send a forced tsumogiri before ever offering
+    // an executor window. Account for it separately from Akagi's sends.
+    const forced = this.#akagi && state?.players[state.ownSeat].riichi === 'accepted' &&
+      (!state.operationWindow || state.operationWindow.status === 'closed') && draw?.known && draw.value !== null
+      ? observations.find(event => event.type === 'TileDiscarded' && event.payload.actor === state.ownSeat &&
+        event.payload.tsumogiri.known && event.payload.tsumogiri.value && !event.payload.riichiDeclaration &&
+        state.ownConcealed.some(tile => tile.instanceId === draw.value && tile.code === event.payload.tile))
+      : undefined;
     await this.coordinator.ingest(observations);
+    if (forced?.sourceCursor) this.forcedRiichiDiscards.add(forced.sourceCursor);
     this.segments.at(-1)!.subsequent.push(...observations);
     for (const event of observations) {
       if (event.type==='HandStarted') this.counts.handStarts++;
@@ -275,7 +318,13 @@ export class LiveGameSession {
         const gameHandKey = record.name==='ActionNewRound' ? this.#handKey(projection.gameMatchKey,record.payload) : projection.gameHandKey;
         if (record.handSha256) requireThat(this.#handKey(projection.gameMatchKey,{sha256:record.handSha256})===gameHandKey,'OBSERVED_HAND_CHANGED');
         const context = {projection,sourceStream:handSourceStream(projection.gameMatchKey,gameHandKey),step:record.step,
-          receivedAt:record.receivedAt,connectionEpoch:projection.connectionEpoch};
+          receivedAt:record.receivedAt,connectionEpoch:projection.connectionEpoch,akagi:this.#akagi};
+        if (endNames.includes(record.name)) {
+          const fields = ['old_scores','delta_scores','scores','gameend','liujumanguan'];
+          this.#settlementDiagnostics = { name: record.name, step: record.step,
+            before: [0,1,2,3].map(seat=>projection.state!.players[seat as 0|1|2|3].score),
+            payload: Object.fromEntries(fields.filter(key=>Object.hasOwn(record.payload,key)).map(key=>[key,record.payload[key]])) };
+        }
         const observations = record.name==='ActionNewRound'
           ? normalizeNewRound(record.payload,{...context,ownSeat:projection.state.ownSeat,gameHandKey,
               handOrdinal:await this.coordinator.resolveHandOrdinal(projection.gameMatchKey,gameHandKey)})

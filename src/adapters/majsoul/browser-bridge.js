@@ -1,7 +1,7 @@
 // Self-contained Page.evaluate installer. No authentication payload is retained.
 // Live action XOR: Akagi 63cea4b5, Copyright 2026 Shinkuan, Apache-2.0.
 // License/notice: docs/research/licenses/akagi-{LICENSE,NOTICE}.txt.
-export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, operationRulesSource, phase2ActionsEnabled = false }) {
+export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, operationRulesSource, phase2ActionsEnabled = false, akagiEnabled = false }) {
   if (window.__majiBridge) throw Error('BRIDGE_ALREADY_INSTALLED');
   if (!Number.isInteger(capacity) || capacity < 8 || capacity > 1024) throw Error('INVALID_BRIDGE_CAPACITY');
   const root = window.protobuf.parse(proto, { keepCase: true }).root;
@@ -10,6 +10,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
   if (phase2ActionsEnabled && !operationRules?.mapActionToRequest) throw Error('ACTION_RULES_REQUIRED');
   const OriginalSocket = window.WebSocket, originalSend = OriginalSocket.prototype.send;
   const flows = new Map(), replayed = new WeakSet(), records = [], tokens = new Map();
+  let lobbySocket, nextMatchStarted = false, startedFromGame = null;
   let gameSocket, pageEpoch = 1, generation = 0, lastStep = null, paused = true;
   let reason = null, overflow = false, controlEpoch = 0, processInstanceId = null, lastSync = null;
   let actionStream = 0, operation = null, restored = false, gameUuid = null, authSummary = null;
@@ -28,7 +29,11 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
   const iso = () => new Date().toISOString();
   const fail = code => { paused = true; reason = code; pageEpoch++; tokens.clear(); autoWin = null; operationTiming = null; lastAutoWinReadback = null; winningOffer = null; };
   const requireThat = (value, code) => { if (!value) throw Error(code); };
-  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  // SQLite normalizes object key order on reload. Fences compare the values
+  // of durable intents and frozen candidates, including nested selections.
+  const ordered = value => Array.isArray(value) ? value.map(ordered) :
+    value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
+  const same = (a, b) => JSON.stringify(ordered(a)) === JSON.stringify(ordered(b));
   const clone = value => JSON.parse(JSON.stringify(value));
   function traceLifecycle(socket, flow, method, owner, phase, requestPageEpoch, outcome = { accepted:'unknown' }) {
     if (flow.retired || socket !== gameSocket || !lifecycleMethods.some(name => method === `.lq.FastTest.${name}`)) return;
@@ -38,7 +43,9 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       observedAt: iso(), observedMonoMs: performance.now(), accepted:outcome.accepted,
       ...(phase!=='request' && ['.lq.FastTest.syncGame','.lq.FastTest.enterGame'].includes(method)
         ? {hasRestore:outcome.hasRestore ?? 'unknown'} : {}) });
-    if (nativeLifecycleTrace.length > 48) nativeLifecycleTrace.shift();
+    // Continuous timing polls must not evict the native entry/restore proof.
+    const ownTrace = nativeLifecycleTrace.filter(event => event.owner === owner);
+    if (ownTrace.length > 48) nativeLifecycleTrace.splice(nativeLifecycleTrace.indexOf(ownTrace[0]), 1);
   }
   function lifecycleOutcome(socket, flow, method, data) {
     const unknown = {accepted:'unknown',hasRestore:'unknown'};
@@ -247,7 +254,10 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
           if (flow.authAccount !== undefined) ownSeat = decoded.seat_list?.indexOf(flow.authAccount);
           delete flow.authAccount;
           const mode = decoded.game_config?.mode;
-          authSummary = { ownSeat, gameConfig: { category: decoded.game_config?.category,
+          const seats = decoded.seat_list;
+          const otherSeatsAreRobots = Array.isArray(seats) && seats.length === 4 && ownSeat >= 0 &&
+            seats.every((id, seat) => seat === ownSeat || id === 0 || (decoded.robots || []).some(robot => robot.account_id === id));
+          authSummary = { ownSeat, ...(akagiEnabled ? { otherSeatsAreRobots } : {}), gameConfig: { category: decoded.game_config?.category,
             mode: mode ? { ...pick(mode, ['mode','ai']), detail_rule: pick(mode.detail_rule || {}, [
               'time_fixed','time_add','dora_count','shiduan','init_point','fandian','can_jifei','liqibang_value','changbang_value',
               'have_liujumanguan','have_qieshangmanguan','have_biao_dora','have_gang_biao_dora','have_li_dora',
@@ -345,6 +355,8 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
         if (packet.name === '.lq.FastTest.inputOperation') fail('CLIENT_OPERATION_DECODE_FAILED');
       }
     }
+    if (packet.name.startsWith('.lq.Lobby.')) lobbySocket = this;
+    if (packet.name === '.lq.Lobby.startRoom') { nextMatchStarted = true; startedFromGame = gameUuid; }
     const id = allocate(flow), rewritten = packet.bytes.slice(); rewritten[1] = id & 255; rewritten[2] = id >> 8;
     if (clientWinType !== null) {
       winRecord = { requestId:id,method:packet.name,type:clientWinType,pageEpoch,sourceStream:actionStream,step:lastStep,observedAt:iso(),delivery:'pending',
@@ -363,9 +375,9 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     catch (error) { if (winRecord) winRecord.delivery='unknown'; flow.pending.delete(id); fail('CLIENT_SEND_FAILED'); throw error; }
   }
   OriginalSocket.prototype.send = send; window.WebSocket = SocketProxy;
-  function rpc(method, params, finalCheck) {
-    requireThat(gameSocket && gameSocket.readyState === 1, 'GAME_SOCKET_UNAVAILABLE');
-    const flow = flows.get(gameSocket); requireThat(flow?.fresh, 'CONNECTION_REATTACH_REQUIRED');
+  function rpc(method, params, finalCheck, socket = gameSocket) {
+    requireThat(socket && socket.readyState === 1, 'GAME_SOCKET_UNAVAILABLE');
+    const flow = flows.get(socket); requireThat(flow?.fresh, 'CONNECTION_REATTACH_REQUIRED');
     const id = allocate(flow), bytes = frame(method, params, id);
     let sent = false, invoked = false;
     const work = new Promise((resolve, reject) => {
@@ -374,8 +386,8 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       try {
         // All code between this check and actual send is synchronous, with no user callbacks.
         if (finalCheck) finalCheck();
-        invoked = true; originalSend.call(gameSocket, bytes); sent = true;
-        traceLifecycle(gameSocket, flow, method, 'bridge', 'request', pending.lifecyclePageEpoch);
+        invoked = true; originalSend.call(socket, bytes); sent = true;
+        traceLifecycle(socket, flow, method, 'bridge', 'request', pending.lifecyclePageEpoch);
         if (method === '.lq.FastTest.syncGame') stats.bridgeSyncRequests++;
         if (method === '.lq.FastTest.inputOperation' || method === '.lq.FastTest.inputChiPengGang') stats.bridgeActionSends++;
         if (flow.pending.has(id)) pending.timer = setTimeout(() => reject(Error('RPC_RECEIPT_TIMEOUT')), 5000);
@@ -415,7 +427,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     let request;
     if (phase2ActionsEnabled) {
       requireThat(same(intent.actionSpec, action.action), 'DURABLE_INTENT_REQUIRED');
-      request = operationRules.mapActionToRequest(clone(action.action), clone(snapshot.state), clone(operation.value));
+      request = operationRules.mapActionToRequest(clone(action.action), clone(snapshot.state), clone(operation.value), akagiEnabled);
     } else {
       requireThat(operation.value.operation_list?.length === 1 && operation.value.operation_list[0].type === 1 && !operation.value.operation_list[0].combination?.length, 'UNSUPPORTED_OPERATION');
       request = { method:'.lq.FastTest.inputOperation',params:{type:1,tile:input.tile,moqie:action.action.tsumogiri,timeuse:0} };
@@ -436,7 +448,24 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
         nativeRestoreRevision:autoWin.nativeRestoreRevision, observedAt: autoWin.observedAt, rgbaSha256: autoWin.rgbaSha256, expiresInMs: Math.max(0, autoWin.expiresMonoMs-performance.now()) } : null,
       lastClientWin:lastClientWin?clone(lastClientWin):null,lastOwnWin:lastOwnWin?clone(lastOwnWin):null,
       lastAutoWinReadback:lastAutoWinReadback?pick(lastAutoWinReadback,['state','pageEpoch','sourceStream','step','generation','nativeRestoreRevision','observedAt','rgbaSha256']):null,
-      gameUuid, phase2ActionsEnabled, stats: { ...stats }, nativeLifecycleTrace: clone(nativeLifecycleTrace), allocator: 'wire-multiplexer-v1' }),
+      gameUuid, phase2ActionsEnabled, akagiEnabled, stats: { ...stats }, nativeLifecycleTrace: clone(nativeLifecycleTrace), allocator: 'wire-multiplexer-v1' }),
+    async startNextMatch(input) {
+      if (matchEnded && startedFromGame !== gameUuid && !processInstanceId) nextMatchStarted = false;
+      requireThat(akagiEnabled && paused && !nextMatchStarted, 'AUTO_START_DISABLED');
+      requireThat(lobbySocket?.readyState === 1, 'LOBBY_NOT_READY');
+      const fetched = await rpc('.lq.Lobby.fetchRoom', {}, null, lobbySocket).work;
+      const room = fetched.response.room;
+      requireThat(!fetched.response.error, 'ROOM_NOT_READY');
+      requireThat(room, 'ROOM_NOT_READY');
+      requireThat(String(room.room_id) === input.roomId, 'ROOM_MISMATCH');
+      requireThat(room.max_player_count === 4 && (room.robots?.length || room.robot_count) === 3 &&
+        room.persons?.length === 1 && room.persons[0].account_id === room.owner_id, 'ROBOT_ROOM_REQUIRED');
+      if (room.is_playing) return { started: false, playing: true, roomId: input.roomId };
+      // The owner's client enters the new game from its native start callback.
+      // Return a fresh room proof; the visual adapter clicks the native button.
+      requireThat(!nextMatchStarted, 'AUTO_START_DISABLED');
+      return { ready: true, roomId: input.roomId, expected: { pageEpoch, generation, gameUuid } };
+    },
     drain: () => { const result = { ...api.read(), records: records.splice(0) }; return result; },
     pause: control => {
       paused = true; tokens.clear();
@@ -447,6 +476,17 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
         controlEpoch = control.controlEpoch; paused = control.paused !== false;
       } else { pageEpoch++; paused = true; }
       return { pageEpoch, generation, controlEpoch, paused };
+    },
+    releaseAkagi(control) {
+      requireThat(akagiEnabled && paused && control?.paused === true && processInstanceId &&
+        control.processInstanceId === processInstanceId && control.controlEpoch === controlEpoch && tokens.size === 0,
+        'AKAGI_CONTROL_NOT_PAUSED');
+      requireThat([...flows.values()].every(flow => [...flow.pending.values()].every(request => !request.bridge)),
+        'BRIDGE_PENDING_REQUESTS');
+      processInstanceId = null;
+      controlEpoch = 0;
+      localInput();
+      return { paused, released: true };
     },
     ackAutoWin(readback) {
       tokens.clear();
@@ -465,9 +505,11 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       tokens.clear(); operationTiming = null;
       requireThat(operation && operation.requestedMonoMs !== undefined && operation.gameState === 1 && operation.lastPauseTimeMs === 0, 'DEADLINE_PROVENANCE_UNVERIFIED');
       requireThat(timing?.source === 'protocol-operation' && timing.origin === 'sync-game' && timing.step === lastStep && timing.pageEpoch === pageEpoch && Number.isInteger(timing.connectionEpoch) && timing.connectionEpoch > 0, 'TIMING_SCOPE_MISMATCH');
-      requireThat(timing.sampledAt === operation.receivedAt && timing.sampledMonoMs === operation.receivedMonoMs && timing.fixedMs === operation.value.time_fixed && timing.addMs === 0 && operation.value.time_add === 0 && timing.elapsedMs === operation.passedWaitingTime * 1000, 'TIMING_SCOPE_MISMATCH');
+      requireThat(timing.sampledAt === operation.receivedAt && timing.sampledMonoMs === operation.receivedMonoMs && timing.fixedMs === operation.value.time_fixed && timing.addMs === operation.value.time_add && (timing.addMs === 0 || akagiEnabled && [5000,8000].includes(timing.fixedMs) &&
+        Number.isInteger(timing.addMs) && timing.addMs > 0 && timing.addMs <= 20000 && authSummary?.gameConfig?.mode?.detail_rule?.time_fixed === 5 &&
+        authSummary.gameConfig.mode.detail_rule.time_add === 20) && timing.elapsedMs === operation.passedWaitingTime * 1000, 'TIMING_SCOPE_MISMATCH');
       const rtt = Math.ceil(operation.receivedMonoMs - operation.requestedMonoMs);
-      requireThat(rtt >= 0 && rtt <= 30000 && timing.networkAllowanceMs === rtt && timing.quantizationAllowanceMs === 2000 && timing.uncertaintyMs === rtt + 2000 && timing.remainingMs === timing.fixedMs - timing.elapsedMs, 'COUNTDOWN_READBACK_MISMATCH');
+      requireThat(rtt >= 0 && rtt <= 30000 && timing.networkAllowanceMs === rtt && timing.quantizationAllowanceMs === 2000 && timing.uncertaintyMs === rtt + 2000 && timing.remainingMs === timing.fixedMs + timing.addMs - timing.elapsedMs, 'COUNTDOWN_READBACK_MISMATCH');
       const deadlineMonoMs = timing.sampledMonoMs + timing.remainingMs - timing.uncertaintyMs;
       requireThat(performance.now() + 250 < deadlineMonoMs, 'DEADLINE_EXCEEDED');
       operationTiming = { value:clone(timing),deadlineMonoMs };

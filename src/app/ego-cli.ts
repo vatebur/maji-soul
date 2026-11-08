@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { MAX_LIVE_OBSERVATION_MS } from './live-observation.ts';
 
-export type EgoLiveCommand = 'live-install' | 'live-reconnect' | 'live-sync' | 'live-once' | 'live-observe' | 'live-action-once';
+export type EgoLiveCommand = 'live-install' | 'live-reconnect' | 'live-sync' | 'live-once' | 'live-observe' | 'live-action-once' | 'live-akagi';
 
 /** Use ego's documented Node environment; input is passed through stdin, never a shell. */
 export function runEgoCommand(command: EgoLiveCommand, space: string, label: string, optionsPath?: string): string {
@@ -11,14 +11,15 @@ export function runEgoCommand(command: EgoLiveCommand, space: string, label: str
   const script = `const task = await taskSpace(${Number(space)});
 const page = task.page(${JSON.stringify(label)});
 ${['live-install', 'live-reconnect'].includes(command)
-    ? `const {installLiveBridge} = await import(${JSON.stringify(installUrl)}); console.log(JSON.stringify(await installLiveBridge(page,${command === 'live-reconnect'},{phase2ActionsEnabled:${optionsPath==='--phase2'}}),null,2));`
+    ? `const {installLiveBridge} = await import(${JSON.stringify(installUrl)}); console.log(JSON.stringify(await installLiveBridge(page,${command === 'live-reconnect'},{phase2ActionsEnabled:${optionsPath==='--phase2'}${optionsPath==='--akagi'?',akagiEnabled:true':''}}),null,2));`
     : `const fs = await import('node:fs/promises');
 const {acceptLiveViaNode} = await import(${JSON.stringify(liveUrl)});
 const options = JSON.parse(await fs.readFile(${JSON.stringify(optionsPath)},'utf8'));
+${command === 'live-akagi' ? 'options.akagi = true;' : 'delete options.akagi;'}
 options.discardOnce = ${command === 'live-once'};
 ${command === 'live-action-once' ? "if (!options.phase2ActionOnce) throw Error('INVALID_LIVE_ACTION_SELECTION');" : 'delete options.phase2ActionOnce;'}
-${command === 'live-observe' ? 'if (options.observeMs === undefined) options.observeMs = 30000;' : 'options.observeMs = 0;'}
+${command === 'live-akagi' ? `if (options.observeMs === undefined) options.observeMs = ${MAX_LIVE_OBSERVATION_MS};` : command === 'live-observe' ? 'if (options.observeMs === undefined) options.observeMs = 30000;' : 'options.observeMs = 0;'}
 console.log(JSON.stringify(await acceptLiveViaNode(page,options,${JSON.stringify(process.execPath)}),null,2));`}`;
   return execFileSync('ego-browser', ['nodejs'], { input: script, encoding: 'utf8', maxBuffer: 1024 * 1024,
-    timeout: command === 'live-observe' ? MAX_LIVE_OBSERVATION_MS+60_000 : 60_000, stdio: ['pipe', 'pipe', 'pipe'] });
+    timeout: ['live-observe', 'live-akagi'].includes(command) ? MAX_LIVE_OBSERVATION_MS+60_000 : 60_000, stdio: ['pipe', 'pipe', 'pipe'] });
 }

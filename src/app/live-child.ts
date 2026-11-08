@@ -8,6 +8,7 @@ import type { EgoPagePort } from '../adapters/majsoul/ego-transport.ts';
 const lines = createInterface({ input: process.stdin });
 const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
 let started = false;
+const cancellation = new AbortController();
 const page: EgoPagePort = { evaluate(_source, argument) {
   return new Promise((resolve, reject) => {
     const id = randomUUID();
@@ -21,10 +22,11 @@ lines.on('line', line => {
     const message = JSON.parse(line);
     if (!started) {
       if (message.kind !== 'start') throw Error('EGO_RPC_INVALID'); started = true;
-      void acceptLivePage(page, message.options as LiveAcceptanceOptions).then(report => {
+      void acceptLivePage(page, message.options as LiveAcceptanceOptions, cancellation.signal).then(report => {
         process.stdout.write(JSON.stringify({ kind: 'result', report }) + '\n'); lines.close(); process.stdin.destroy();
       }).catch(() => { process.stdout.write(JSON.stringify({ kind: 'error', code: 'LIVE_CHILD_FAILED' }) + '\n'); process.exitCode = 1; lines.close(); process.stdin.destroy(); });
     } else {
+      if (message.kind === 'stop') { cancellation.abort(); return; }
       const request = pending.get(message.id); if (!request) return;
       clearTimeout(request.timer); pending.delete(message.id);
       if (message.ok) request.resolve(message.result);

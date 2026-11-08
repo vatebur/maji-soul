@@ -30,8 +30,8 @@ function seed(tiles: TileCode[], dealer: Seat = 0) {
   const projection = events.reduce(reduceObservation, initialProjection(events[0]!.observationId.split(':')[0] ?? 'seed'));
   return { events, projection };
 }
-function normalize(p: GameProjection, name: string, payload: unknown, step = 2) {
-  return normalizeAction(name,payload,{ projection:p,sourceStream:'fixture-hand-1',step,receivedAt:at,connectionEpoch:0,
+function normalize(p: GameProjection, name: string, payload: unknown, step = 2, akagi = false) {
+  return normalizeAction(name,payload,{ projection:p,sourceStream:'fixture-hand-1',step,receivedAt:at,connectionEpoch:0,akagi,
     timing: { source:'client-countdown', step, sampledAt:at, remainingMs:60000, uncertaintyMs:1000 } });
 }
 const offer = (type: number, combination?: string[]) => ({ seat:0,operation_list:[{type,...(combination ? {combination} : {})}],time_fixed:60000,time_add:0 });
@@ -147,6 +147,10 @@ test('added kan identifies one existing pon and the exact fourth tile including 
   assert.equal(c.action.kind,'added-kan'); assert.equal(c.action.upgradedFrom,pon.id); assert.deepEqual(c.action.tiles,['5m','5m','5m','5mr']);
   assert.equal(c.action.consumed[0],state.ownConcealed[0]!.instanceId);
   assert.deepEqual(mapActionToRequest(c.action,state,offer(6,['5m|5m|5m'])),{method:'.lq.FastTest.inputOperation',params:{type:6,index:0,timeuse:0}});
+  const current=legalOperationActions(state,offer(6,['5m|5m|5m|0m']),'current','e')[0]!;
+  assert.deepEqual(current.action,{...c.action,operation:{type:6,index:0,combination:'5m|5m|5m|0m'}});
+  assert.deepEqual(mapActionToRequest(current.action,state,offer(6,['5m|5m|5m|0m'])),{method:'.lq.FastTest.inputOperation',params:{type:6,index:0,timeuse:0}});
+  assert.throws(()=>legalOperationActions(state,offer(6,['5m|5m|5m|5m']),'invalid','e'),/INVALID_ADDED_KAN_TILES/);
 });
 
 test('a client winning offer suppresses every program candidate including reach and kan', () => {
@@ -310,4 +314,45 @@ test('a riichi intent cannot be confirmed by an otherwise identical ordinary dis
       assert.equal((await store.inspect('riichi-ledger')).counts.confirmations,declaration?1:0);
     } finally {await actor.idle();await store.close();await rm(directory,{recursive:true,force:true});}
   });
+});
+
+test('Akagi pass is offered only for a skippable call and is fenced by the same live offer', () => {
+  const s = seed(['3m','4m',...filler.slice(0,11)],3);
+  const state = normalize(s.projection,'ActionDiscardTile',{seat:3,tile:'2m',moqie:true,is_liqi:false,is_wliqi:false})
+    .reduce(reduceObservation,s.projection).state!;
+  const offered = offer(2,['3m|4m']);
+  const pass = legalOperationActions(state,offered,'w','e',true).find(candidate => candidate.action.kind === 'pass')!;
+  assert.ok(pass);
+  assert.throws(() => mapActionToRequest(pass.action,state,offered), /ACTION_NOT_LEGAL/);
+  assert.deepEqual(mapActionToRequest(pass.action,state,offered,true), {
+    method: '.lq.FastTest.inputChiPengGang', params: { type: 0, index: 0, cancel_operation: true, timeuse: 0 },
+  });
+  assert.ok(!legalOperationActions(state,offer(9),'w','e',true).some(candidate => candidate.action.kind === 'pass'));
+});
+
+test('accepted Akagi pass frees the ledger without creating a public action confirmation', async () => {
+  const directory = await mkdtemp(join(tmpdir(),'maji-pass-ledger-'));
+  const store = new StorageClient(join(directory,'state.sqlite'));
+  const session = 'pass-ledger', actor = await GameActor.open(store,session,'process',{clock:new ReplayClock(at)});
+  try {
+    for (const event of seed(['3m','4m',...filler.slice(0,11)],3).events) await actor.ingest(event);
+    for (const event of normalize(actor.projection,'ActionDiscardTile',{
+      seat:3,tile:'2m',moqie:true,is_liqi:false,is_wliqi:false,operation:offer(2,['3m|4m']),
+    },2,true)) await actor.ingest(event);
+    await actor.resume();
+    const snapshot = await actor.freezeDecision();
+    const selected = snapshot.legalActions.find(candidate => candidate.action.kind === 'pass')!;
+    const executor = new ActionExecutor(actor,{transport:{kind:'contract-test',
+      prepare:async()=>async()=>({callId:'pass-ack',delivery:'accepted',observedAt:at})}});
+    const attempt = await executor.executeContract(snapshot.id,selected.id);
+    assert.equal(attempt.status,'confirmed');
+    assert.equal(attempt.tile,null);
+    assert.equal(attempt.confirmationEventId,undefined);
+    assert.equal((await store.inspect(session)).counts.confirmations,0);
+    assert.equal((await store.inspectMatch(actor.projection.gameMatchKey!)).unresolvedAttempts.length,0);
+  } finally {
+    await actor.idle();
+    await store.close();
+    await rm(directory,{recursive:true,force:true});
+  }
 });

@@ -324,6 +324,20 @@ test('the native prerequisite alone cannot click through the known reconnect mod
   assert.equal(result.clicked,true);assert.equal(page.clicks,1);assert.equal(page.acknowledgements.length,1);
 });
 
+test('table animation may exceed three seconds while recovery still requires two positive samples',async t=>{
+  let now=0;
+  t.mock.method(performance,'now',()=>now);
+  const page=new Page();page.recoveryModal=true;
+  page.onCapture=()=>{
+    if(page.captures===1)now=3500;
+    if(page.captures===3)page.recoveryModal=false;
+  };
+  page.onMouseMoved=()=>assert.ok(page.captures>=4);
+  const result=await ensureAutoWin(page,profile,true,'reconnect');
+  assert.equal(result.state,'enabled');assert.equal(page.clicks,1);
+  assert.equal(page.acknowledgements.length,1);
+});
+
 test('a new restore during the table wait cannot reuse the earlier native completion',async()=>{
   const page=new Page();page.nativeLifecycleTrace=nativeCycle();
   page.onCapture=()=>page.nativeLifecycleTrace!.push({method:'syncGame',owner:'client',phase:'request',pageEpoch:1,observedMonoMs:200});
@@ -365,5 +379,42 @@ test('missing or invalid native revisions cannot be read back even in read-only 
     const page=new Page();page.enabled=true;(page as any).nativeRestoreRevision=revision;
     await assert.rejects(verifyAutoWin(page),/AUTO_WIN_READBACK_STALE/);
     assert.equal(page.clicks,0);assert.equal(page.captures,0);assert.equal(page.acknowledgements.length,0);
+  }
+});
+
+
+test('riichi and active-seat overlays retain a complete alternative frame proof', () => {
+  const image=imageFor();
+  for(const [x,y] of [[900,390],[1135,335],[945,440],[1080,280]])
+    image.rgba.set([0,0,0,255],(y!*image.width+x!)*4);
+  const points=[[925,320,98,93,103],[925,400,98,93,103],[1000,280,69,67,78],
+    [1115,320,98,93,103],[945,440,69,67,78]];
+  for(const [x,y,...rgb] of points) image.rgba.set([...rgb,255],(y!*image.width+x!)*4);
+  assert.equal(hasRecoveryTableAnchors(image),true);
+  for(const [x,y,...rgb] of points){
+    image.rgba.set([0,0,0,255],(y!*image.width+x!)*4);
+    assert.equal(hasRecoveryTableAnchors(image),false);
+    image.rgba.set([...rgb,255],(y!*image.width+x!)*4);
+  }
+});
+
+test('top riichi deposit with left active-seat glow retains five exposed frame anchors', async () => {
+  const image=imageFor(fixture.samples[0]);
+  // Measured from the failing current-client frame: the stick covers both
+  // top border probes, while the left score/glow invalidates the bevel set.
+  const points=[[900,390,69,67,78],[1135,335,69,67,78],[945,440,69,67,78],
+    [1080,280,251,251,252],[1000,291,102,97,106],[954,355,232,176,99],
+    [960,386,47,42,55],[1070,428,98,93,103],[925,320,98,93,103],
+    [925,400,98,93,103],[1000,280,255,255,255],[1115,320,98,93,103]];
+  for(const [x,y,...rgb] of points) image.rgba.set([...rgb,255],(y!*image.width+x!)*4);
+  assert.equal(hasRecoveryTableAnchors(image),true);
+  const page=new Page();page.enabled=true;page.images[1]=png(image).toString('base64');
+  assert.equal((await ensureAutoWin(page)).state,'enabled');
+  assert.equal(page.captures,2);assert.equal(page.clicks,0);
+  for(const [x,y] of [[925,320],[925,400],[1135,335],[1115,320],[945,440]]) {
+    const offset=(y!*image.width+x!)*4,original=image.rgba.slice(offset,offset+4);
+    image.rgba.set([0,0,0,255],offset);
+    assert.equal(hasRecoveryTableAnchors(image),false);
+    image.rgba.set(original,offset);
   }
 });

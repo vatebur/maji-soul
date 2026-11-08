@@ -19,7 +19,24 @@ export async function collectAutomaticTiming(page: EgoPagePort) {
       await new Promise(resolve => setTimeout(resolve, delay));
       raw = await bridgeCall(page, 'sync');
     }
-    const display = await inspectClientCountdown(page);
+    let display;
+    const settleMs = i === 0 ? current.operation.time_fixed === 8000 ? 1800 : 2500 : 1000;
+    // Long-clock windows use the same entrance animation as short clocks.
+    // Wait only for visible digits, retaining the same window and generation.
+    const until = performance.now() + settleMs;
+    for (;;) {
+      const operation = raw.game_restore?.actions?.at(-1)?.payload?.operation;
+      try { display = await inspectClientCountdown(page, operation?.time_add > 0); break; }
+      catch (error) {
+        const timerNotVisible = error instanceof Error && ['COUNTDOWN_LAYOUT_UNVERIFIED', 'COUNTDOWN_DIGITS_UNREADABLE',
+          'COUNTDOWN_GLYPH_UNVERIFIED', 'COUNTDOWN_BANK_UNREADABLE'].includes(error.message);
+        if (!timerNotVisible || performance.now() >= until) throw error;
+        await new Promise(resolve => setTimeout(resolve, 150));
+        const next = await bridgeCall(page, 'sync');
+        requireThat(next.pageEpoch === raw.pageEpoch && next.generation === raw.generation && next.step === raw.step, 'COUNTDOWN_SAMPLE_STALE');
+        raw = next;
+      }
+    }
     requireThat(display.pageEpoch === raw.pageEpoch && display.generation === raw.generation, 'COUNTDOWN_SAMPLE_STALE');
     samples.push(sampleSyncOperationTiming(raw, display));
   }

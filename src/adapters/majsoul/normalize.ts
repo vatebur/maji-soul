@@ -18,6 +18,7 @@ export interface NormalizeContext {
   /** Historical offers are expired; only the last restore action may open a window. */
   historyReplay?: boolean;
   timing?: VerifiedOperationTiming;
+  akagi?: boolean;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -42,9 +43,10 @@ export function operationDeadline(operation: Record<string, unknown>, context: N
   integer(operation.time_fixed, 0, 600_000); integer(operation.time_add, 0, 600_000);
   if (timing.source === 'protocol-operation') {
     requireThat(context.source === 'majsoul-sync' && timing.origin === 'sync-game' && timing.connectionEpoch === context.connectionEpoch && timing.sampledAt === context.receivedAt, 'TIMING_SCOPE_MISMATCH');
-    integer(timing.pageEpoch, 1); integer(timing.fixedMs, 1, 600_000); integer(timing.addMs, 0, 0);
+    integer(timing.pageEpoch, 1); integer(timing.fixedMs, 1, 600_000); integer(timing.addMs, 0, 20000);
     integer(timing.elapsedMs, 0, 1_200_000); integer(timing.networkAllowanceMs, 0, 30_000); integer(timing.quantizationAllowanceMs, 2_000, 120_000);
     requireThat(Number.isFinite(timing.sampledMonoMs) && timing.sampledMonoMs >= 0 && timing.fixedMs === operation.time_fixed && timing.addMs === operation.time_add &&
+      (timing.addMs === 0 || context.akagi && context.projection.room?.rules.displayTimeSetting === '5+20' && [5000,8000].includes(timing.fixedMs)) &&
       timing.remainingMs === timing.fixedMs + timing.addMs - timing.elapsedMs && timing.uncertaintyMs === timing.networkAllowanceMs + timing.quantizationAllowanceMs, 'COUNTDOWN_READBACK_MISMATCH');
     requireThat(timing.remainingMs > timing.uncertaintyMs + 250, 'COUNTDOWN_EXPIRED');
   }
@@ -85,10 +87,12 @@ export function normalizeNewRound(payload: unknown, context: NewRoundContext): G
   const hand = parseObservation({ schemaVersion: 1, observationId: `observation-${digest([context.connectionEpoch, sourceCursor, 'hand']).slice(0, 24)}`,
     connectionEpoch: context.connectionEpoch, source: context.source ?? 'majsoul-network', sourceDedupKey: `${sourceCursor}:hand`, sourceCursor,
     receivedAt: context.receivedAt, type: 'HandStarted', payload: { ordinal: context.handOrdinal, initialView, gameHandKey: context.gameHandKey } });
-  reduceObservation(context.projection, hand);
-  // No executable opening window until the client provides a separately
-  // observed ActionDealTile. Never infer moqie from the opening array order.
-  return [hand];
+  const projection = reduceObservation(context.projection, hand);
+  if (!context.akagi || context.historyReplay || context.ownSeat !== dealer || !input.operation) return [hand];
+  // The opening tiles are unordered. All executable first discards are hand
+  // discards, with no assertion that any physical copy was the draw.
+  const window = offerDiscard(record(input.operation), { ...context, projection }, true, 'tsumo');
+  return window ? [hand, window] : [hand];
 }
 
 function offerDiscard(offered: Record<string, unknown>, context: NormalizeContext, permitted: boolean, autoWinKind?: 'tsumo' | 'ron'): GameObservation | undefined {
@@ -103,7 +107,7 @@ function offerDiscard(offered: Record<string, unknown>, context: NormalizeContex
   const sourceCursor = `${context.sourceStream}:${context.step}`;
   const windowId = `window-${digest([projection.gameMatchKey, projection.gameHandKey, context.connectionEpoch, sourceCursor]).slice(0, 24)}`;
   const evidenceId = eventIdFor(projection.sessionId, projection.sequence + 1);
-  const candidates = legalOperationActions(current, offered as unknown as OfferedOperations, windowId, evidenceId);
+  const candidates = legalOperationActions(current, offered as unknown as OfferedOperations, windowId, evidenceId, context.akagi);
   return parseObservation({ schemaVersion: 1, observationId: `observation-${digest([context.connectionEpoch, sourceCursor, 'window']).slice(0, 24)}`,
     connectionEpoch: context.connectionEpoch, source: context.source ?? 'majsoul-network', sourceDedupKey: `${sourceCursor}:window`, receivedAt: context.receivedAt,
     type: 'OperationOffered', payload: { window: { id: windowId, connectionEpoch: context.connectionEpoch, openedAt: context.receivedAt,

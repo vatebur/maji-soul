@@ -82,6 +82,10 @@ export function assertWindow(state: GameState, window: OperationWindow): void {
       requireThat(state.ownConcealed.some(t => t.instanceId === tile) && state.drawnTileRef.known && tsumogiri === (state.drawnTileRef.value === tile), 'INVALID_DISCARD_CANDIDATE');
       if (state.players[state.ownSeat].riichi === 'accepted') requireThat(tsumogiri, 'RIICHI_HAND_DISCARD');
       if (c.action.kind === 'riichi-discard') requireThat(c.action.operation.type === 7 && state.players[state.ownSeat].riichi === 'none' && state.players[state.ownSeat].score >= 1000 && state.players[state.ownSeat].melds.every(m => m.kind === 'closed-kan'), 'INVALID_RIICHI_CANDIDATE');
+    } else if (c.action.kind === 'pass') {
+      requireThat(c.authority === 'executor' && !state.currentActor.known &&
+        state.latestAction?.kind === 'discard' && state.latestAction.actor !== state.ownSeat &&
+        window.candidates.some(candidate => ['chi', 'pon', 'open-kan'].includes(candidate.action.kind)), 'INVALID_PASS_CANDIDATE');
     } else if (c.action.kind === 'tsumo' || c.action.kind === 'ron') requireThat(c.authority === 'client-auto-win', 'INVALID_WIN_AUTHORITY');
     else {
       const action = c.action, own = state.players[state.ownSeat];
@@ -118,7 +122,7 @@ function rekeyView(view: HandInitialView & { operationWindow?: OperationWindow }
   if (copy.operationWindow) {
     copy.operationWindow.candidates.forEach(c => {
       if (c.action.kind === 'discard' || c.action.kind === 'riichi-discard') { const id = refs.get(c.action.tile); requireThat(id, 'CANDIDATE_TILE_MISSING'); c.action.tile = id; }
-      else if (c.action.kind !== 'tsumo' && c.action.kind !== 'ron') c.action.consumed = c.action.consumed.map(ref => { const id = refs.get(ref); requireThat(id, 'CANDIDATE_TILE_MISSING'); return id; });
+      else if ('consumed' in c.action) c.action.consumed = c.action.consumed.map(ref => { const id = refs.get(ref); requireThat(id, 'CANDIDATE_TILE_MISSING'); return id; });
     });
   }
   return copy;

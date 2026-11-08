@@ -1,4 +1,4 @@
-//! Phase 0 inference probe. No game transport and no automatic actions.
+//! Local Akagi inference over a bounded JSONL protocol.
 use native_bot::{
     defaults,
     engine::{BotAction, Engine},
@@ -15,6 +15,7 @@ struct Runner {
     epoch: Option<String>,
     hand: Option<String>,
     events: Vec<String>,
+    friend_east: bool,
 }
 fn tile(p: &str) -> Result<String, &'static str> {
     Ok(match p {
@@ -92,7 +93,7 @@ impl Runner {
             self.engine = Some(defaults::engine(4, 0).map_err(|_| "MODEL_LOAD_FAILED")?);
             self.epoch = Some(epoch.to_owned());
             return Ok(
-                json!({"engineVersion":SOURCE,"modelHash":model_hash,"rules":["tenhou-default-probe-only"],"productionReady":false}),
+                json!({"engineVersion":SOURCE,"modelHash":model_hash,"rules":["tenhou-default-probe-only","majsoul-friend-east-3-red"],"productionReady":false}),
             );
         }
         let engine = self.engine.as_mut().ok_or("ENGINE_NOT_INITIALIZED")?;
@@ -105,9 +106,10 @@ impl Runner {
                 .filter(|v| *v < 4)
                 .ok_or("INVALID_SEAT")?;
             let hand = p["handId"].as_str().ok_or("INVALID_HAND")?;
-            if p["rules"] != "tenhou-default-probe-only" {
+            if p["rules"] != "tenhou-default-probe-only" && p["rules"] != "majsoul-friend-east-3-red" {
                 return Err("UNSUPPORTED_RULES");
             }
+            self.friend_east = p["rules"] == "majsoul-friend-east-3-red";
             engine.reset();
             engine.set_seat(seat as u8);
             self.events.clear();
@@ -169,8 +171,14 @@ impl Runner {
                 .decide()
                 .map_err(|_| "ENGINE_INFERENCE_FAILED")?
                 .ok_or("NO_LEGAL_ACTION")?;
+            let selected = match decision.action {
+                BotAction::Reach { pai } if self.friend_east => {
+                    json!({"kind":"riichi-discard","tile":tile(&pai)?})
+                }
+                other => advice(other)?,
+            };
             return Ok(
-                json!({"cursor":cursor,"stateVersion":version,"snapshotHash":hash,"advice":advice(decision.action)?,"engineVersion":SOURCE,"modelHash":model_hash}),
+                json!({"cursor":cursor,"stateVersion":version,"snapshotHash":hash,"advice":selected,"engineVersion":SOURCE,"modelHash":model_hash}),
             );
         }
         Err("UNSUPPORTED_METHOD")
@@ -182,6 +190,7 @@ fn main() {
         epoch: None,
         hand: None,
         events: Vec::new(),
+        friend_east: false,
     };
     let mut input = io::stdin().lock();
     loop {

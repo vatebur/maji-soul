@@ -6,12 +6,16 @@ import { randomUUID } from 'node:crypto';
 import protobuf from 'protobufjs';
 import { createOperationRules, legalOperationActions, expectedActionFor, type OfferedOperations } from '../src/adapters/majsoul/actions.ts';
 import { initialView } from '../scripts/build-phase1-fixtures.ts';
+import { canonical } from '../src/domain/game/value.ts';
 import type { GameState, TileCode } from '../src/domain/game/types.ts';
 
 const proto = `syntax="proto3"; package lq;
 message Wrapper { string name=1; bytes data=2; }
 message Error { uint32 code=1; string message=2; }
 message Empty {}
+message RoomPerson { uint32 account_id=1; }
+message Room { uint32 room_id=1; uint32 owner_id=2; uint32 max_player_count=4; repeated RoomPerson persons=5; bool is_playing=7; uint32 robot_count=9; repeated RoomPerson robots=13; }
+message ResSelfRoom { Error error=1; Room room=2; }
 message ReqAuthGame { uint32 account_id=1; string token=2; string game_uuid=3; }
 message ResAuthGame { repeated uint32 seat_list=1; Error error=2; string private_note=3; }
 message ReqLifecycle { string token=1; string game_uuid=2; uint32 account_id=3; }
@@ -36,6 +40,8 @@ message GameResult { repeated EndPlayer players=1; }
 message NotifyGameEndResult { GameResult result=1; }
 `;
 const rpcMap: Record<string, { req: string; resp: string }> = {
+  '.lq.Lobby.fetchRoom': { req: 'lq.Empty', resp: 'lq.ResSelfRoom' },
+  '.lq.Lobby.startRoom': { req: 'lq.Empty', resp: 'lq.Response' },
   '.lq.FastTest.authGame': { req: 'lq.ReqAuthGame', resp: 'lq.ResAuthGame' },
   '.lq.FastTest.enterGame': { req: 'lq.ReqLifecycle', resp: 'lq.ResEnterGame' },
   '.lq.FastTest.finishSyncGame': { req: 'lq.ReqLifecycle', resp: 'lq.Response' },
@@ -67,7 +73,7 @@ function phase2State(owned:TileCode[],called?:TileCode):GameState {
   return state;
 }
 const phase2Offer=(type:number,combination:string[]):OfferedOperations=>({seat:0,operation_list:[{type,combination}]});
-function fixture(capacity = 256, phase2ActionsEnabled = false) {
+function fixture(capacity = 256, phase2ActionsEnabled = false, akagiEnabled = false) {
   class Socket extends EventTarget {
     readyState = 1;
     sent: Uint8Array[] = [];
@@ -80,8 +86,8 @@ function fixture(capacity = 256, phase2ActionsEnabled = false) {
   class ContextDate extends Date { static now(){return Date.now()+wallOffset;} }
   const context = { window, WebSocket: Socket, Uint8Array, ArrayBuffer, TextDecoder, MessageEvent,
     performance:{ now:()=>performance.now()+monoOffset }, crypto: { randomUUID }, Date:ContextDate, setTimeout, clearTimeout, proto, rpcMap, capacity,
-    operationRulesSource:createOperationRules.toString(),phase2ActionsEnabled };
-  runInNewContext(source + '\ninstallBrowserBridge({proto,rpcMap,ownSeat:0,capacity,operationRulesSource,phase2ActionsEnabled});', context);
+    operationRulesSource:createOperationRules.toString(),phase2ActionsEnabled,akagiEnabled };
+  runInNewContext(source + '\ninstallBrowserBridge({proto,rpcMap,ownSeat:0,capacity,operationRulesSource,phase2ActionsEnabled,akagiEnabled});', context);
   const socket: Socket = new window.WebSocket('fixture');
   const bridge = window.__majiBridge;
   const autoWin = (state='enabled') => bridge.ackAutoWin({source:'unity-button-pixels-v1',state,
@@ -743,7 +749,10 @@ test('phase 2 final sends select exact call, kan and riichi protocol candidates'
     {name:'riichi-repeated-tile-drawn-copy',state:repeatedRiichi,offered:phase2Offer(7,['2p','2p']),selected:1,method:'.lq.FastTest.inputOperation',params:{type:7,tile:'2p',moqie:true,timeuse:0}},
   ];
   for(const c of cases)await t.test(c.name,async()=>{
-    const f=fixture(256,true),input=await f.openedCustom(c.state,c.offered,c.selected),prepared=f.bridge.prepare(input),before=f.socket.sent.length;
+    const f=fixture(256,true),input=await f.openedCustom(c.state,c.offered,c.selected);
+    // Worker storage deserializes a canonicalized copy of the durable intent.
+    input.intent.actionSpec = JSON.parse(canonical(input.intent.actionSpec));
+    const prepared=f.bridge.prepare(input),before=f.socket.sent.length;
     if('consumed' in input.action.action && c.name.includes('red'))assert.ok(input.action.action.consumed.some((id:string)=>c.state.ownConcealed.find(tile=>tile.instanceId===id)?.code==='5mr'));
     const work=f.bridge.dispatch({command:input.command,token:prepared.token});
     assert.equal(f.socket.sent.length,before+1);
@@ -944,4 +953,88 @@ test('new socket authentication clears the old proof and retired traffic cannot 
   }));
   const raw=await sync;f.bridge.ackSync({generation:raw.generation,step:1});
   assert.equal(f.bridge.read().reason,null);assert.equal(f.bridge.read().gameUuid,'same-match');f.bridge.restore();
+});
+
+test('continuous timing polls preserve the native entry proof while capping diagnostics', async () => {
+  const f = fixture();
+  f.start();
+  for (const [index, method] of ['.lq.FastTest.authGame', '.lq.FastTest.enterGame'].entries()) {
+    f.socket.send(requestFrame(600 + index, method));
+    f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!), method));
+  }
+  const native = JSON.stringify(f.bridge.read().nativeLifecycleTrace);
+  assert.equal(f.bridge.read().nativeLifecycleTrace.length, 6);
+  for (let index = 0; index < 30; index++) {
+    const sync = f.bridge.sync();
+    f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!), '.lq.FastTest.syncGame', { step: 1, game_restore: { actions: [
+      { name: 'ActionNewRound', step: 0, data: encode('lq.ActionNewRound', { tiles: ['1m'], md5: 'test-round' }) },
+    ] } }));
+    await sync;
+  }
+  const trace = f.bridge.read().nativeLifecycleTrace;
+  assert.equal(JSON.stringify(trace.filter((event: any) => event.owner === 'client')), native);
+  assert.equal(trace.filter((event: any) => event.owner === 'bridge').length, 48);
+  f.bridge.restore();
+});
+
+
+test('automatic room start checks room identity and robot occupancy and never resends a start', async () => {
+  const h = fixture(256, true, true);
+  h.socket.send(requestFrame(20, '.lq.Lobby.fetchRoom'));
+  h.socket.receive(responseFrame(packetId(h.socket.sent.at(-1)!), '.lq.Lobby.fetchRoom'));
+  const start = h.bridge.startNextMatch({ roomId: '12345' });
+  h.socket.receive(responseFrame(packetId(h.socket.sent.at(-1)!), '.lq.Lobby.fetchRoom', {
+    room: { room_id: 12345, owner_id: 7, max_player_count: 4, persons: [{account_id:7}], robot_count: 0, robots: [{account_id:0},{account_id:0},{account_id:0}] },
+  }));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await start).ready, true);
+  h.socket.send(requestFrame(21, '.lq.Lobby.startRoom'));
+  h.socket.receive(responseFrame(packetId(h.socket.sent.at(-1)!), '.lq.Lobby.startRoom'));
+  const sent = h.socket.sent.length;
+  await assert.rejects(h.bridge.startNextMatch({roomId:'12345'}), /AUTO_START_DISABLED/);
+  assert.equal(h.socket.sent.length, sent);
+});
+
+test('automatic room start rejects another room and real-player rooms', async () => {
+  for (const room of [
+    { room_id: 999, owner_id: 7, max_player_count: 4, persons: [{account_id:7}], robot_count: 3 },
+    { room_id: 12345, owner_id: 7, max_player_count: 4, persons: [{account_id:7},{account_id:8}], robot_count: 2 },
+  ]) {
+    const h = fixture(256, true, true);
+    h.socket.send(requestFrame(20, '.lq.Lobby.fetchRoom'));
+    h.socket.receive(responseFrame(packetId(h.socket.sent.at(-1)!), '.lq.Lobby.fetchRoom'));
+    const start = h.bridge.startNextMatch({ roomId: '12345' });
+    const count = h.socket.sent.length;
+    h.socket.receive(responseFrame(packetId(h.socket.sent.at(-1)!), '.lq.Lobby.fetchRoom', { room }));
+    await assert.rejects(start, /ROOM_MISMATCH|ROBOT_ROOM_REQUIRED/);
+    assert.equal(h.socket.sent.length, count);
+  }
+});
+
+test('a new room start is armed only after a distinct match result and executor release', async () => {
+  const h = fixture(256, true, true);
+  h.socket.send(requestFrame(20, '.lq.Lobby.fetchRoom'));
+  h.socket.receive(responseFrame(packetId(h.socket.sent.at(-1)!), '.lq.Lobby.fetchRoom'));
+  const start = async () => {
+    const work = h.bridge.startNextMatch({ roomId: '12345' });
+    h.socket.receive(responseFrame(packetId(h.socket.sent.at(-1)!), '.lq.Lobby.fetchRoom', {
+      room: { room_id:12345,owner_id:7,max_player_count:4,persons:[{account_id:7}],robots:[{},{},{}] },
+    }));
+    await new Promise(resolve => setImmediate(resolve));
+    const proof=await work;
+    assert.equal(proof.ready,true);
+    h.socket.send(requestFrame(21, '.lq.Lobby.startRoom'));
+    h.socket.receive(responseFrame(packetId(h.socket.sent.at(-1)!), '.lq.Lobby.startRoom'));
+    return proof;
+  };
+  await start();
+  h.socket.send(requestFrame(25, '.lq.FastTest.authGame', { account_id: 7, game_uuid: 'first-match' }));
+  h.socket.receive(responseFrame(packetId(h.socket.sent.at(-1)!), '.lq.FastTest.authGame', {seat_list:[7,0,0,0]}));
+  const control={processInstanceId:'loop-process',controlEpoch:0,paused:true};
+  h.bridge.pause(control);
+  h.socket.receive(notificationFrame('NotifyGameEndResult', {result:{players:[{seat:0,part_point_1:25000}]}}));
+  await assert.rejects(h.bridge.startNextMatch({roomId:'12345'}), /AUTO_START_DISABLED/);
+  h.bridge.releaseAkagi(control);
+  await start();
+  await assert.rejects(h.bridge.startNextMatch({roomId:'12345'}), /AUTO_START_DISABLED/);
 });

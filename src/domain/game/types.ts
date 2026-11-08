@@ -26,7 +26,7 @@ export type ActionSpec = { kind: 'discard'; tile: string; tsumogiri: boolean }
   | { kind: 'riichi-discard'; tile: string; tsumogiri: boolean; operation: OperationSelection }
   | { kind: Meld['kind']; consumed: string[]; tiles: TileCode[]; operation: OperationSelection;
       fromSeat?: Seat; calledTileIndex?: number; upgradedFrom?: string }
-  | { kind: 'tsumo' } | { kind: 'ron' };
+  | { kind: 'pass' } | { kind: 'tsumo' } | { kind: 'ron' };
 export interface LegalAction {
   id: string; action: ActionSpec; authority: 'executor' | 'client-auto-win'; label: string; evidenceEventIds: string[];
 }
@@ -47,7 +47,7 @@ export interface GameState extends HandInitialView {
 }
 export interface FriendRoom {
   roomId: string;
-  rules: { players: 4; length: 'east'; displayTimeSetting: '300+0'; computerSeats: 3;
+  rules: { players: 4; length: 'east'; displayTimeSetting: '300+0' | '5+20'; computerSeats: 3;
     verifiedOptions: Record<string, string | number | boolean>; protocolVersion: string };
   autoWin: 'verified-on' | 'verified-off' | 'unknown';
 }
@@ -118,10 +118,10 @@ export interface ActionAttempt {
   gameMatchKey: string; gameHandKey: string; windowId: string; actionId: string;
   stateVersion: number; connectionEpoch: number; controlEpoch: number; processInstanceId: string;
   executionMode: ExecutionMode; status: AttemptStatus; preparedAt: string;
-  actor: Seat; tile: TileCode; tsumogiri: boolean; expectedCursor: string;
+  actor: Seat; tile: TileCode | null; tsumogiri: boolean; expectedCursor: string;
   /** Missing only on legacy ordinary-discard rows. Never infer a meld from tile alone. */
   actionSpec?: ActionSpec;
   expectedAction?: { kind: 'discard'; tile: TileCode; tsumogiri: boolean; riichiDeclaration: boolean }
-    | { kind: 'meld'; meld: Omit<Meld, 'id' | 'actor'> };
+    | { kind: 'meld'; meld: Omit<Meld, 'id' | 'actor'> } | { kind: 'pass' };
   receipt?: CallReceipt; confirmationEventId?: string;
 }

@@ -13,7 +13,7 @@ export interface EgoPagePort {
 export interface PageCursor { generation: number; pageEpoch: number; step: number }
 export interface AutoWinHandScope extends PageCursor { sourceStream: number }
 export function bridgeCall(page: EgoPagePort, method: string, argument?: unknown): Promise<any> {
-  requireThat(['read', 'drain', 'pause', 'sync', 'ackSync', 'prepare', 'dispatch', 'reconnect', 'restore', 'ackAutoWin', 'ackTiming', 'ensureAutoWin', 'verifyAutoWin', 'automaticTiming'].includes(method), 'BRIDGE_METHOD_INVALID');
+  requireThat(['read', 'drain', 'pause', 'sync', 'ackSync', 'prepare', 'dispatch', 'reconnect', 'restore', 'ackAutoWin', 'ackTiming', 'ensureAutoWin', 'verifyAutoWin', 'automaticTiming', 'releaseAkagi', 'startNextMatch'].includes(method), 'BRIDGE_METHOD_INVALID');
   if (method === 'ensureAutoWin' && argument != null) {
     const options=argument as {purpose?:unknown;expected?:AutoWinHandScope},expected=options.expected;
     requireThat(typeof argument==='object' && !Array.isArray(argument) && Object.hasOwn(argument,'purpose') &&
@@ -31,10 +31,19 @@ export function bridgeCall(page: EgoPagePort, method: string, argument?: unknown
           (argument as {expected?:AutoWinHandScope}|null)?.expected) : adapter.verifyAutoWin(page));
   }
   if (page.cdp && method === 'automaticTiming') return import('./automatic-timing.ts').then(adapter => adapter.collectAutomaticTiming(page));
-  return page.evaluate(({ method, argument }) => {
-    const bridge = (window as unknown as { __majiBridge?: Record<string, (arg: unknown) => unknown> }).__majiBridge;
-    if (!bridge) throw Error('BRIDGE_MISSING'); return bridge[method]!(argument);
-  }, { method, argument: argument ?? null });
+  return page.evaluate(async ({ method, argument }) => {
+    try {
+      const bridge = (window as unknown as { __majiBridge?: Record<string, (arg: unknown) => unknown> }).__majiBridge;
+      if (!bridge) throw Error('BRIDGE_MISSING');
+      return await bridge[method]!(argument);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : '';
+      return { __majiBridgeError: /^[A-Z][A-Z_0-9]+$/.test(code) ? code : 'EGO_PAGE_FAILED' };
+    }
+  }, { method, argument: argument ?? null }).then(result => {
+    if (typeof result?.__majiBridgeError === 'string') throw Error(result.__majiBridgeError);
+    return result;
+  });
 }
 
 /** A bounded, explicitly chosen single-discard transport, also used by live acceptance. */

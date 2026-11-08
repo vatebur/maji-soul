@@ -59,3 +59,21 @@ test('an epoch or generation changed between sync and screenshot cannot supply e
   await assert.rejects(collectAutomaticTiming(page),/COUNTDOWN_SAMPLE_STALE/);
   assert.equal(page.calls.length,1);
 });
+
+test('a long-clock animation waits for digits but rejects a replacement window', async () => {
+  const page = new TimingPage();
+  const image = imageFor(fixtures.samples.find((s: any) => s.expectedSeconds === 282));
+  for (let y = 630; y < 760; y++) for (let x = 1380; x < 1630; x++) {
+    image.rgba.fill(0, (y * image.width + x) * 4, (y * image.width + x) * 4 + 4);
+  }
+  page.images[0] = png(image);
+  const evaluate = page.evaluate.bind(page);
+  page.evaluate = async (source, input) => {
+    if (!input && !String(source).includes('scripts:')) return 5200;
+    const result = await evaluate(source, input);
+    if (input?.method === 'sync' && page.index === 2) result.generation++;
+    return result;
+  };
+  await assert.rejects(collectAutomaticTiming(page), /COUNTDOWN_SAMPLE_STALE/);
+  assert.deepEqual(page.calls, ['sync', 'sync']);
+});

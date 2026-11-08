@@ -12,6 +12,7 @@ import { exportLiveCapture } from './live-capture.ts';
 import { requireLiveActionScope, selectLiveAction, validateLiveActionSelection, type LiveActionSelection } from './live-action-selection.ts';
 import { isBoundaryProofFailure, LiveBoundaryFenceChallenge } from './live-boundary-fence.ts';
 import { LiveGameSession, summarizeBrowserStats } from './live-session.ts';
+import { AkagiRunner } from '../adapters/engine/akagi.ts';
 import { validateObservationDuration } from './live-observation.ts';
 
 export interface LiveAcceptanceOptions {
@@ -29,12 +30,22 @@ export interface LiveAcceptanceOptions {
   pauseBeforeDispatch?: boolean;
   /** In an observation, retain one Actor decision/permit and challenge it after a real new hand. */
   verifyBoundaryFences?: boolean;
+  /** Explicit opt-in for one bounded Akagi match. */
+  akagi?: boolean;
+  /** Console control may attach after the opening; all action fences still apply. */
+  resumeMatch?: boolean;
+  /** Assigned by the live console so it can follow this match immediately. */
+  sessionId?: string;
 }
 
-/** Uses the real worker, Actor, executor and Page bridge. Never loops decisions. */
-export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceOptions) {
+/** Uses the real worker, Actor, executor and Page bridge. */
+export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceOptions, signal?: AbortSignal) {
+  if (options.sessionId !== undefined) requireThat(/^live-[a-zA-Z0-9-]{1,100}$/.test(options.sessionId), 'INVALID_SESSION_ID');
   const observeMs = validateObservationDuration(options.observeMs);
   const selectedPhase2 = options.phase2ActionOnce;
+  const akagi = options.akagi === true;
+  requireThat(!akagi || observeMs > 0 && !options.discardOnce && !selectedPhase2 &&
+    !options.pauseBeforeDispatch && !options.verifyBoundaryFences, 'INVALID_AKAGI_RUN');
   if (selectedPhase2 !== undefined) {
     validateLiveActionSelection(selectedPhase2);
     requireThat(observeMs===0 && !options.discardOnce && !options.pauseBeforeDispatch && !options.verifyBoundaryFences,
@@ -46,12 +57,15 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
   const directory = resolve(options.outputDirectory);
   await mkdir(resolve(directory, '..'), { recursive: true, mode: 0o700 });
   await mkdir(directory, { mode: 0o700 });
-  const sessionId = `live-${randomUUID()}`, databasePath = resolve(options.databasePath ?? fileURLToPath(new URL('../../data/live/state.sqlite', import.meta.url)));
+  const sessionId = options.sessionId ?? `live-${randomUUID()}`, databasePath = resolve(options.databasePath ?? fileURLToPath(new URL('../../data/live/state.sqlite', import.meta.url)));
   await mkdir(resolve(databasePath, '..'), { recursive: true, mode: 0o700 });
   const storage = new StorageClient(databasePath);
   let actor: GameActor | undefined;
   let executor: ActionExecutor | undefined;
   let liveSession: LiveGameSession | undefined;
+  let runner: AkagiRunner | undefined;
+  let beganAtMatchOpening = false;
+  const automated = { attempted: 0, confirmed: 0, confirmedDiscards: 0, acceptedPasses: 0 };
   try {
     actor = await GameActor.open(storage, sessionId, randomUUID());
     const transport = boundaryChallenge ? undefined : new EgoProductionTransport(page);
@@ -74,8 +88,12 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       });
     }
     await actor.awaitControlBarrier();
-    const session = liveSession = new LiveGameSession(actor,page,options.room);
-    const {cursor,timing,timingEvidence,autoWinReadback} = await session.synchronize(
+    if (akagi) {
+      runner = new AkagiRunner();
+      await runner.init();
+    }
+    const session = liveSession = new LiveGameSession(actor,page,options.room,akagi);
+    const {sync,cursor,timing,timingEvidence,autoWinReadback} = await session.synchronize(
       !!boundaryChallenge || observeMs===0 || options.discardOnce===true,
     ).catch(error => {
       if (!boundaryChallenge || !isBoundaryProofFailure(error)) throw error;
@@ -83,6 +101,15 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       return session.synchronize(false);
     });
     if (boundaryChallenge) await boundaryChallenge.arm(actor, page, cursor);
+    if (akagi) {
+      const first = sync.handHistory[0];
+      if (first?.type === 'HandStarted') {
+        const view = first.payload.initialView;
+        beganAtMatchOpening = sync.handOrdinal === 1 && view.roundWind === '1z' && view.handNumber === 1 &&
+          view.honba === 0 && view.riichiSticks === 0 && Object.values(view.players).every(player => player.score === 25000) &&
+          !sync.observedActions.some(event => event.type === 'TileDiscarded' && event.payload.actor === view.ownSeat);
+      }
+    }
     const initial = actor.projection;
     const initialOffer=observeMs===0 && !options.discardOnce && !selectedPhase2 &&
       initial.state?.operationWindow?.status==='open' ? {
@@ -117,8 +144,67 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       if (session.counts.handStarts>handStarts) boundaryChallenge?.checkAfterHandStart(actor!);
     };
     const observeUntil = performance.now()+observeMs;
-    while (observeMs>0 && performance.now()<observeUntil && actor.projection.matchStatus!=='finished') {
+    let previousWindow: { sourceCursor: string; gameHandKey: string; until: number } | undefined;
+    let awaitingAutoWin: { cursor: string; until: number } | undefined;
+    while (!signal?.aborted && observeMs>0 && performance.now()<observeUntil && actor.projection.matchStatus!=='finished') {
       await pump();
+      if (runner) {
+        const projection = actor.projection;
+        if (previousWindow && projection.gameHandKey === previousWindow.gameHandKey &&
+            projection.sourceCursor === previousWindow.sourceCursor && projection.handStatus === 'playing') {
+          requireThat(performance.now() < previousWindow.until, 'AKAGI_WINDOW_DID_NOT_ADVANCE');
+        } else {
+          previousWindow = undefined;
+          const window = projection.state?.operationWindow;
+          if (window?.status === 'open' && projection.handStatus === 'playing' && !session.recovering &&
+              !session.awaitingSettlement && !projection.matchEndPending) {
+            if (window.candidates.some(candidate => candidate.authority === 'client-auto-win')) {
+              const key = projection.sourceCursor!;
+              if (awaitingAutoWin?.cursor !== key) awaitingAutoWin = { cursor: key, until: performance.now() + 10_000 };
+              requireThat(performance.now() < awaitingAutoWin.until, 'CLIENT_AUTO_WIN_DID_NOT_ADVANCE');
+            } else {
+              awaitingAutoWin = undefined;
+              const fresh = await session.synchronize(true, true).catch(async error => {
+                const stale = error instanceof Error && ['COUNTDOWN_SAMPLE_STALE', 'COUNTDOWN_READBACK_STALE',
+                  'AKAGI_WINDOW_CHANGED', 'SYNC_INGRESS_RACE', 'SYNC_STALE', 'COUNTDOWN_DIGITS_UNREADABLE',
+                  'COUNTDOWN_LAYOUT_UNVERIFIED', 'COUNTDOWN_GLYPH_UNVERIFIED', 'COUNTDOWN_BANK_UNREADABLE'].includes(error.message);
+                if (!stale || actor!.control.needsSync) throw error;
+                await pump();
+                const current = actor!.projection;
+                requireThat(session.recovering || current.gameHandKey !== projection.gameHandKey ||
+                  current.sourceCursor !== projection.sourceCursor || current.matchStatus === 'finished', error.message);
+                return null;
+              });
+              if (!fresh) continue;
+              requireThat(fresh.timing && fresh.sync.sourceCursor === projection.sourceCursor &&
+                fresh.sync.gameHandKey === projection.gameHandKey, 'AKAGI_WINDOW_CHANGED');
+              transport!.bind({ generation: fresh.cursor.generation, pageEpoch: fresh.cursor.pageEpoch, step: fresh.cursor.lastStep }, fresh.timing);
+              if (signal?.aborted) break;
+              await session.coordinator.resume();
+              const snapshot = await actor.freezeDecision();
+              const selected = await runner.decide(snapshot, fresh.sync.handHistory);
+              requireThat(performance.now() < observeUntil, 'AKAGI_RUN_LIMIT');
+              if (signal?.aborted) break;
+              automated.attempted++;
+              const attempt = await executor!.executeLive(snapshot.id, selected.id);
+              const until = Math.min(observeUntil, performance.now() + 10_000);
+              let status = attempt.status;
+              while (['dispatching', 'awaiting-confirmation'].includes(status) && performance.now() < until) {
+                await pump();
+                status = (await storage.getAttempt(attempt.id))!.status;
+                if (status === 'awaiting-confirmation') await new Promise(resolve => setTimeout(resolve, 100));
+              }
+              requireThat(status === 'confirmed', executor!.diagnostic?.code ?? 'AKAGI_ACTION_UNCONFIRMED');
+              if (selected.action.kind === 'pass') automated.acceptedPasses++;
+              else {
+                automated.confirmed++;
+                if (selected.action.kind === 'discard' || selected.action.kind === 'riichi-discard') automated.confirmedDiscards++;
+              }
+              previousWindow = { sourceCursor: snapshot.sourceCursor, gameHandKey: fresh.sync.gameHandKey, until };
+            }
+          }
+        }
+      }
       await new Promise(r=>setTimeout(r,100));
     }
     actor.pause(); await actor.awaitControlBarrier();
@@ -151,10 +237,13 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
     } : null;
     const phase2Confirmed=!phase2Evidence || phase2Evidence.bridgeActionSends===1 && phase2Evidence.confirmations===1 &&
       attempt?.receipt?.delivery==='accepted' && !!attempt.confirmationEventId;
-    const passed = settled && autoWinRecoveryReady && (!attempt || attempt.status === expectedStatus) && !liveSession.recovering &&
+    const forcedRiichiDiscards = [...session.forcedRiichiDiscards];
+    const unmatchedOwnDiscards = inspection.counts.outbox - automated.confirmedDiscards - forcedRiichiDiscards.length;
+    const passed = settled && (!akagi || (beganAtMatchOpening || options.resumeMatch === true) && actor.projection.matchStatus === 'finished' && automated.confirmedDiscards > 0 && unmatchedOwnDiscards === 0) &&
+      (akagi || autoWinRecoveryReady) && (!attempt || attempt.status === expectedStatus) && !liveSession.recovering &&
       !liveSession.awaitingSettlement && !actor.projection.matchEndPending && boundaryReady && phase2Confirmed;
     const report = { schemaVersion: 1, evidenceKind: 'current-client-integration', status: passed ? 'passed' : 'blocked',
-      scope: observeMs>0 ? 'lifecycle-observation' : selectedPhase2 ? 'one-phase2-action' :
+      scope: akagi ? options.resumeMatch ? 'akagi-current-match' : 'akagi-one-match' : observeMs>0 ? 'lifecycle-observation' : selectedPhase2 ? 'one-phase2-action' :
         options.pauseBeforeDispatch ? 'pause-before-final-send' : options.discardOnce ? 'one-ordinary-discard' : 'complete-current-hand-sync',
       sessionId, databasePath,
       attempt, executionDiagnostic:executor?.diagnostic ?? null, counts: inspection.counts, finalStateHash: digest(inspection.projection.state),
@@ -175,7 +264,9 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       lifecycle: { ...liveSession.counts, handOrdinal:actor.projection.handOrdinal,handStatus:actor.projection.handStatus,
         matchStatus:actor.projection.matchStatus,matchEndPending:actor.projection.matchEndPending ?? false,
         awaitingSettlement:liveSession.awaitingSettlement,recovering:liveSession.recovering },
-      automationEnabled: false, captureDirectory: capture.directory, captureDirectories:captures.map(c=>c.directory),
+      ...(akagi ? { automated, beganAtMatchOpening, forcedRiichiDiscards, unmatchedOwnDiscards, gameMatchKey: inspection.projection.gameMatchKey, roomId: options.room.roomId,
+        matchResult: inspection.projection.matchResult ?? null } : {}),
+      automationEnabled: akagi, captureDirectory: capture.directory, captureDirectories:captures.map(c=>c.directory),
       reportPath: join(directory, 'report.json') };
     await writeFile(report.reportPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
     return report;
@@ -185,16 +276,23 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
     const diagnostics=liveSession?.diagnostics;
     const pageAfter=await bridgeCall(page,'read').catch(()=>null);
     const report = { schemaVersion: 1, evidenceKind: 'current-client-integration', status: 'blocked', code,
-      sessionId, databasePath, executionDiagnostic:executor?.diagnostic ?? null, timingDiagnostics:diagnostics?.timing ?? null,
+      sessionId, databasePath, executionDiagnostic:executor?.diagnostic ?? null, timingDiagnostics:diagnostics?.timing ?? null, settlementDiagnostics:diagnostics?.settlement ?? null,
       ...(selectedPhase2 ? {phase2Selection:selectedPhase2} : {}),
       ...(boundaryChallenge ? {boundaryFenceChallenge:boundaryChallenge.report} : {}),
       autoWinRecovery:liveSession?.autoWinRecovery ?? null,autoWinRecoveries:liveSession?.autoWinRecoveries ?? [],
       browserStatsBefore:diagnostics?.browserStatsBefore ?? null,browserStatsAfter:summarizeBrowserStats(pageAfter?.stats),
-      automationEnabled: false, reportPath: join(directory, 'report.json') };
+      ...(akagi ? { automated, beganAtMatchOpening, gameMatchKey: actor?.projection.gameMatchKey ?? null, roomId: options.room.roomId } : {}),
+      automationEnabled: akagi, reportPath: join(directory, 'report.json') };
     await writeFile(report.reportPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
     return report;
   } finally {
-    if (actor) { actor.pause(); await actor.awaitControlBarrier().catch(() => {}); await actor.idle(); }
+    runner?.close();
+    if (actor) {
+      actor.pause();
+      const barrier = await actor.awaitControlBarrier().then(() => true, () => false);
+      await actor.idle();
+      if (akagi && barrier) await bridgeCall(page, 'releaseAkagi', actor.control).catch(() => {});
+    }
     await storage.close();
   }
 }

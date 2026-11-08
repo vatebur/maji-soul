@@ -1,9 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { readCountdownPixels, inspectClientCountdown } from '../src/adapters/majsoul/countdown.ts';
 import type { EgoPagePort } from '../src/adapters/majsoul/ego-transport.ts';
 
 import { fixtures, anchors, imageFor, png } from './countdown-helpers.ts';
+
+test('labelled November 7 countdowns retain high confidence across all ten digits',()=>{
+  const current=JSON.parse(readFileSync(new URL('./fixtures/countdown/current-masks.json',import.meta.url),'utf8'));
+  for(const sample of current.samples){
+    const result=readCountdownPixels(imageFor(sample));
+    assert.equal(result.seconds,sample.expectedSeconds);
+    assert.ok(result.digits.every(digit=>digit.score>=.96 && digit.runnerUpGap>=.18));
+  }
+});
 
 test('all ten current-client digit shapes read the independently labelled archived countdown masks',()=>{
   assert.equal(fixtures.evidenceKind,'current-client-glyph-extraction');

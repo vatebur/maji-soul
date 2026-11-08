@@ -5,7 +5,7 @@ import { requireThat } from '../../domain/game/value.ts';
 import type { EgoPagePort } from './ego-transport.ts';
 import { createOperationRules } from './actions.ts';
 
-export async function installLiveBridge(page: EgoPagePort, reconnect = false, options: { phase2ActionsEnabled?: boolean } = {}) {
+export async function installLiveBridge(page: EgoPagePort, reconnect = false, options: { phase2ActionsEnabled?: boolean; akagiEnabled?: boolean } = {}) {
   const base = new URL('../../../', import.meta.url);
   const upstream = '.runtime/upstream/Akagi-63cea4b5d23d83bbee8d56bc3b9d547cca2046c3/src/bridge/majsoul/';
   const [proto, rpcText, source, library, versionText] = await Promise.all([
@@ -20,7 +20,8 @@ export async function installLiveBridge(page: EgoPagePort, reconnect = false, op
   const scripts = await page.evaluate(() => [...document.scripts].map(s => s.src).filter(s => s.includes('WebGL-release-'))) as string[];
   requireThat(scripts.some(s => s.includes(`release-${versions.clientVersion}(`)), 'CLIENT_VERSION_MISMATCH');
   const input = { proto, rpcMap: JSON.parse(rpcText), operationRulesSource: createOperationRules.toString(),
-    phase2ActionsEnabled: options.phase2ActionsEnabled === true };
+    phase2ActionsEnabled: options.phase2ActionsEnabled === true || options.akagiEnabled === true,
+    akagiEnabled: options.akagiEnabled === true };
   if (reconnect) {
     requireThat(page.cdp && page.reload, 'EGO_RELOAD_UNAVAILABLE');
     const preload = `${library}\n(${source.replace('export function', 'function')})(${JSON.stringify(input)});`;

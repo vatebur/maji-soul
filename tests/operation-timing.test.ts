@@ -111,3 +111,25 @@ test('child and persistence delays consume the original deadline instead of rest
     assert.throws(() => h.actor.decision(snapshot.id), /DEADLINE_EXCEEDED/);
   } finally { await h.cleanup(); }
 });
+
+test('5+20 verifies the fixed clock and the separately displayed bank across depletion', () => {
+  const short = (elapsed: number, mono: number) => {
+    const raw = rawAt(elapsed, mono);
+    const operation = (raw.game_restore.actions.at(-1)!.payload as { operation: { time_fixed: number; time_add: number } }).operation;
+    operation.time_fixed = 5000;
+    operation.time_add = 20000;
+    return { ...raw, authSummary: { gameConfig: { mode: { detail_rule: { time_fixed: 5, time_add: 20 } } } } };
+  };
+  const before = short(4, 4500), after = short(6, 6900);
+  const evidence = { source: 'automatic-client-countdown' as const, samples: [
+    sampleSyncOperationTiming(before, { remainingMs: 1000, bankRemainingMs: 20000, sampledMonoMs: 4500 }),
+    sampleSyncOperationTiming(after, { remainingMs: 0, bankRemainingMs: 19000, sampledMonoMs: 6900 }),
+  ] };
+  assert.equal(deriveSyncOperationTiming(after, 2, evidence).remainingMs, 19000);
+  const missing = structuredClone(evidence);
+  delete missing.samples[1]!.displayedBankMs;
+  assert.throws(() => deriveSyncOperationTiming(after, 2, missing), /INVALID_INTEGER/);
+  const mismatch = structuredClone(evidence);
+  mismatch.samples[1]!.displayedBankMs = 15000;
+  assert.throws(() => deriveSyncOperationTiming(after, 2, mismatch), /COUNTDOWN_BANK_MISMATCH/);
+});

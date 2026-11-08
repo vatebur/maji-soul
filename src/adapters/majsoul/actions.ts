@@ -35,7 +35,7 @@ export function createOperationRules(identify?: (value: unknown) => string) {
       return available.splice(at, 1)[0]!.instanceId;
     });
   }
-  function legalOperationActions(state: GameState, offered: OfferedOperations, windowId: string, evidenceId: string): LegalAction[] {
+  function legalOperationActions(state: GameState, offered: OfferedOperations, windowId: string, evidenceId: string, allowPass = false): LegalAction[] {
     requireThat(offered.seat === state.ownSeat && Array.isArray(offered.operation_list) && offered.operation_list.length > 0 && offered.operation_list.length <= 16, 'INVALID_OPERATION_LIST');
     const operations = offered.operation_list;
     requireThat(new Set(operations.map(o => o.type)).size === operations.length, 'DUPLICATE_OPERATION_TYPE');
@@ -91,15 +91,17 @@ export function createOperationRules(identify?: (value: unknown) => string) {
         requireThat(selfTurn && state.ownConcealed.length === 14 - 3 * own.melds.length && codes.length === 4 && codes.every(c => baseTile(c) === baseTile(codes[0]!)), 'INVALID_CLOSED_KAN');
           actions.push(make({ kind: 'closed-kan', consumed: consume(state, codes), tiles: codes, operation }));
         } else {
-        requireThat(op.type === 6 && selfTurn && state.ownConcealed.length === 14 - 3 * own.melds.length && codes.length === 3 && codes.every(c => baseTile(c) === baseTile(codes[0]!)) && own.riichi === 'none', 'INVALID_ADDED_KAN');
-          const pons = own.melds.filter(m => m.kind === 'pon' && sameTiles(m.tiles, codes));
+        requireThat(op.type === 6 && selfTurn && state.ownConcealed.length === 14 - 3 * own.melds.length && [3,4].includes(codes.length) && codes.every(c => baseTile(c) === baseTile(codes[0]!)) && own.riichi === 'none', 'INVALID_ADDED_KAN');
+          const pons = own.melds.filter(m => m.kind === 'pon' && m.tiles.every(tile => baseTile(tile) === baseTile(codes[0]!)) && (codes.length === 4 || sameTiles(m.tiles, codes)));
           requireThat(pons.length === 1, 'AMBIGUOUS_KAN_UPGRADE');
           const pon = pons[0]!, remaining = state.ownConcealed.filter(t => baseTile(t.code) === baseTile(codes[0]!));
           requireThat(remaining.length === 1, 'AMBIGUOUS_KAN_TILE');
+          requireThat(codes.length === 3 || sameTiles([...pon.tiles, remaining[0]!.code], codes), 'INVALID_ADDED_KAN_TILES');
           actions.push(make({ kind: 'added-kan', consumed: [remaining[0]!.instanceId], tiles: [...pon.tiles, remaining[0]!.code], fromSeat: pon.fromSeat!, calledTileIndex: pon.calledTileIndex!, upgradedFrom: pon.id, operation }));
         }
       }
     }
+    if (allowPass && operations.every(op => [2, 3, 5].includes(op.type))) actions.push(make({ kind: 'pass' }));
     requireThat(actions.length > 0 && actions.length <= 64, 'NO_LEGAL_CANDIDATES');
     const semantics = actions.map(({ action }) => 'consumed' in action
       ? canonical([action.kind, [...action.consumed].sort(), [...action.tiles].sort(), action.fromSeat ?? null, action.calledTileIndex === undefined ? null : action.tiles[action.calledTileIndex], action.upgradedFrom ?? null])
@@ -108,10 +110,13 @@ export function createOperationRules(identify?: (value: unknown) => string) {
     return actions;
   }
   /** Re-derive from the current authoritative offer. A caller cannot supply its own index. */
-  function mapActionToRequest(action: ActionSpec, state: GameState, offered: OfferedOperations): OperationRequest {
+  function mapActionToRequest(action: ActionSpec, state: GameState, offered: OfferedOperations, allowPass = false): OperationRequest {
     requireThat(action.kind !== 'tsumo' && action.kind !== 'ron', 'CLIENT_AUTO_WIN_WINDOW');
-    const candidates = legalOperationActions(state, offered, 'mapping-check', 'mapping-evidence');
+    const candidates = legalOperationActions(state, offered, 'mapping-check', 'mapping-evidence', allowPass);
     requireThat(candidates.some(c => canonical(c.action) === canonical(action)), 'ACTION_NOT_LEGAL');
+    if (action.kind === 'pass') {
+      return { method: '.lq.FastTest.inputChiPengGang', params: { type: 0, index: 0, cancel_operation: true, timeuse: 0 } };
+    }
     if (action.kind === 'discard' || action.kind === 'riichi-discard') {
       const physical = state.ownConcealed.find(t => t.instanceId === action.tile)!;
       return { method: '.lq.FastTest.inputOperation', params: { type: action.kind === 'discard' ? 1 : 7, tile: protocolTile(physical.code), moqie: action.tsumogiri, timeuse: 0 } };
@@ -128,6 +133,7 @@ export function expectedActionFor(action: ActionSpec, state: GameState) {
     return { kind: 'discard' as const, tile: tile.code, tsumogiri: action.tsumogiri, riichiDeclaration: action.kind === 'riichi-discard' };
   }
   requireThat(action.kind !== 'tsumo' && action.kind !== 'ron', 'CLIENT_AUTO_WIN_WINDOW');
+  if (action.kind === 'pass') return { kind: 'pass' as const };
   const meld: Omit<Meld, 'id' | 'actor'> = { kind: action.kind, tiles: [...action.tiles],
     ...(action.fromSeat === undefined ? {} : { fromSeat: action.fromSeat, calledTileIndex: action.calledTileIndex! }),
     ...(action.upgradedFrom === undefined ? {} : { upgradedFrom: action.upgradedFrom }) };

@@ -53,6 +53,8 @@ test('the CLI only forwards Stage 2 enabling and selection on explicit commands'
   };
   assert.deepEqual(await run('live-install'),{phase2ActionsEnabled:false});
   assert.deepEqual(await run('live-reconnect','--phase2'),{phase2ActionsEnabled:true});
+  assert.deepEqual(await run('live-reconnect','--akagi'),{phase2ActionsEnabled:false,akagiEnabled:true});
+  assert.deepEqual(await run('live-akagi','/options.json'),{akagi:true,discardOnce:false,observeMs:1800000});
   assert.deepEqual(await run('live-sync','/options.json'),{discardOnce:false,observeMs:0});
   assert.deepEqual(await run('live-action-once','/options.json'),{discardOnce:false,observeMs:0,phase2ActionOnce:{kind:'pon'}});
 });

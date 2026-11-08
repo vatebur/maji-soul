@@ -106,10 +106,25 @@ export const DEFAULT_AUTO_WIN_PROFILE: AutoWinProfile = {
  * without the current client's completed native restore cycle. */
 export function hasRecoveryTableAnchors(image:PixelImage):boolean {
   if (image.width!==2036 || image.height!==918 || image.rgba.length!==image.width*image.height*4) return false;
-  return [[900,390],[1135,335],[945,440],[1080,280]].every(([x,y])=>{
+  const matches = ([x,y,...rgb]: number[]) => {
     const offset=(y!*image.width+x!)*4;
-    return image.rgba[offset+3]===255 && [69,67,78].every((value,index)=>Math.abs(image.rgba[offset+index]!-value)<=4);
-  });
+    return image.rgba[offset+3]===255 && rgb.every((value,index)=>Math.abs(image.rgba[offset+index]!-value)<=4);
+  };
+  const border = [[900,390],[1135,335],[945,440],[1080,280]].map(([x,y])=>[x!,y!,69,67,78]);
+  // A deposited riichi stick can cover the border. The inner bevel stays
+  // visible around the scores and the center display.
+  const bevel = [[1000,291,98,93,103],[954,355,57,50,58],[960,386,47,42,55],[1070,428,98,93,103]];
+  // A riichi stick can obscure the left outer edge while the active-seat
+  // glow covers a second bevel point. These five independently visible frame
+  // points were sampled with both overlays present in the current client.
+  const riichiFrame = [[925,320,98,93,103],[925,400,98,93,103],[1000,280,69,67,78],
+    [1115,320,98,93,103],[945,440,69,67,78]];
+  // A top-seat deposit also covers (1000,280). Verify the exposed right
+  // border instead; none of these five points intersects that stick or the
+  // left active-seat glow in the current-client capture.
+  const topRiichiFrame = [[925,320,98,93,103],[925,400,98,93,103],[1135,335,69,67,78],
+    [1115,320,98,93,103],[945,440,69,67,78]];
+  return border.every(matches) || bevel.every(matches) || riichiFrame.every(matches) || topRiichiFrame.every(matches);
 }
 
 /** Deliberately bounded CDP PNG reader: only noninterlaced 8-bit RGB/RGBA screenshots. */
@@ -220,7 +235,9 @@ export async function inspectAutoWin(page: EgoPagePort, profile: AutoWinProfile 
 }
 
 async function waitForRecoveryTable(page:EgoPagePort,profile:AutoWinProfile,scope:any,proof:NativeRestoreProof):Promise<AutoWinReadback> {
-  const deadline=performance.now()+3000;
+  // The native RPC can finish well before the table animation. Allow the UI
+  // to settle without retrying a toggle; scope changes still abort immediately.
+  const deadline=performance.now()+10_000;
   let previousState:AutoWinReadback['state']='unknown';
   for (;;) {
     let readback:AutoWinReadback|null=null;

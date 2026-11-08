@@ -21,6 +21,7 @@ export interface AutomaticCountdownSample {
   requestedMonoMs: number; receivedMonoMs: number; sampledAt: string;
   passedWaitingTime: number; fixedMs: number; addMs: number;
   displayedRemainingMs: number; displaySampledMonoMs: number;
+  displayedBankMs?: number;
 }
 export interface SyncCountdownEvidence {
   source: 'automatic-client-countdown'; samples: AutomaticCountdownSample[];
@@ -49,9 +50,9 @@ function protocolSample(rawValue: unknown) {
   requireThat(last.step === raw.step - 1, 'TIMING_SCOPE_MISMATCH');
   const payload = record(last.payload ?? last.data), operation = record(payload.operation);
   integer(operation.time_fixed, 1, 600_000); integer(operation.time_add, 0, 600_000);
-  // The first acceptance targets the existing 300+0 room. Time-bank consumption
-  // requires separate client corroboration before it can share this formula.
-  requireThat(operation.time_add === 0, 'TIMING_ADD_SEMANTICS_UNVERIFIED');
+  requireThat(operation.time_add === 0 || [5000,8000].includes(operation.time_fixed) &&
+    operation.time_add <= 20000 && raw.authSummary?.gameConfig?.mode?.detail_rule?.time_fixed === 5 &&
+    raw.authSummary?.gameConfig?.mode?.detail_rule?.time_add === 20, 'TIMING_ADD_SEMANTICS_UNVERIFIED');
   const opening = restore.actions.find((a: any) => a.name === 'ActionNewRound');
   const handKey = opening && (opening.payload ?? opening.data)?.sha256;
   requireThat(typeof handKey === 'string' && /^[0-9a-f]{64}$/.test(handKey), 'HAND_IDENTITY_UNVERIFIED');
@@ -62,26 +63,33 @@ function protocolSample(rawValue: unknown) {
 }
 
 /** Call after automatically reading the current client's numeric countdown. */
-export function sampleSyncOperationTiming(raw: unknown, display: { remainingMs: number; sampledMonoMs: number }): AutomaticCountdownSample {
+export function sampleSyncOperationTiming(raw: unknown, display: { remainingMs: number; sampledMonoMs: number; bankRemainingMs?: number }): AutomaticCountdownSample {
   const sample = protocolSample(raw);
   integer(display.remainingMs, 0, 600_000); mono(display.sampledMonoMs);
   requireThat(display.sampledMonoMs >= sample.receivedMonoMs && display.sampledMonoMs - sample.receivedMonoMs <= 5_000, 'COUNTDOWN_SAMPLE_STALE');
-  return { ...sample, displayedRemainingMs: display.remainingMs, displaySampledMonoMs: display.sampledMonoMs };
+  return { ...sample, displayedRemainingMs: display.remainingMs, displaySampledMonoMs: display.sampledMonoMs,
+    ...(display.bankRemainingMs === undefined ? {} : { displayedBankMs: display.bankRemainingMs }) };
 }
 
 function validateSample(sample: AutomaticCountdownSample): void {
   integer(sample.pageEpoch, 1); integer(sample.step, 1, 999_999_999); timestamp(sample.sampledAt);
   requireThat(/^[0-9a-f]{64}$/.test(sample.handKey), 'HAND_IDENTITY_UNVERIFIED');
   mono(sample.requestedMonoMs); mono(sample.receivedMonoMs); mono(sample.displaySampledMonoMs);
-  integer(sample.passedWaitingTime, 0, 1_200); integer(sample.fixedMs, 1, 600_000); integer(sample.addMs, 0, 0);
+  integer(sample.passedWaitingTime, 0, 1_200); integer(sample.fixedMs, 1, 600_000); integer(sample.addMs, 0, 20000);
   integer(sample.displayedRemainingMs, 0, 600_000);
   const rtt = sample.receivedMonoMs - sample.requestedMonoMs;
   requireThat(rtt >= 0 && rtt <= 30_000, 'TIMING_NETWORK_UNBOUNDED');
   const displayAge = sample.displaySampledMonoMs - sample.receivedMonoMs;
   requireThat(displayAge >= 0 && displayAge <= 5_000, 'COUNTDOWN_SAMPLE_STALE');
   // Both wire elapsed time and the displayed integer seconds may be rounded.
-  const expected = sample.fixedMs + sample.addMs - sample.passedWaitingTime * 1_000 - displayAge;
-  requireThat(Math.abs(sample.displayedRemainingMs - Math.max(0, expected)) <= 2_000 + rtt, 'COUNTDOWN_PROTOCOL_MISMATCH');
+  const elapsed = sample.passedWaitingTime * 1_000 + displayAge;
+  const expected = Math.max(0, sample.fixedMs - elapsed);
+  requireThat(Math.abs(sample.displayedRemainingMs - expected) <= 2_000 + rtt, 'COUNTDOWN_PROTOCOL_MISMATCH');
+  if (sample.addMs > 0) {
+    integer(sample.displayedBankMs, 0, 20000);
+    const expectedBank = Math.max(0, sample.addMs - Math.max(0, elapsed - sample.fixedMs));
+    requireThat(Math.abs(sample.displayedBankMs - expectedBank) <= 2_000 + rtt, 'COUNTDOWN_BANK_MISMATCH');
+  }
 }
 
 /**

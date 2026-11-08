@@ -634,3 +634,69 @@ test('new-hand recovery crosses stdio and pending cannot inherit an initial term
     }finally{await rm(directory,{recursive:true,force:true});}
   });
 });
+
+test('a stale Akagi clock sample keeps ingress available for the new authoritative cursor', async () => {
+  const directory = await mkdtemp(join(tmpdir(),'maji-akagi-window-race-'));
+  const store = new StorageClient(join(directory,'state.sqlite'));
+  const actor = await GameActor.open(store,'akagi-window-race','test-process');
+  const page = new ScriptedPage(join(directory,'state.sqlite'));
+  const evaluate = page.evaluate.bind(page);
+  let advanced = false;
+  page.evaluate = async (source, argument) => {
+    const { method } = argument as { method: string };
+    if (method === 'automaticTiming') {
+      advanced = true;
+      throw Error('COUNTDOWN_SAMPLE_STALE');
+    }
+    const result = await evaluate(source, argument);
+    if (method === 'read') {
+      Object.assign(result, { akagiEnabled: true, phase2ActionsEnabled: true, queued: 0 });
+      result.authSummary.otherSeatsAreRobots = true;
+      Object.assign(result.authSummary.gameConfig.mode.detail_rule, { dora_count: 3, shiduan: 1, init_point: 25000 });
+    }
+    if (method === 'drain' && advanced) {
+      result.lastStep = 3;
+      result.generation++;
+      result.records = [{ kind: 'action', name: 'ActionDiscardTile', step: 3, receivedAt: page.at,
+        payload: { seat: 1, tile: '0m', moqie: true, is_liqi: false, is_wliqi: false } }];
+    }
+    return result;
+  };
+  try {
+    const room = structuredClone(buildPhase1Fixture().projection.room!);
+    room.rules.verifiedOptions.redFives = 3;
+    const session = new LiveGameSession(actor, page, room, true);
+    await session.synchronize(false);
+    const previous = actor.projection.sourceCursor;
+    await assert.rejects(session.synchronize(true, true), /COUNTDOWN_SAMPLE_STALE/);
+    assert.equal(actor.control.needsSync, false);
+    assert.equal(actor.control.paused, true);
+    await session.pump();
+    assert.notEqual(actor.projection.sourceCursor, previous);
+    assert.equal(actor.projection.state?.latestAction?.actor, 1);
+    assert.equal(page.sends, 0);
+  } finally {
+    await actor.idle();
+    await store.close();
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+test('settlement failure diagnostics retain only public score fields for reproducing parsing errors',async()=>{
+  const h=await scenario('sequence');
+  const original=h.page.evaluate.bind(h.page);
+  h.page.evaluate=async(source:any,argument?:any)=>{
+    const result=await original(source,argument);
+    if(argument?.method==='drain' && result.records?.[0]?.name==='ActionNoTile')
+      result.records[0].payload={liujumanguan:false,gameend:false,scores:[{seat:0,old_scores:[],delta_scores:[3000,-1000,-1000,-1000]}],hidden:'must-not-export'};
+    return result;
+  };
+  try{
+    const report=await acceptLivePage(h.page,h.options);
+    assert.ok('code' in report);
+    assert.equal(report.code,'INVALID_PROTOCOL_SCORES');
+    assert.equal(report.settlementDiagnostics?.name,'ActionNoTile');
+    assert.deepEqual(report.settlementDiagnostics?.before,[25000,25000,25000,25000]);
+    assert.ok(!JSON.stringify(report.settlementDiagnostics).includes('must-not-export'));
+  }finally{await h.cleanup();}
+});
