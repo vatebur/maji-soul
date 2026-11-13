@@ -110,7 +110,7 @@ export function sampleSyncOperationTiming(raw: unknown, display: { remainingMs: 
     ...(display.bankRemainingMs === undefined ? {} : { displayedBankMs: display.bankRemainingMs }) };
 }
 
-function validateSample(sample: AutomaticCountdownSample): void {
+export function validateCountdownSample(sample: AutomaticCountdownSample): void {
   integer(sample.pageEpoch, 1); integer(sample.step, 1, 999_999_999); timestamp(sample.sampledAt);
   requireThat(/^[0-9a-f]{64}$/.test(sample.handKey), 'HAND_IDENTITY_UNVERIFIED');
   mono(sample.requestedMonoMs); mono(sample.receivedMonoMs); mono(sample.displaySampledMonoMs);
@@ -138,7 +138,7 @@ function validateSample(sample: AutomaticCountdownSample): void {
 /** This checks evidence only; it cannot grant an action budget. */
 export function validateCountdownUnitPair(samples: AutomaticCountdownSample[]): void {
   requireThat(Array.isArray(samples) && samples.length >= 2 && samples.length <= 8, 'TIMING_EVIDENCE_REQUIRED');
-  samples.forEach(validateSample);
+  samples.forEach(validateCountdownSample);
   for (let i = 1; i < samples.length; i++) {
     const previous = samples[i - 1]!, current = samples[i]!;
     requireThat(current.pageEpoch === previous.pageEpoch && current.step === previous.step && current.handKey === previous.handKey && current.fixedMs === previous.fixedMs && current.addMs === previous.addMs, 'TIMING_SCOPE_MISMATCH');
@@ -159,7 +159,7 @@ export function validateCountdownUnitPair(samples: AutomaticCountdownSample[]): 
  * sample. The pair's old remaining time never enters deadline arithmetic. */
 export function validateCountdownCalibration(current: AutomaticCountdownSample, pair: AutomaticCountdownSample[]) {
   requireThat(Array.isArray(pair) && pair.length === 2, 'TIMING_EVIDENCE_REQUIRED');
-  validateCountdownUnitPair(pair); validateSample(current);
+  validateCountdownUnitPair(pair); validateCountdownSample(current);
   const last = pair.at(-1)!;
   requireThat(current.scope && last.scope && sameScope(current.scope, last.scope), 'TIMING_CALIBRATION_SCOPE_MISMATCH');
   requireThat(current.requestedMonoMs >= last.displaySampledMonoMs && current.receivedMonoMs >= last.receivedMonoMs,

@@ -16,7 +16,7 @@ test('the stdio broker hosts a real Node child and SQLite worker for sync-only a
     assert.equal(h.page.controls.at(-1)?.paused, true);
     const raw = new DatabaseSync(h.page.databasePath, { readOnly: true });
     try {
-      assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 4);
+      assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 5);
       assert.equal(raw.prepare('SELECT count(*) AS n FROM sessions').get()?.n, 1);
       assert.equal(raw.prepare('SELECT count(*) AS n FROM action_attempts').get()?.n, 0);
       const state = JSON.parse(raw.prepare('SELECT projection FROM checkpoints').get()!.projection as string);
@@ -137,7 +137,8 @@ test('broker waits for process exit after a result before allowing another execu
   } finally { await fixture.cleanup(); }
 });
 
-test('broker rejects queued dispatch after cancellation while allowing the worker to acknowledge its drain', async () => {
+test('broker rejects queued single or combined dispatch after cancellation while allowing its drain', async t => {
+ for(const blocked of ['dispatch','dispatchPrepared'])await t.test(blocked,async()=>{
   const fixture = await worker(`
     import {createInterface} from 'node:readline';
     const lines=createInterface({input:process.stdin});
@@ -145,7 +146,7 @@ test('broker rejects queued dispatch after cancellation while allowing the worke
     lines.on('line',line=>{
       const message=JSON.parse(line);
       if(message.kind==='start')send({kind:'page',id:1,method:'read'});
-      if(message.kind==='stop')send({kind:'page',id:2,method:'dispatch'});
+      if(message.kind==='stop')send({kind:'page',id:2,method:'${blocked}'});
       if(message.id===2){send({kind:'result',report:{status:'blocked',code:message.code}});lines.close();process.stdin.destroy();}
     });
   `);
@@ -156,8 +157,9 @@ test('broker rejects queued dispatch after cancellation while allowing the worke
       if (method === 'read') cancellation.abort();
       return {};
     } }, options, fixture.program, cancellation.signal);
-    assert.equal(report.code, 'LIVE_CANCELLED'); assert.equal(methods.includes('dispatch'), false); assert.equal(methods.includes('pause'), true);
+    assert.equal(report.code, 'LIVE_CANCELLED'); assert.equal(methods.includes(blocked), false); assert.equal(methods.includes('pause'), true);
   } finally { await fixture.cleanup(); }
+ });
 });
 
 test('cooperative cancellation preserves the native page epoch and clamps a queued actor resume to paused',async()=>{

@@ -87,13 +87,14 @@ function phase2State(owned:TileCode[],called?:TileCode):GameState {
 }
 const phase2Offer=(type:number,combination:string[]):OfferedOperations=>({seat:0,operation_list:[{type,combination}]});
 function fixture(capacity = 256, phase2ActionsEnabled = false, akagiEnabled = false) {
-  let autoFinishSync = true, rpcTimeoutMs = 5000;
+  let autoFinishSync = true, rpcTimeoutMs = 5000, failNextSend = false;
   class Socket extends EventTarget {
     readyState = 1;
     sent: Uint8Array[] = [];
     outstanding = new Set<number>();
     send(raw: Uint8Array) {
       this.sent.push(new Uint8Array(raw));
+      if (failNextSend) { failNextSend=false; throw Error('PRIVATE_SEND_FAILURE'); }
       const id = packetId(raw); this.outstanding.add(id);
       const packet = schema.lookupType('lq.Wrapper').decode(raw.subarray(3)) as any;
       // Simulate successful server completion for ordinary fixture setup. New
@@ -189,7 +190,7 @@ function fixture(capacity = 256, phase2ActionsEnabled = false, akagiEnabled = fa
     } else {delete input.tile;delete input.intent.tile;delete input.intent.tsumogiri;}
     return input;
   }
-  return { socket, bridge, window, Socket, action, opened, openedCustom,start, autoWin, setAutoFinishSync:(value:boolean)=>{autoFinishSync=value;}, setRpcTimeout:(ms:number)=>{rpcTimeoutMs=ms;}, advanceMono:(ms:number)=>{monoOffset+=ms;},advanceWall:(ms:number)=>{wallOffset+=ms;} };
+  return { socket, bridge, window, Socket, action, opened, openedCustom,start, autoWin, throwOnNextSend:()=>{failNextSend=true;},setAutoFinishSync:(value:boolean)=>{autoFinishSync=value;}, setRpcTimeout:(ms:number)=>{rpcTimeoutMs=ms;}, advanceMono:(ms:number)=>{monoOffset+=ms;},advanceWall:(ms:number)=>{wallOffset+=ms;} };
 }
 
 test('mux shares one allocator, restores original client IDs and suppresses its own responses', async () => {
@@ -569,6 +570,80 @@ test('accepted RPC receipt remains distinct from action observation and a permit
   assert.equal(f.bridge.read().lastStep, 1);
   assert.equal((await f.bridge.dispatch({ command: input.command, token: prepared.token })).delivery, 'not-sent');
   assert.equal(f.bridge.read().stats.bridgeActionSends, 1);
+  f.bridge.restore();
+});
+
+test('combined preparation sends in the same page turn within the original remaining visual lifetime',async()=>{
+  const f=fixture(),input=await f.opened();
+  f.advanceMono(850);
+  queueMicrotask(()=>f.bridge.pause({processInstanceId:'process',controlEpoch:4,paused:true}));
+  const count=f.socket.sent.length,work=f.bridge.dispatchPrepared(input);
+  // An await between prepare and dispatch would let the queued pause revoke
+  // the command. The actual send has already happened in this page turn.
+  assert.equal(f.socket.sent.length,count+1);
+  assert.equal(f.bridge.read().stats.bridgeActionSends,1);
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.inputOperation'));
+  assert.equal((await work).delivery,'accepted');
+  assert.equal(f.bridge.read().paused,true);
+  assert.equal((await f.bridge.dispatchPrepared(input)).delivery,'not-sent');
+  assert.equal(f.bridge.read().stats.bridgeActionSends,1);
+  f.bridge.restore();
+});
+
+test('combined dispatch preserves all final fences and reports only fixed zero-send guard codes',async t=>{
+  for(const scenario of ['expired-command','expired-pixels','paused','ingress','invalid-action','private-error'] as const)await t.test(scenario,async()=>{
+    const f=fixture(),input=await f.opened();
+    let code:string;
+    if(scenario==='expired-command'){input.command.expiresAt=new Date(Date.now()-1).toISOString();code='DEADLINE_EXCEEDED';}
+    else if(scenario==='expired-pixels'){f.advanceMono(1001);code='AUTO_WIN_READBACK_EXPIRED';}
+    else if(scenario==='paused'){f.bridge.pause({processInstanceId:'process',controlEpoch:4,paused:true});code='EXECUTION_PAUSED';}
+    else if(scenario==='ingress'){f.action('ActionDiscardTile',2,{seat:0,tile:'2m',moqie:true});code='INGRESS_PENDING';}
+    else if(scenario==='invalid-action'){input.intent.tile='3m';code='ACTION_NOT_LEGAL';}
+    else{Object.defineProperty(input.snapshot.state,'ownConcealed',{get(){throw Error('PRIVATE_COOKIE_MUST_NOT_LEAK');}});code='BRIDGE_GUARD_FAILED';}
+    const count=f.socket.sent.length,receipt=await f.bridge.dispatchPrepared(input);
+    assert.equal(receipt.delivery,'not-sent');assert.equal(f.socket.sent.length,count);
+    assert.match(receipt.callId,new RegExp(`^bridge:1:not-sent:${code}:[a-f0-9-]{36}$`));
+    assert.deepEqual(Object.keys(receipt).sort(),['callId','delivery','observedAt']);
+    assert.equal(JSON.stringify(receipt).includes('PRIVATE'),false);
+    assert.equal(f.bridge.read().stats.bridgeActionSends,0);f.bridge.restore();
+  });
+});
+
+test('a separately prepared token that expires reports the precise no-send reason',async()=>{
+  const f=fixture(),input=await f.opened();
+  const prepared=f.bridge.prepare(input),count=f.socket.sent.length;
+  f.advanceMono(1001);
+  const receipt=await f.bridge.dispatch({command:input.command,token:prepared.token});
+  assert.equal(receipt.delivery,'not-sent');assert.match(receipt.callId,/^bridge:1:not-sent:PERMIT_EXPIRED:/);
+  assert.equal(f.socket.sent.length,count);f.bridge.restore();
+});
+
+test('expired visual proofs remain expired after a backward wall clock jump and disabled proofs stay unverified',async t=>{
+  for(const disabled of [false,true])await t.test(String(disabled),async()=>{
+    const f=fixture(),input=await f.opened();
+    if(disabled)f.autoWin('disabled');
+    f.advanceMono(1001);f.advanceWall(-60_000);
+    const before=f.socket.sent.length,receipt=await f.bridge.dispatchPrepared(input);
+    assert.equal(receipt.delivery,'not-sent');
+    assert.match(receipt.callId,new RegExp(`:not-sent:${disabled?'AUTO_WIN_UNVERIFIED':'AUTO_WIN_READBACK_EXPIRED'}:`));
+    assert.equal(f.socket.sent.length,before);
+    assert.equal(f.bridge.read().stats.bridgeActionSends,0);
+    f.bridge.restore();
+  });
+});
+
+test('combined dispatch keeps a socket failure after invocation uncertain and never resends it',async()=>{
+  const f=fixture(),input=await f.opened(),count=f.socket.sent.length;
+  f.throwOnNextSend();
+  const receipt=await f.bridge.dispatchPrepared(input);
+  assert.equal(receipt.delivery,'unknown');assert.equal(f.socket.sent.length,count+1);
+  assert.equal(JSON.stringify(receipt).includes('PRIVATE'),false);
+  assert.equal(f.bridge.read().reason,'ACTION_UNCERTAIN');
+  assert.equal((await f.bridge.dispatchPrepared(input)).delivery,'not-sent');
+  assert.equal(f.socket.sent.length,count+1);
+  // A late transport response can close the pending route but never turn the
+  // already returned uncertain receipt into a retriable zero-send outcome.
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!),'.lq.FastTest.inputOperation'));
   f.bridge.restore();
 });
 
@@ -1456,4 +1531,45 @@ test('native authentication waits for entry and a terminal native restore requir
   assert.equal(f.bridge.read().nativeRestorePending, true);
   f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!), '.lq.FastTest.syncGame', { is_end: true }));
   assert.equal(f.bridge.read().nativeRestorePending, false); f.bridge.restore();
+});
+
+
+test('successful sync with unusable history still completes presence and preserves the validation error', async t => {
+  for (const mode of ['missing', 'incomplete', 'gap', 'regression'] as const) await t.test(mode, async () => {
+    const f = fixture(); await f.opened(); f.setAutoFinishSync(false);
+    const history = openingHistory();
+    const response = mode === 'missing' ? {} : mode === 'incomplete'
+      ? { step: 2, game_restore: { actions: [history[1]] } }
+      : mode === 'gap' ? { step: 4, game_restore: { actions: [history[0], { ...history[1], step: 3 }] } }
+      : { step: 1, game_restore: { actions: [history[0]] } };
+    const expected = mode === 'missing' ? /SYNC_RESPONSE_INCOMPLETE/ : mode === 'incomplete'
+      ? /SYNC_HISTORY_INCOMPLETE/ : mode === 'gap' ? /SYNC_HISTORY_GAP/ : /SYNC_HISTORY_REGRESSION/;
+    const sent = f.socket.sent.length;
+    const sync = f.bridge.sync(); let settled = false;
+    const failure = assert.rejects(sync, expected).then(() => { settled = true; });
+    f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!), '.lq.FastTest.syncGame', response));
+    await Promise.resolve();
+    assert.deepEqual(f.socket.sent.slice(sent).map(requestMethod), ['.lq.FastTest.syncGame', '.lq.FastTest.finishSyncGame']);
+    assert.equal(settled, false);
+    assert.throws(() => f.bridge.ackSync({ generation: f.bridge.read().generation, step: 1 }), /SYNC_STALE/);
+    f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!), '.lq.FastTest.finishSyncGame'));
+    await failure;
+    assert.equal(f.bridge.read().paused, true); assert.equal(f.bridge.read().stats.bridgeActionSends, 0);
+    assert.throws(() => f.bridge.ackSync({ generation: f.bridge.read().generation, step: 1 }), /SYNC_STALE/);
+    f.bridge.restore();
+  });
+});
+
+test('failure to complete an unusable sync takes precedence and leaves no acknowledged snapshot', async () => {
+  const f = fixture(); await f.opened(); f.setAutoFinishSync(false);
+  const sync = f.bridge.sync(), failure = assert.rejects(sync, /SYNC_FINISH_REJECTED/);
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!), '.lq.FastTest.syncGame', {
+    step: 2, game_restore: { actions: [openingHistory()[1]] },
+  }));
+  await Promise.resolve(); assert.equal(requestMethod(f.socket.sent.at(-1)!), '.lq.FastTest.finishSyncGame');
+  f.socket.receive(responseFrame(packetId(f.socket.sent.at(-1)!), '.lq.FastTest.finishSyncGame', { error: { code: 1 } }));
+  await failure;
+  assert.equal(f.bridge.read().paused, true); assert.equal(f.bridge.read().stats.bridgeActionSends, 0);
+  assert.throws(() => f.bridge.ackSync({ generation: f.bridge.read().generation, step: 1 }), /SYNC_STALE/);
+  f.bridge.restore();
 });

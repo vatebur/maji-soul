@@ -4,7 +4,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
-import { AutomationIncidentLog, automationIncident, parseAutomationIncident, type AutomationIncident } from '../src/app/console/automation-incidents.ts';
+import { AutomationIncidentLog, automationIncident, parseAutomationIncident, parseCountdownSampleRejection, type AutomationIncident } from '../src/app/console/automation-incidents.ts';
 import { runAutomation } from '../src/app/console/automation-loop.ts';
 import { LiveAutomation } from '../src/app/console/automation.ts';
 import { buildPhase1Fixture } from '../scripts/build-phase1-fixtures.ts';
@@ -12,6 +12,22 @@ import { buildPhase1Fixture } from '../scripts/build-phase1-fixtures.ts';
 const room = buildPhase1Fixture().events.find(e => e.type === 'RoomVerified')!.payload.room;
 const first = automationIncident('COUNTDOWN_LAYOUT_UNVERIFIED', 1, 'recovering', '2026-11-13T07:49:59.000Z');
 const second = automationIncident('ROOM_NOT_READY', 2, 'recovering', '2026-11-13T07:50:00.000Z');
+const countdown={event:'countdown.sample-rejected',code:'COUNTDOWN_BANK_MISMATCH',pageEpoch:1,generation:2,step:10,
+  passedWaitingTime:6,fixedMs:5000,addMs:20000,displayedRemainingMs:0,displayedBankMs:10000,
+  requestedMonoMs:4900.5,receivedMonoMs:5000.5,displaySampledMonoMs:5100.5};
+
+test('numeric countdown diagnostics survive worker stderr while extra or invalid fields are discarded',()=>{
+  assert.deepEqual(parseCountdownSampleRejection(countdown),countdown);
+  const lines:string[]=[],log=new AutomationIncidentLog(line=>lines.push(line));
+  const invalid=[{...countdown,cookie:'PRIVATE'},{...countdown,code:'PRIVATE'},{...countdown,displayedBankMs:'PRIVATE'},
+    {...countdown,generation:-1},{...countdown,step:0},{...countdown,receivedMonoMs:Infinity},
+    {...countdown,passedWaitingTime:1201},{...countdown,displayedRemainingMs:600001}];
+  for(const value of invalid){assert.equal(parseCountdownSampleRejection(value),null);log.consume(JSON.stringify(value)+'\n');}
+  const line=JSON.stringify(countdown)+'\n';
+  log.consume(line.slice(0,91));log.consume(line.slice(91));log.consume(line);
+  assert.deepEqual(lines.map(line=>JSON.parse(line)),[countdown]);
+  assert.doesNotThrow(()=>new AutomationIncidentLog(()=>{throw Error('DISK_FULL');}).emit(countdown));
+});
 
 test('incident schema excludes raw errors, extra fields, unbounded codes and malformed metadata', () => {
   assert.deepEqual(parseAutomationIncident(first), first);

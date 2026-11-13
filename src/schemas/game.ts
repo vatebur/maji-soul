@@ -44,7 +44,7 @@ export function validateRoom(value: unknown): asserts value is FriendRoom {
   const room = object(value, ['roomId', 'rules', 'autoWin']); string(room.roomId);
   oneOf(room.autoWin, ['verified-on', 'verified-off', 'unknown']);
   const rules = object(room.rules, ['players', 'length', 'displayTimeSetting', 'computerSeats', 'verifiedOptions', 'protocolVersion']);
-  oneOf(rules.players, [4]); oneOf(rules.length, ['east', 'south']); oneOf(rules.displayTimeSetting, ['300+0', '5+20']); oneOf(rules.computerSeats, [0, 1, 2, 3]); string(rules.protocolVersion);
+  oneOf(rules.players, [4]); oneOf(rules.length, ['east', 'south']); oneOf(rules.displayTimeSetting, ['300+0', '60+0', '5+20']); oneOf(rules.computerSeats, [0, 1, 2, 3]); string(rules.protocolVersion);
   requireThat(rules.verifiedOptions && typeof rules.verifiedOptions === 'object' && !Array.isArray(rules.verifiedOptions), 'INVALID_RULES');
   const entries = Object.entries(rules.verifiedOptions); requireThat(entries.length > 0 && entries.length <= 64, 'INVALID_RULES');
   for (const [key, v] of entries) { string(key, 64); if (typeof v === 'string') string(v); else if (typeof v === 'number') requireThat(Number.isFinite(v), 'INVALID_RULES'); else boolean(v); }

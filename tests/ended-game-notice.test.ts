@@ -9,7 +9,7 @@ import { png } from './countdown-helpers.ts';
 // These masks were extracted from the independently viewed native 1202 image.
 // Only its three text crops survive; account, table and background pixels do not.
 const evidence = JSON.parse(readFileSync(new URL('../src/adapters/majsoul/ended-game-notice-profile.json', import.meta.url), 'utf8'));
-const baseScope = { paused: true, executorActive: false, controlEpoch: 0, pageEpoch: 2, generation: 3, gameUuid: null };
+const baseScope = { paused: true, executorActive: false, controlEpoch: 0, pageEpoch: 2, generation: 3, sourceStream: 0, gameUuid: null };
 function image(variant: 'actual-masks' | 'wrong-code' | 'wrong-message' | 'wrong-button' | 'button-only' = 'actual-masks', width = 1919, height = 992): PixelImage {
   const rgba = new Uint8Array(width * height * 4);
   for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
@@ -92,17 +92,57 @@ test('wrong code, changed message and wrong confirmation button never authorize 
   }
 });
 
-test('unpaused or unreleased execution and changed bridge scopes are rejected before pressing', async () => {
-  for (const patch of [{ paused: false }, { executorActive: true }, { executorActive: undefined }, { controlEpoch: 1 }, { pageEpoch: undefined }]) {
+test('unsafe bridge scopes are rejected before sampling or pressing', async () => {
+  const unsafe = [{ paused: false }, { executorActive: true }, { executorActive: undefined }, { controlEpoch: 1 },
+    { pageEpoch: undefined }, { pageEpoch: 0 }, { gameUuid: '' }, { generation: -1 }, { generation: undefined }];
+  for (const patch of unsafe) {
     const h = harness(); Object.assign(h.scope, patch);
     await assert.rejects(dismissEndedGameNotice(h.page), /ENDED_NOTICE_SCOPE_CHANGED/);
     assert.equal(h.commands.length, 0);
   }
-  for (const patch of [{ generation: 4 }, { pageEpoch: 3 }, { gameUuid: 'replacement' }, { executorActive: true }, { paused: false }]) {
+  for (const patch of [...unsafe, { generation: 4, executorActive: true }]) {
     const h = harness(); h.hooks.moved = () => { Object.assign(h.scope, patch); };
     await assert.rejects(dismissEndedGameNotice(h.page), /ENDED_NOTICE_SCOPE_CHANGED/);
     assert.equal(h.commands.some(command => command.params?.type === 'mousePressed'), false);
   }
+});
+
+test('every safe scope drift discards both samples before a later call can authorize a fresh click', async () => {
+  for (const patch of [{ generation: 4 }, { generation: 2 }, { pageEpoch: 3 }, { gameUuid: 'replacement' },
+    { sourceStream: 1 }, { pageEpoch: 3, gameUuid: 'replacement', sourceStream: 2, generation: 0 }]) {
+    const h = harness();
+    h.hooks.moved = () => { Object.assign(h.scope, patch); };
+    assert.equal(await dismissEndedGameNotice(h.page), false);
+    assert.equal(h.captures, 2);
+    assert.equal(h.commands.some(command => command.params?.type === 'mousePressed'), false);
+    h.hooks.moved = () => {};
+    h.hooks.pressed = () => { assert.equal(h.captures, 4, 'both images must be freshly acquired in the new scope before pressing'); };
+    assert.equal(await dismissEndedGameNotice(h.page), true);
+    assert.equal(h.captures, 5, 'the next call must reacquire both samples and verify disappearance');
+    assert.equal(h.commands.filter(command => command.params?.type === 'mousePressed').length, 1);
+  }
+});
+
+test('scope drift requires valid source stream metadata on both sides before deferring', async () => {
+  for (const sourceStream of [undefined, null, -1, 0.5]) {
+    const h = harness();
+    if (sourceStream === undefined) delete h.scope.sourceStream;
+    else h.scope.sourceStream = sourceStream;
+    h.hooks.moved = () => { h.scope.generation = 4; };
+    await assert.rejects(dismissEndedGameNotice(h.page), /ENDED_NOTICE_SCOPE_CHANGED/);
+    assert.equal(h.commands.some(command => command.params?.type === 'mousePressed'), false);
+    const current = harness();
+    current.hooks.moved = () => { current.scope.sourceStream = sourceStream; };
+    await assert.rejects(dismissEndedGameNotice(current.page), /ENDED_NOTICE_SCOPE_CHANGED/);
+    assert.equal(current.commands.some(command => command.params?.type === 'mousePressed'), false);
+  }
+});
+
+test('an unchanged generation preserves the existing source stream compatibility', async () => {
+  const h = harness();
+  delete h.scope.sourceStream;
+  assert.equal(await dismissEndedGameNotice(h.page), true);
+  assert.equal(h.commands.filter(command => command.params?.type === 'mousePressed').length, 1);
 });
 
 test('a changed viewport between positive samples cannot use the old confirmation coordinates', async () => {

@@ -5,6 +5,27 @@ export interface PixelImage { width: number; height: number; rgba: Uint8Array }
 export interface PixelBox { x: number; y: number; width: number; height: number }
 export interface PixelRegion extends PixelBox { rgba: Uint8Array }
 export interface ScreenshotRegions { kind: 'regions'; width: number; height: number; regions: PixelRegion[] }
+export type ScreenshotPixels = PixelImage | ScreenshotRegions;
+
+/** Return only an actually observed, contiguous row. Sparse screenshots never
+ * manufacture pixels outside their explicit absolute-coordinate regions. */
+export function screenshotPixelRow(image:ScreenshotPixels,x:number,y:number,width:number):Uint8Array {
+  requireThat([x,y,width].every(Number.isSafeInteger) && x>=0 && y>=0 && width>0 &&
+    x+width<=image.width && y<image.height,'SCREENSHOT_PIXEL_UNAVAILABLE');
+  if('rgba' in image) {
+    requireThat(image.rgba.length===image.width*image.height*4,'SCREENSHOT_PIXEL_UNAVAILABLE');
+    const at=(y*image.width+x)*4;
+    return image.rgba.subarray(at,at+width*4);
+  }
+  const region=image.regions.find(region=>x>=region.x && x+width<=region.x+region.width &&
+    y>=region.y && y<region.y+region.height);
+  requireThat(region && [region.x,region.y,region.width,region.height].every(Number.isSafeInteger) &&
+    region.x>=0 && region.y>=0 && region.width>0 && region.height>0 &&
+    region.x+region.width<=image.width && region.y+region.height<=image.height &&
+    region.rgba.length===region.width*region.height*4,'SCREENSHOT_PIXEL_UNAVAILABLE');
+  const at=((y-region.y)*region.width+x-region.x)*4;
+  return region.rgba.subarray(at,at+width*4);
+}
 
 function readScreenshotPng(input: Uint8Array) {
   const data = Buffer.from(input);

@@ -71,7 +71,7 @@ function render() {
     BROWSER_CONTROL_WITH_USER: '浏览器已由用户接管，请交还控制后启用',
     LOGIN_REQUIRED: '自动恢复未完成，请在雀魂页面登录后重新启用',
     ROOM_OWNER_REQUIRED: '需要由当前账号担任四人友人房房主',
-    DEFAULT_ROOM_RULES_MISMATCH: '房间设置与默认四人半庄、5+20 秒不一致',
+    DEFAULT_ROOM_RULES_MISMATCH: '房间规则或时钟与目标设置不一致',
     ROOM_PLAYERS_NOT_READY: '请等待房内玩家点击准备后重试',
     ROOM_FILL_REJECTED: '补电脑失败，请检查当前房间',
     LOBBY_NOT_READY: '大厅连接未就绪，请等待雀魂加载完成后重试',

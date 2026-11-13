@@ -60,7 +60,7 @@ export class StorageDatabase {
           this.#db.exec(readFileSync(new URL('./migrations/001-state.sql', import.meta.url), 'utf8'));
           this.#db.exec(`PRAGMA application_id=${APP_ID}; PRAGMA user_version=1;`);
         });
-      } else requireThat((version === 1 || version === 2 || version === 3 || version === 4) && appId === APP_ID, 'STORAGE_VERSION_UNSUPPORTED');
+      } else requireThat((version === 1 || version === 2 || version === 3 || version === 4 || version === 5) && appId === APP_ID, 'STORAGE_VERSION_UNSUPPORTED');
       if (!readOnly && this.#db.prepare('PRAGMA user_version').get()?.user_version === 1) {
         // Rebuild CHECK-constrained tables without changing the references from slot/fact tables.
         // Foreign keys must be disabled before opening the migration transaction.
@@ -89,6 +89,13 @@ export class StorageDatabase {
           if (this.#db.prepare('PRAGMA user_version').get()?.user_version !== 3) return;
           this.#db.exec(readFileSync(new URL('./migrations/004-commentary.sql', import.meta.url), 'utf8'));
           this.#db.exec('PRAGMA user_version=4;');
+        });
+      }
+      if (!readOnly && this.#db.prepare('PRAGMA user_version').get()?.user_version === 4) {
+        this.#transaction(() => {
+          if (this.#db.prepare('PRAGMA user_version').get()?.user_version !== 4) return;
+          this.#db.exec(readFileSync(new URL('./migrations/005-ledger-metadata.sql', import.meta.url), 'utf8'));
+          this.#db.exec('PRAGMA user_version=5;');
         });
       }
     } catch (error) { this.#db.close(); throw error; }
@@ -388,13 +395,24 @@ export class StorageDatabase {
       requireThat(!matchResult || canonical(matchResult)===canonical(result),'MATCH_LEDGER_RESULT_CONFLICT');
       matchResult=result; matchStatus='finished';
     };
-    // Lifecycle rows are small compared with full action history and retain the
-    // hand identities even when a session's checkpoint has advanced to another game.
-    const rows = this.#db.prepare("SELECT session_id,type,payload FROM game_events WHERE type IN ('MatchStarted','HandStarted','HandEnded','MatchEnded','SyncApplied') ORDER BY rowid").all();
+    // Keep every lifecycle row in order: even another match's SyncApplied must
+    // reset its session context. Project only its ledger metadata in SQLite so
+    // full hand histories never cross into JS just to be discarded after parse.
+    // Keep this CASE identical to migration 005's covering expression index.
+    // No index hint: read-only schema 4 databases retain the scan fallback.
+    const rows = this.#db.prepare(`SELECT session_id,type,
+      CASE WHEN type='SyncApplied' THEN json_object(
+        'gameMatchKey',json_extract(payload,'$.gameMatchKey'),
+        'gameHandKey',json_extract(payload,'$.gameHandKey'),
+        'handOrdinal',json_extract(payload,'$.handOrdinal'),
+        'terminal',json_extract(payload,'$.terminal')) ELSE payload END AS payload
+      FROM game_events WHERE type IN ('MatchStarted','HandStarted','HandEnded','MatchEnded','SyncApplied') ORDER BY rowid`).all();
     for (const row of rows) {
       const session = String(row.session_id), type = String(row.type);
       if (type === 'SyncApplied') {
-        const sync = parse<AuthoritativeSync>(row.payload);
+        const sync = parse<Pick<AuthoritativeSync,'gameMatchKey'|'gameHandKey'|'handOrdinal'> & {
+          terminal?: AuthoritativeSync['terminal'] | null;
+        }>(row.payload);
         contexts.set(session,{match:sync.gameMatchKey,hand:sync.gameHandKey});
         if (sync.gameMatchKey !== gameMatchKey) continue;
         const terminal = sync.terminal;

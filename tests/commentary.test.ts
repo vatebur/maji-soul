@@ -137,13 +137,13 @@ test('templates render retained red five from the frozen hand and reject fabrica
   } finally { await h.cleanup(); }
 });
 
-test('schema 3 upgrades preserve factual archives and schema 4 commentary survives restart', async () => {
+test('schema 3 upgrades preserve factual archives and current-schema commentary survives restart', async () => {
   const h = await actorHarness(5);
   try {
     const original = await h.store.readDiscards(h.actor.projection.sessionId);
     await h.store.close();
     const raw = new DatabaseSync(h.path);
-    try { raw.exec('ALTER TABLE discard_explanations DROP COLUMN commentary; PRAGMA user_version=3;'); } finally { raw.close(); }
+    try { raw.exec('DROP INDEX game_events_ledger_metadata; ALTER TABLE discard_explanations DROP COLUMN commentary; PRAGMA user_version=3;'); } finally { raw.close(); }
     const migrated = h.createStore();
     assert.deepEqual(await migrated.readDiscards(h.actor.projection.sessionId), original);
     const context = (await migrated.readCommentaryContext(original[0]!.id))!;

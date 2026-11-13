@@ -184,6 +184,22 @@ test('recovery dismisses only a proven ended-game notice before recognizing the 
   assert.equal(inspections, 1); assert.equal(reloads, 1);
 });
 
+test('a notice sample deferred before pressing stays inside the original recovery loop', async () => {
+  let now = 0, inspections = 0, reloads = 0, dismissed = false;
+  await recoverAudienceRoom(page, room, new AbortController().signal, {
+    now: () => now, install: async () => { reloads++; return {} as any; }, sleep: async ms => { now += ms; },
+    screen: async () => ({ screen: dismissed ? 'home' : 'unknown', width: 1919, height: 992 }),
+    dismissNotice: async () => { dismissed = ++inspections === 2; return dismissed; },
+    call: async (_page, method) => {
+      if (method === 'inspectRoom') throw Error('ROOM_NOT_READY');
+      if (method === 'read') return { paused: true, executorActive: false, controlEpoch: 0,
+        pageEpoch: 2, generation: inspections + 3, gameUuid: null };
+      assert.equal(method, 'pause'); return {};
+    },
+  });
+  assert.equal(inspections, 2); assert.equal(reloads, 1); assert.equal(now, 1000);
+});
+
 test('unknown recovery popups stay untouched and repeated notice handling remains bounded', async () => {
   for (const result of [false, true]) {
     let now = 0, inspections = 0;

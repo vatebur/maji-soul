@@ -48,8 +48,10 @@ export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptan
       const message = JSON.parse(line);
       if (message.kind === 'result') { report = message.report; return; }
       if (message.kind !== 'page') throw Error('LIVE_CHILD_FAILED');
+      const traceStarted=performance.now();
+      let traceCode:string|undefined;
       try {
-        if (stopped && ['prepare', 'dispatch'].includes(message.method)) throw Error('LIVE_CANCELLED');
+        if (stopped && ['prepare', 'dispatch', 'dispatchPrepared'].includes(message.method)) throw Error('LIVE_CANCELLED');
         let argument=message.argument;
         if(message.method==='pause' && typeof argument?.processInstanceId==='string' &&
             Number.isSafeInteger(argument.controlEpoch) && argument.controlEpoch>=0){
@@ -61,7 +63,13 @@ export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptan
         send({ id: message.id, ok: true, result });
       } catch (error) {
         const code = error instanceof Error && /^[A-Z][A-Z0-9_]+$/.test(error.message) ? error.message : 'EGO_PAGE_FAILED';
+        traceCode=code;
         send({ id: message.id, ok: false, code });
+      } finally {
+        if(process.env.MAJI_TIMING_TRACE==='1') {
+          try { console.warn(JSON.stringify({event:'timing.page-call',method:message.method,
+            durationMs:performance.now()-traceStarted,...(traceCode?{code:traceCode}:{})})); } catch { /* Read-only diagnostics cannot change child delivery. */ }
+        }
       }
     }).catch(() => fail('LIVE_CHILD_FAILED'));
   });

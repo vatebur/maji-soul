@@ -23,6 +23,8 @@ export class ChromiumPage implements BrowserPagePort {
   #documentEpoch = 0;
   #sequence = 0;
   #closed = false;
+  #screenshotTail: Promise<any> | undefined;
+  #ownedViewport: { width: number; height: number; deviceScaleFactor: number; mobile: boolean } | undefined;
 
   private constructor(socket: WebSocket) {
     this.#socket = socket;
@@ -86,12 +88,63 @@ export class ChromiumPage implements BrowserPagePort {
 
   #invalidateInput() { this.#documentEpoch++; this.#pressed.clear(); }
 
+  captureViewportPng(): Promise<{ data: string }> {
+    // Capture the visible view without a separate compositor surface copy.
+    // On the deployed Linux GPU this saves ~200ms while retaining identical
+    // lossless toolbar pixels. No clipping/resizing disturbs the live relay;
+    // callers still verify dimensions, page scope and the original timestamp.
+    return this.cdp('Page.captureScreenshot', { format: 'png', fromSurface: false, captureBeyondViewport: false });
+  }
+
+  captureViewportPngRegion(region: { x: number; y: number; width: number; height: number }): Promise<{ data: string }> {
+    const box = { x: region?.x, y: region?.y, width: region?.width, height: region?.height };
+    return this.#queueScreenshot('Page.captureScreenshot', { format: 'png', fromSurface: true,
+      captureBeyondViewport: false, optimizeForSpeed: true, clip: { ...box, scale: 1 } }, () => {
+      const viewport = this.#ownedViewport;
+      // Chromium temporarily changes this session's surface for a clip. A new
+      // observer session cannot restore another session's emulation settings.
+      if (!viewport || viewport.deviceScaleFactor !== 1 || viewport.mobile !== false)
+        throw Error('BROWSER_REGION_CAPTURE_UNAVAILABLE');
+      if (![box.x, box.y, box.width, box.height].every(Number.isSafeInteger) || box.x < 0 || box.y < 0 ||
+          box.width <= 0 || box.height <= 0 || box.x + box.width > viewport.width || box.y + box.height > viewport.height ||
+          box.width * box.height > 4_000_000) throw Error('BROWSER_SCREENSHOT_REGION_INVALID');
+    });
+  }
+
+  #queueScreenshot(method: string, parameters: any, validate?: () => void): Promise<any> {
+    const run = async () => {
+      if (this.#closed) throw Error('BROWSER_DISCONNECTED');
+      validate?.();
+      const result = await this.#request(method, parameters);
+      if (['Emulation.setDeviceMetricsOverride', 'Page.setDeviceMetricsOverride'].includes(method)) {
+        this.#ownedViewport = Number.isSafeInteger(parameters.width) && parameters.width > 0 &&
+          Number.isSafeInteger(parameters.height) && parameters.height > 0 &&
+          Number.isFinite(parameters.deviceScaleFactor) && typeof parameters.mobile === 'boolean'
+          ? { width: parameters.width, height: parameters.height, deviceScaleFactor: parameters.deviceScaleFactor, mobile: parameters.mobile }
+          : undefined;
+      } else if (['Emulation.clearDeviceMetricsOverride', 'Page.clearDeviceMetricsOverride', 'Emulation.setVisibleSize'].includes(method)) {
+        this.#ownedViewport = undefined;
+      }
+      return result;
+    };
+    // Include direct CDP screenshots and viewport changes, not only the two
+    // helpers. A failed request releases the queue; close rejects its whole tail.
+    const work = this.#screenshotTail ? this.#screenshotTail.catch(() => {}).then(run) : run();
+    this.#screenshotTail = work;
+    const settled = () => { if (this.#screenshotTail === work) this.#screenshotTail = undefined; };
+    void work.then(settled, settled);
+    return work;
+  }
+
   async cdp(method: string, parameters: any = {}): Promise<any> {
     // PNG remains lossless. Prefer faster encoding so a software-rendered
     // Linux frame spends less of the operation's bounded verification window
     // in compression; explicit caller preferences and other formats survive.
     if (method === 'Page.captureScreenshot' && (parameters.format === undefined || parameters.format === 'png') &&
         parameters.optimizeForSpeed === undefined) parameters = { ...parameters, optimizeForSpeed: true };
+    if (['Page.captureScreenshot', 'Emulation.setDeviceMetricsOverride', 'Emulation.clearDeviceMetricsOverride',
+      'Page.setDeviceMetricsOverride', 'Page.clearDeviceMetricsOverride', 'Emulation.setVisibleSize'].includes(method))
+      return this.#queueScreenshot(method, structuredClone(parameters));
     if (method === 'Page.reload' || method === 'Page.navigate') this.#invalidateInput();
     if (method !== 'Input.dispatchMouseEvent') return this.#request(method, parameters);
     if (parameters.type === 'mouseMoved') {
@@ -193,6 +246,7 @@ export class ChromiumPage implements BrowserPagePort {
   close() {
     if (this.#closed) return;
     this.#closed = true;
+    this.#ownedViewport = undefined;
     this.#invalidateInput();
     this.#disconnected.abort();
     for (const pending of this.#pending.values()) {

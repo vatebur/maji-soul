@@ -84,8 +84,16 @@ export async function dismissEndedGameNotice(page: EgoPagePort, signal?: AbortSi
     requireThat(currentImage.visible && currentImage.width === first.width && currentImage.height === first.height, 'ENDED_NOTICE_CHANGED');
     const current = await bridgeCall(page, 'read');
     signal?.throwIfAborted();
-    requireThat(hasEndedGameNoticeScope(current) && current.pageEpoch === before.pageEpoch && current.generation === before.generation &&
-      current.gameUuid === before.gameUuid, 'ENDED_NOTICE_SCOPE_CHANGED');
+    requireThat(hasEndedGameNoticeScope(current), 'ENDED_NOTICE_SCOPE_CHANGED');
+    // Any scope drift invalidates both samples before a press. A later call
+    // must acquire two new images in its own unchanged safe scope, even after
+    // a document/game replacement. The caller's bounded deadline is unchanged.
+    if (current.pageEpoch !== before.pageEpoch || current.gameUuid !== before.gameUuid ||
+        current.sourceStream !== before.sourceStream || current.generation !== before.generation) {
+      requireThat(Number.isSafeInteger(before.sourceStream) && before.sourceStream >= 0 &&
+        Number.isSafeInteger(current.sourceStream) && current.sourceStream >= 0, 'ENDED_NOTICE_SCOPE_CHANGED');
+      return false;
+    }
     // Record before sending: an uncertain mouse receipt must never cause a
     // second press on the same modal. Always release a successfully sent press,
     // even if cancellation arrives during its minimum native hold interval.

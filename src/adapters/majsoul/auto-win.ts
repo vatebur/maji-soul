@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { decodeScreenshotPng, decodeScreenshotPngRegions, type PixelImage, type ScreenshotRegions } from '../browser/png.ts';
+import { decodeScreenshotPng, decodeScreenshotPngRegions, screenshotPixelRow, type PixelImage, type ScreenshotRegions } from '../browser/png.ts';
 import { bridgeCall, type EgoPagePort, type AutoWinHandScope } from './ego-transport.ts';
 import { requireThat } from '../../domain/game/value.ts';
-import { TOOLBAR_PALETTES, LINUX_TABLE_FRAME, matchesPixelAnchors, toolbarPalette } from './table-pixels.ts';
+import { TOOLBAR_PALETTES, LINUX_TABLE_FRAME, matchesPixelAnchors, toolbarPalette, type TablePixelAnchor } from './table-pixels.ts';
 
 export { decodeScreenshotPng, type PixelImage } from '../browser/png.ts';
 export interface AutoWinProfile {
@@ -65,19 +65,20 @@ export function nativeRestoreProof(pageState:any):NativeRestoreProof|null {
     finishForwardedMonoMs:hasRestore?finish[2].observedMonoMs:null};
 }
 
-function assertRecoveryScope(current:any,original:any) {
-  requireThat(current.pageEpoch===original.pageEpoch && current.sourceStream===original.sourceStream &&
+function assertRecoveryScope(current:any,original:any,trace?:EnsureTiming) {
+  requireAutoWinScope(current.pageEpoch===original.pageEpoch && current.sourceStream===original.sourceStream &&
     current.lastStep===original.lastStep && current.controlEpoch===original.controlEpoch && current.paused &&
     current.connected && current.freshConnection && !current.handEnded && !current.matchEnded && !current.reason && !current.overflow,
-  'AUTO_WIN_RECOVERY_NOT_READY');
+  'AUTO_WIN_RECOVERY_NOT_READY',current,original,['pageEpoch','sourceStream','lastStep','controlEpoch','paused'],trace);
 }
 
-async function waitForNativeRestore(page:EgoPagePort,scope:any):Promise<NativeRestoreProof> {
+async function waitForNativeRestore(page:EgoPagePort,scope:any,trace?:EnsureTiming):Promise<NativeRestoreProof> {
   const deadline=performance.now()+3000;
   let current=scope;
   for (;;) {
-    assertRecoveryScope(current,scope);
-    requireThat(current.generation===scope.generation && Array.isArray(current.nativeLifecycleTrace),'AUTO_WIN_RECOVERY_NOT_READY');
+    assertRecoveryScope(current,scope,trace);
+    requireAutoWinScope(current.generation===scope.generation && Array.isArray(current.nativeLifecycleTrace),
+      'AUTO_WIN_RECOVERY_NOT_READY',current,scope,['generation'],trace);
     const proof=nativeRestoreProof(current);
     if (proof) return proof;
     requireThat(performance.now()<deadline,'AUTO_WIN_RECOVERY_NOT_READY');
@@ -109,12 +110,7 @@ export const DEFAULT_AUTO_WIN_PROFILE: AutoWinProfile = {
  * the visible frame instead of accepting an unrecognised popup. The frame can
  * also exist during an early empty-table restore, so this is NEVER sufficient
  * without the current client's completed native restore cycle. */
-export function hasRecoveryTableAnchors(image:PixelImage):boolean {
-  if (image.width!==2036 || image.height!==918 || image.rgba.length!==image.width*image.height*4) return false;
-  const matches = ([x,y,...rgb]: number[]) => {
-    const offset=(y!*image.width+x!)*4;
-    return image.rgba[offset+3]===255 && rgb.every((value,index)=>Math.abs(image.rgba[offset+index]!-value)<=4);
-  };
+const LEGACY_RECOVERY_FRAMES:TablePixelAnchor[][]=(()=>{
   const border = [[900,390],[1135,335],[945,440],[1080,280]].map(([x,y])=>[x!,y!,69,67,78]);
   // A deposited riichi stick can cover the border. The inner bevel stays
   // visible around the scores and the center display.
@@ -129,9 +125,20 @@ export function hasRecoveryTableAnchors(image:PixelImage):boolean {
   // left active-seat glow in the current-client capture.
   const topRiichiFrame = [[925,320,98,93,103],[925,400,98,93,103],[1135,335,69,67,78],
     [1115,320,98,93,103],[945,440,69,67,78]];
+  return [border,bevel,riichiFrame,topRiichiFrame].map(group=>group.map(([x,y,r,g,b])=>
+    ({x:x!,y:y!,rgb:[r!,g!,b!] as [number,number,number],tolerance:4})));
+})();
+const RECOVERY_ANCHORS=[...Object.values(TOOLBAR_PALETTES).flat(),...LINUX_TABLE_FRAME,...LEGACY_RECOVERY_FRAMES.flat()];
+
+export function hasRecoveryTableAnchors(image:PixelImage|ScreenshotRegions):boolean {
+  if (image.width!==2036 || image.height!==918 || ('rgba' in image ? image.rgba.length!==image.width*image.height*4 : image.kind!=='regions')) return false;
+  // Every alternative's actual pixels must exist, even when another palette
+  // matches. A sparse image cannot invent an unseen centre beneath a modal.
+  try { for(const anchor of RECOVERY_ANCHORS)screenshotPixelRow(image,anchor.x,anchor.y,1); }
+  catch { return false; }
   const palette=toolbarPalette(image);
   if(palette==='linux')return matchesPixelAnchors(image,LINUX_TABLE_FRAME);
-  return palette==='legacy' && (border.every(matches) || bevel.every(matches) || riichiFrame.every(matches) || topRiichiFrame.every(matches));
+  return palette==='legacy' && LEGACY_RECOVERY_FRAMES.some(group=>matchesPixelAnchors(image,group));
 }
 
 function validProfile(p: AutoWinProfile) {
@@ -184,49 +191,150 @@ export function classifyAutoWinPixels(image: PixelImage | ScreenshotRegions, pro
   return { state, rgbaSha256, features: { green, grey, greenHits,greenExtra,greyHits,greyExtra,anchorsMatch } };
 }
 
-/** Screenshot acquisition is automatic; no user-supplied enabled flag is accepted. */
-export async function inspectAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE, requireRecoveryTable=false): Promise<AutoWinReadback> {
+/** A countdown capture may supply the same fresh pixels for the read-only
+ * switch check. Missing restore metadata or changed scope cannot supply proof;
+ * the caller may still use the countdown and acquire a separate switch image. */
+export function autoWinReadbackFromPixels(image:PixelImage|ScreenshotRegions,observedAt:string,before:any,after:any):AutoWinReadback|null {
+  if (!Number.isFinite(Date.parse(observedAt)) || !Number.isSafeInteger(before.nativeRestoreRevision) ||
+    before.nativeRestoreRevision<0 || !['pageEpoch','generation','lastStep','nativeRestoreRevision','sourceStream','gameUuid','handSha256']
+      .every(key=>before[key]===after[key]) || [before,after].some(state=>!state.connected || !state.freshConnection ||
+        state.handEnded || state.matchEnded || state.reason || state.overflow)) return null;
+  const profile=DEFAULT_AUTO_WIN_PROFILE,result=classifyAutoWinPixels(image,profile);
+  return {source:'unity-button-pixels-v1',state:result.state,observedAt,pageEpoch:after.pageEpoch,
+    generation:after.generation,step:after.lastStep,nativeRestoreRevision:after.nativeRestoreRevision,
+    rgbaSha256:result.rgbaSha256,profileVersion:`unity-${profile.clientVersion}/${profile.viewport.width}x${profile.viewport.height}`};
+}
+
+type AutoWinTimingAttempt={mode:'none'|'region'|'full';captureMs:number|null;decodeMs:number|null;ackMs:number|null};
+const AUTO_WIN_SCOPE_KEYS=['pageEpoch','sourceStream','gameUuid','handSha256','generation','lastStep','nativeRestoreRevision','controlEpoch','paused'] as const;
+type EnsureTiming={phase:'scope'|'native-restore'|'recovery-table'|'toggle'|'toggle-readback'|'final-scope'|'ack'|'complete';
+  ackAgeMs:number|null;changedFields:string[];captureMode:'none'|'region'|'full';captures:number};
+type RecoveryCaptureOptions={nativeRegion?:boolean;trace?:EnsureTiming};
+function requireAutoWinScope(ok:unknown,code:string,current:any,expected:any,keys:readonly string[],trace?:EnsureTiming) {
+  if(!ok && trace)trace.changedFields=AUTO_WIN_SCOPE_KEYS.filter(key=>keys.includes(key)&&current?.[key]!==expected?.[key]);
+  requireThat(ok,code);
+}
+
+async function collectAutoWinPixels(page:EgoPagePort,profile:AutoWinProfile,requireRecoveryTable=false,verificationScope?:any,
+  timing?:AutoWinTimingAttempt,recoveryOptions:RecoveryCaptureOptions={}):
+  Promise<{readback:AutoWinReadback;verified?:any;ackError?:string}> {
   validProfile(profile); requireThat(page.cdp, 'AUTO_WIN_CDP_UNAVAILABLE');
-  const before = await bridgeCall(page,'read');
+  // The explicit atomic verifier already read this exact scope. Its final
+  // scope+ACK turn still compares every field with that first read. Re-reading
+  // here adds a round trip without making a changed scope eligible for ACK.
+  // Diagnostic ports keep their original separate read/ACK call contract.
+  const before = verificationScope ?? await bridgeCall(page,'read');
   requireThat(Number.isSafeInteger(before.nativeRestoreRevision) && before.nativeRestoreRevision>=0,'AUTO_WIN_READBACK_STALE');
   const layout = await page.evaluate(() => ({ width: innerWidth, height: innerHeight, devicePixelRatio,
     scrollX, scrollY, scripts: [...document.scripts].map(s=>s.src).filter(s=>s.includes('WebGL-release-')) }));
   requireThat(layout.width===profile.viewport.width && layout.height===profile.viewport.height && layout.devicePixelRatio===profile.viewport.devicePixelRatio && layout.scrollX===0 && layout.scrollY===0, 'AUTO_WIN_VIEWPORT_MISMATCH');
   requireThat(layout.scripts.some((s:string)=>s.includes(`release-${profile.clientVersion}(`)), 'CLIENT_VERSION_MISMATCH');
+  const regions=[profile.glyph,...[...[profile.anchors,...profile.anchorAlternatives??[]].flat(),
+    ...(requireRecoveryTable?RECOVERY_ANCHORS:[])].map(anchor=>({x:anchor.x,y:anchor.y,width:1,height:1}))];
+  const left=Math.min(...regions.map(region=>region.x)),top=Math.min(...regions.map(region=>region.y));
+  // Explicit production callers may crop; recovery additionally includes every
+  // centre-frame alternative. Diagnostic ports keep their full-image contract.
+  let region=((verificationScope && !requireRecoveryTable) || recoveryOptions.nativeRegion) && page.captureViewportPngRegion ? {x:left,y:top,
+    width:Math.max(...regions.map(region=>region.x+region.width))-left,
+    height:Math.max(...regions.map(region=>region.y+region.height))-top}:null;
+  if(timing)timing.mode=region?'region':'full';
+  if(recoveryOptions.trace){recoveryOptions.trace.captureMode=region?'region':'full';recoveryOptions.trace.captures++;}
   const observedAt=new Date().toISOString();
-  const screenshot = await page.cdp('Page.captureScreenshot',{ format:'png', fromSurface:true, captureBeyondViewport:false });
+  const captureStarted=timing?performance.now():0;
+  let screenshot;
+  try {
+    if(region) {
+      try {screenshot=await page.captureViewportPngRegion!(region);}
+      catch(error) {
+        // A diagnostic/foreign session may expose the method without owning
+        // viewport metrics. Only that explicit capability rejection falls back.
+        if(!recoveryOptions.nativeRegion || !(error instanceof Error && error.message==='BROWSER_REGION_CAPTURE_UNAVAILABLE'))throw error;
+        region=null;if(recoveryOptions.trace)recoveryOptions.trace.captureMode='full';
+      }
+    }
+    if(!region)screenshot=page.captureViewportPng?await page.captureViewportPng()
+      :await page.cdp('Page.captureScreenshot',{ format:'png', fromSurface:true, captureBeyondViewport:false });
+  } finally {if(timing)timing.captureMs=performance.now()-captureStarted;}
+  const decodeStarted=timing?performance.now():0;
   requireThat(typeof screenshot?.data==='string' && screenshot.data.length<=12*1024*1024, 'AUTO_WIN_SCREENSHOT_INVALID');
   const encoded=Buffer.from(screenshot.data,'base64');
-  const fullPixels=requireRecoveryTable?decodeScreenshotPng(encoded):null;
-  // Keep CDP capture at full viewport: clipped captures can interfere with a
-  // concurrent relay. Decode only the actual glyph and anchor pixels for the
-  // frequent read-only check, with explicit coverage and no invented pixels.
-  const pixels=fullPixels??decodeScreenshotPngRegions(encoded,[profile.glyph,
-    ...[profile.anchors,...profile.anchorAlternatives??[]].flat().map(anchor=>({x:anchor.x,y:anchor.y,width:1,height:1}))]);
+  const fullPixels=requireRecoveryTable&&!region?decodeScreenshotPng(encoded):null;
+  let pixels:PixelImage|ScreenshotRegions;
+  if(region) {
+    const cropped=decodeScreenshotPng(encoded);
+    requireThat(cropped.width===region.width && cropped.height===region.height,'AUTO_WIN_SCREENSHOT_REGION_INVALID');
+    // The outer dimensions describe the independently checked viewport; only
+    // these explicitly located, actually captured pixels exist in the image.
+    pixels={kind:'regions',width:layout.width,height:layout.height,regions:[{...region,rgba:cropped.rgba}]};
+  } else pixels=fullPixels??decodeScreenshotPngRegions(encoded,regions);
   const result=classifyAutoWinPixels(pixels,profile);
-  const after = await bridgeCall(page,'read');
-  requireThat(after.pageEpoch===before.pageEpoch && after.generation===before.generation && after.lastStep===before.lastStep &&
-    after.nativeRestoreRevision===before.nativeRestoreRevision &&
-    after.connected && after.freshConnection && !after.handEnded && !after.matchEnded && !after.reason && !after.overflow, 'AUTO_WIN_READBACK_STALE');
-  requireThat(!requireRecoveryTable || fullPixels && hasRecoveryTableAnchors(fullPixels),'AUTO_WIN_RECOVERY_NOT_READY');
-  return { source:'unity-button-pixels-v1',state:result.state,observedAt,pageEpoch:after.pageEpoch,
-    generation:after.generation,step:after.lastStep,nativeRestoreRevision:after.nativeRestoreRevision,
-    rgbaSha256:result.rgbaSha256,profileVersion:`unity-${profile.clientVersion}/${profile.viewport.width}x${profile.viewport.height}` };
+  const readback:AutoWinReadback={source:'unity-button-pixels-v1',state:result.state,observedAt,pageEpoch:before.pageEpoch,
+    generation:before.generation,step:before.lastStep,nativeRestoreRevision:before.nativeRestoreRevision,
+    rgbaSha256:result.rgbaSha256,profileVersion:`unity-${profile.clientVersion}/${profile.viewport.width}x${profile.viewport.height}`};
+  if(timing)timing.decodeMs=performance.now()-decodeStarted;
+  if (verificationScope) {
+    // No browser await separates the post-capture scope check from ack. The
+    // original capture-start timestamp and bridge's 1s expiry stay unchanged.
+    const ackStarted=timing?performance.now():0;
+    let finalized;
+    try { finalized=await page.evaluate(({argument:input})=>{
+      let phase='scope';
+      try {
+        const bridge=(window as any).__majiBridge;
+        if(!bridge)throw Error('BRIDGE_MISSING');
+        if(input.viewport && (innerWidth!==input.viewport.width || innerHeight!==input.viewport.height ||
+          devicePixelRatio!==input.viewport.devicePixelRatio || scrollX!==0 || scrollY!==0))throw Error('AUTO_WIN_VIEWPORT_MISMATCH');
+        const after=bridge.read(),before=input.before,scope=input.scope;
+        if(!['pageEpoch','generation','lastStep','nativeRestoreRevision'].every(key=>after[key]===before[key]) ||
+          !['pageEpoch','sourceStream','gameUuid','handSha256','generation','lastStep','nativeRestoreRevision','controlEpoch','paused']
+            .every(key=>after[key]===scope[key]) || !after.connected || !after.freshConnection ||
+          after.handEnded || after.matchEnded || after.reason || after.overflow)throw Error('AUTO_WIN_READBACK_STALE');
+        phase='ack';
+        return {verified:bridge.ackAutoWin(input.readback)};
+      } catch(error) {
+        const code=error instanceof Error?error.message:'';
+        return {error:/^[A-Z][A-Z_0-9]+$/.test(code)?code:'EGO_PAGE_FAILED',phase};
+      }
+    },{method:'verifyAutoWinReadback',argument:{before,scope:verificationScope,readback,
+      ...(region?{viewport:profile.viewport}:{})}});
+    } finally {if(timing)timing.ackMs=performance.now()-ackStarted;}
+    if(finalized.error && finalized.phase!=='ack')throw Error(finalized.error);
+    return {readback,...(finalized.error?{ackError:finalized.error}:{verified:finalized.verified})};
+  }
+  const post=region?await page.evaluate(()=>({state:(window as any).__majiBridge.read(),
+    width:innerWidth,height:innerHeight,devicePixelRatio,scrollX,scrollY})):null;
+  if(post)requireThat(post.width===layout.width && post.height===layout.height && post.devicePixelRatio===layout.devicePixelRatio &&
+    post.scrollX===0 && post.scrollY===0,'AUTO_WIN_VIEWPORT_MISMATCH');
+  const after = post?.state ?? await bridgeCall(page,'read');
+  requireAutoWinScope(after.pageEpoch===before.pageEpoch && after.generation===before.generation && after.lastStep===before.lastStep &&
+    after.nativeRestoreRevision===before.nativeRestoreRevision && (!region || AUTO_WIN_SCOPE_KEYS.every(key=>after[key]===before[key])) &&
+    after.connected && after.freshConnection && !after.handEnded && !after.matchEnded && !after.reason && !after.overflow,
+    'AUTO_WIN_READBACK_STALE',after,before,region?AUTO_WIN_SCOPE_KEYS:['pageEpoch','generation','lastStep','nativeRestoreRevision'],recoveryOptions.trace);
+  requireThat(!requireRecoveryTable || hasRecoveryTableAnchors(pixels),'AUTO_WIN_RECOVERY_NOT_READY');
+  return {readback};
 }
 
-async function waitForRecoveryTable(page:EgoPagePort,profile:AutoWinProfile,scope:any,proof:NativeRestoreProof):Promise<AutoWinReadback> {
+/** Screenshot acquisition is automatic; no user-supplied enabled flag is accepted. */
+export async function inspectAutoWin(page:EgoPagePort,profile:AutoWinProfile=DEFAULT_AUTO_WIN_PROFILE,requireRecoveryTable=false):Promise<AutoWinReadback> {
+  return (await collectAutoWinPixels(page,profile,requireRecoveryTable)).readback;
+}
+
+async function waitForRecoveryTable(page:EgoPagePort,profile:AutoWinProfile,scope:any,proof:NativeRestoreProof,
+  options:RecoveryCaptureOptions={}):Promise<AutoWinReadback> {
   // The native RPC can finish well before the table animation. Allow the UI
   // to settle without retrying a toggle; scope changes still abort immediately.
   const deadline=performance.now()+10_000;
   let previousState:AutoWinReadback['state']='unknown';
   for (;;) {
     let readback:AutoWinReadback|null=null;
-    try {readback=await inspectAutoWin(page,profile,true);}
+    try {readback=(await collectAutoWinPixels(page,profile,true,undefined,undefined,options)).readback;}
     catch(error) {if (!(error instanceof Error && error.message==='AUTO_WIN_RECOVERY_NOT_READY')) throw error;}
     const current=await bridgeCall(page,'read');
-    assertRecoveryScope(current,scope);
-    requireThat(current.generation===scope.generation && JSON.stringify(nativeRestoreProof(current))===JSON.stringify(proof),'AUTO_WIN_RECOVERY_NOT_READY');
-    requireThat(!readback || current.nativeRestoreRevision===readback.nativeRestoreRevision,'AUTO_WIN_READBACK_STALE');
+    assertRecoveryScope(current,scope,options.trace);
+    requireAutoWinScope(current.generation===scope.generation && JSON.stringify(nativeRestoreProof(current))===JSON.stringify(proof),
+      'AUTO_WIN_RECOVERY_NOT_READY',current,scope,['generation','nativeRestoreRevision'],options.trace);
+    requireAutoWinScope(!readback || current.nativeRestoreRevision===readback.nativeRestoreRevision,
+      'AUTO_WIN_READBACK_STALE',current,readback,['nativeRestoreRevision'],options.trace);
     // Two actual positive samples with the same known switch state. Neither
     // elapsed time nor the absence of a recognised modal counts as readiness.
     if (readback && readback.state!=='unknown' && readback.state===previousState) return readback;
@@ -238,87 +346,140 @@ async function waitForRecoveryTable(page:EgoPagePort,profile:AutoWinProfile,scop
 
 /** One verified click at most; unknown UI, stale epochs and failed readback close the gate. */
 export async function ensureAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE, enabled = true,
-  purpose: 'initialize'|'resume'|'pause-cleanup'|'reconnect'|'new-hand' = 'resume', handScope?:AutoWinHandScope) {
-  requireThat(purpose!=='pause-cleanup' || !enabled, 'AUTO_WIN_PURPOSE_INVALID');
-  requireThat(purpose==='new-hand' ? !!handScope : handScope===undefined,'AUTO_WIN_PURPOSE_INVALID');
-  let recoveryScope:any=null,nativeRestore:NativeRestoreProof|null=null;
-  if (purpose!=='pause-cleanup') {
-    recoveryScope=await bridgeCall(page,'read');
-    if (handScope) requireThat(recoveryScope.pageEpoch===handScope.pageEpoch && recoveryScope.sourceStream===handScope.sourceStream &&
-      recoveryScope.generation===handScope.generation && recoveryScope.lastStep===handScope.step,'AUTO_WIN_READBACK_STALE');
-    nativeRestore=await waitForNativeRestore(page,recoveryScope);
-  }
-  let readback=nativeRestore?await waitForRecoveryTable(page,profile,recoveryScope,nativeRestore):await inspectAutoWin(page,profile);
-  let clicked=false;
-  const assertNativeRestore=(current:any) => {
-    if (!nativeRestore) return;
-    assertRecoveryScope(current,recoveryScope);
-    requireThat((clicked || current.generation===recoveryScope.generation) &&
-      JSON.stringify(nativeRestoreProof(current))===JSON.stringify(nativeRestore),'AUTO_WIN_RECOVERY_NOT_READY');
-    requireThat(current.nativeRestoreRevision===readback.nativeRestoreRevision,'AUTO_WIN_READBACK_STALE');
+  purpose: 'initialize'|'resume'|'pause-cleanup'|'reconnect'|'new-hand' = 'resume', handScope?:AutoWinHandScope,
+  options:{nativeRecoveryRegion?:boolean}={}) {
+  const trace:EnsureTiming|undefined=process.env.MAJI_TIMING_TRACE==='1'?{phase:'scope',ackAgeMs:null,changedFields:[],captureMode:'none',captures:0}:undefined;
+  const started=trace?performance.now():0;
+  let succeeded=false;
+  const captureOptions:RecoveryCaptureOptions={nativeRegion:options.nativeRecoveryRegion===true,...(trace?{trace}:{})};
+  const inspect=async(table:boolean)=>(await collectAutoWinPixels(page,profile,table,undefined,undefined,captureOptions)).readback;
+  const ack=async(readback:AutoWinReadback)=>{
+    if(trace)trace.phase='ack';
+    try {return await bridgeCall(page,'ackAutoWin',readback);}
+    finally {if(trace){const age=Date.now()-Date.parse(readback.observedAt);trace.ackAgeMs=Number.isFinite(age)?age:null;}}
   };
-  if (nativeRestore) assertNativeRestore(await bridgeCall(page,'read'));
-  const desired=enabled?'enabled':'disabled';
-  if(readback.state==='unknown') {
-    await bridgeCall(page,'ackAutoWin',readback);
-    throw Error('AUTO_WIN_READBACK_UNKNOWN');
-  }
-  if (readback.state!==desired) {
-    const scope=await bridgeCall(page,'read');
-    const assertScope=(current:any,proof:AutoWinReadback) => {
-      assertNativeRestore(current);
-      requireThat(current.pageEpoch===scope.pageEpoch && current.sourceStream===scope.sourceStream && current.lastStep===scope.lastStep &&
-        current.controlEpoch===scope.controlEpoch && current.paused && current.connected && current.freshConnection &&
-        !current.handEnded && !current.matchEnded && !current.reason && !current.overflow &&
-        current.pageEpoch===proof.pageEpoch && current.generation===proof.generation && current.lastStep===proof.step &&
-        current.nativeRestoreRevision===proof.nativeRestoreRevision,
-      'AUTO_WIN_TOGGLE_REQUIRES_PAUSE');
-    };
-    assertScope(scope,readback);
-    const x=profile.button.x+profile.button.width/2,y=profile.button.y+profile.button.height/2;
-    await page.cdp!('Input.dispatchMouseEvent',{type:'mouseMoved',x,y});
-    // Moving the pointer crosses an asynchronous CDP boundary. Recheck before
-    // pressing so an old disabled readback cannot toggle a replacement page.
-    // CDP input is not atomic with this check; post-click scope/readback still applies.
-    assertScope(await bridgeCall(page,'read'),readback);
-    await page.cdp!('Input.dispatchMouseEvent',{type:'mousePressed',x,y,button:'left',clickCount:1});
-    await page.cdp!('Input.dispatchMouseEvent',{type:'mouseReleased',x,y,button:'left',clickCount:1});
-    clicked=true;
-    for (let count=0;count<5;count++) {
-      await new Promise(resolve=>setTimeout(resolve,100));
-      readback=await inspectAutoWin(page,profile,!!nativeRestore);
-      assertScope(await bridgeCall(page,'read'),readback);
-      if (readback.state===desired) break;
+  try {
+    requireThat(purpose!=='pause-cleanup' || !enabled, 'AUTO_WIN_PURPOSE_INVALID');
+    requireThat(purpose==='new-hand' ? !!handScope : handScope===undefined,'AUTO_WIN_PURPOSE_INVALID');
+    let recoveryScope:any=null,nativeRestore:NativeRestoreProof|null=null;
+    if (purpose!=='pause-cleanup') {
+      recoveryScope=await bridgeCall(page,'read');
+      if (handScope) requireAutoWinScope(recoveryScope.pageEpoch===handScope.pageEpoch && recoveryScope.sourceStream===handScope.sourceStream &&
+        recoveryScope.generation===handScope.generation && recoveryScope.lastStep===handScope.step,'AUTO_WIN_READBACK_STALE',
+        recoveryScope,{...handScope,lastStep:handScope.step},['pageEpoch','sourceStream','generation','lastStep'],trace);
+      if(trace)trace.phase='native-restore';
+      nativeRestore=await waitForNativeRestore(page,recoveryScope,trace);
     }
+    if(trace)trace.phase='recovery-table';
+    let readback=nativeRestore?await waitForRecoveryTable(page,profile,recoveryScope,nativeRestore,captureOptions):await inspect(false);
+    let clicked=false;
+    const assertNativeRestore=(current:any) => {
+      if (!nativeRestore) return;
+      assertRecoveryScope(current,recoveryScope,trace);
+      requireAutoWinScope((clicked || current.generation===recoveryScope.generation) &&
+        JSON.stringify(nativeRestoreProof(current))===JSON.stringify(nativeRestore),'AUTO_WIN_RECOVERY_NOT_READY',
+        current,recoveryScope,['generation','nativeRestoreRevision'],trace);
+      requireAutoWinScope(current.nativeRestoreRevision===readback.nativeRestoreRevision,'AUTO_WIN_READBACK_STALE',
+        current,readback,['nativeRestoreRevision'],trace);
+    };
+    if (nativeRestore) assertNativeRestore(await bridgeCall(page,'read'));
+    const desired=enabled?'enabled':'disabled';
+    if(readback.state==='unknown') {
+      await ack(readback);
+      throw Error('AUTO_WIN_READBACK_UNKNOWN');
+    }
+    if (readback.state!==desired) {
+      if(trace)trace.phase='toggle';
+      const scope=await bridgeCall(page,'read');
+      const assertScope=(current:any,proof:AutoWinReadback) => {
+        assertNativeRestore(current);
+        requireAutoWinScope(current.pageEpoch===scope.pageEpoch && current.sourceStream===scope.sourceStream && current.lastStep===scope.lastStep &&
+          current.controlEpoch===scope.controlEpoch && current.paused && current.connected && current.freshConnection &&
+          !current.handEnded && !current.matchEnded && !current.reason && !current.overflow &&
+          current.pageEpoch===proof.pageEpoch && current.generation===proof.generation && current.lastStep===proof.step &&
+          current.nativeRestoreRevision===proof.nativeRestoreRevision,
+        'AUTO_WIN_TOGGLE_REQUIRES_PAUSE',current,{...scope,pageEpoch:proof.pageEpoch,generation:proof.generation,
+          lastStep:proof.step,nativeRestoreRevision:proof.nativeRestoreRevision},AUTO_WIN_SCOPE_KEYS,trace);
+      };
+      assertScope(scope,readback);
+      const x=profile.button.x+profile.button.width/2,y=profile.button.y+profile.button.height/2;
+      await page.cdp!('Input.dispatchMouseEvent',{type:'mouseMoved',x,y});
+      // Moving the pointer crosses an asynchronous CDP boundary. Recheck before
+      // pressing so an old disabled readback cannot toggle a replacement page.
+      // CDP input is not atomic with this check; post-click scope/readback still applies.
+      assertScope(await bridgeCall(page,'read'),readback);
+      await page.cdp!('Input.dispatchMouseEvent',{type:'mousePressed',x,y,button:'left',clickCount:1});
+      await page.cdp!('Input.dispatchMouseEvent',{type:'mouseReleased',x,y,button:'left',clickCount:1});
+      clicked=true;
+      if(trace)trace.phase='toggle-readback';
+      for (let count=0;count<5;count++) {
+        await new Promise(resolve=>setTimeout(resolve,100));
+        readback=await inspect(!!nativeRestore);
+        assertScope(await bridgeCall(page,'read'),readback);
+        if (readback.state===desired) break;
+      }
+    }
+    requireThat(readback.state===desired,'AUTO_WIN_READBACK_FAILED');
+    if(trace)trace.phase='final-scope';
+    if (nativeRestore) assertNativeRestore(await bridgeCall(page,'read'));
+    const verified=await ack(readback);
+    succeeded=true;if(trace)trace.phase='complete';
+    return { ...readback, clicked, verified,...(nativeRestore?{nativeRestore}:{}) };
+  } finally {
+    if(trace)try {console.warn(JSON.stringify({event:'timing.auto-win-ensure',phase:trace.phase,succeeded,
+      totalMs:performance.now()-started,ackAgeMs:trace.ackAgeMs,changedFields:trace.changedFields,
+      captureMode:trace.captureMode,captures:trace.captures}));} catch { /* Diagnostics cannot change recovery or authorization. */ }
   }
-  requireThat(readback.state===desired,'AUTO_WIN_READBACK_FAILED');
-  if (nativeRestore) assertNativeRestore(await bridgeCall(page,'read'));
-  const verified=await bridgeCall(page,'ackAutoWin',readback);
-  return { ...readback, clicked, verified,...(nativeRestore?{nativeRestore}:{}) };
 }
 
-/** Read only: final prepare checks cannot click or accidentally reopen paused control. */
-export async function verifyAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE) {
-  const scope=await bridgeCall(page,'read');
-  const keys=['pageEpoch','sourceStream','gameUuid','handSha256','generation','lastStep','nativeRestoreRevision','controlEpoch','paused'];
-  for(let attempt=0;;attempt++) {
-    const readback=await inspectAutoWin(page,profile);
-    requireThat(readback.pageEpoch===scope.pageEpoch && readback.generation===scope.generation && readback.step===scope.lastStep &&
-      readback.nativeRestoreRevision===scope.nativeRestoreRevision,'AUTO_WIN_READBACK_STALE');
-    let verified;
-    try { verified=await bridgeCall(page,'ackAutoWin',readback); }
-    catch(error) {
-      if(attempt!==0 || !(error instanceof Error && error.message==='AUTO_WIN_READBACK_STALE'))throw error;
-      const current=await bridgeCall(page,'read');
-      // Encoding or transport can age a frame beyond the 1s acknowledgement
-      // limit. Reacquire once only if every original scope field still matches.
-      // A moving game window belongs to the session's ingress recovery, not
-      // this read-only verification. Never reuse or retimestamp the old image.
-      if(!keys.every(key=>current[key]===scope[key]) || !current.connected || !current.freshConnection ||
-          current.handEnded || current.matchEnded || current.reason || current.overflow)throw error;
-      continue;
+/** Read only: final prepare checks cannot click or accidentally reopen paused control.
+ * Atomic ACK is an explicit production-adapter optimization. The default keeps
+ * read/ack calls visible to diagnostic ports that enforce extra input policies. */
+export async function verifyAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE,
+  options:{atomicAck?:boolean}={}) {
+  const trace=process.env.MAJI_TIMING_TRACE==='1'?{started:performance.now(),attempts:[] as AutoWinTimingAttempt[]}:null;
+  let succeeded=false;
+  try {
+    const scope=await bridgeCall(page,'read');
+    const keys=['pageEpoch','sourceStream','gameUuid','handSha256','generation','lastStep','nativeRestoreRevision','controlEpoch','paused'];
+    for(let attempt=0;;attempt++) {
+      const timing:AutoWinTimingAttempt|undefined=trace?{mode:'none',captureMs:null,decodeMs:null,ackMs:null}:undefined;
+      if(timing)trace!.attempts.push(timing);
+      const captured=await collectAutoWinPixels(page,profile,false,options.atomicAck===true?scope:undefined,timing);
+      const {readback,ackError}=captured;
+      requireThat(readback.pageEpoch===scope.pageEpoch && readback.generation===scope.generation && readback.step===scope.lastStep &&
+        readback.nativeRestoreRevision===scope.nativeRestoreRevision,'AUTO_WIN_READBACK_STALE');
+      let verified;
+      try {
+        if(ackError)throw Error(ackError);
+        if(options.atomicAck===true)verified=captured.verified;
+        else {
+          const ackStarted=timing?performance.now():0;
+          try {verified=await bridgeCall(page,'ackAutoWin',readback);}
+          finally {if(timing)timing.ackMs=performance.now()-ackStarted;}
+        }
+      }
+      catch(error) {
+        if(attempt!==0 || !(error instanceof Error && error.message==='AUTO_WIN_READBACK_STALE'))throw error;
+        const current=await bridgeCall(page,'read');
+        // Encoding or transport can age a frame beyond the 1s acknowledgement
+        // limit. Reacquire once only if every original scope field still matches.
+        // A moving game window belongs to the session's ingress recovery, not
+        // this read-only verification. Never reuse or retimestamp the old image.
+        if(!keys.every(key=>current[key]===scope[key]) || !current.connected || !current.freshConnection ||
+            current.handEnded || current.matchEnded || current.reason || current.overflow)throw error;
+        continue;
+      }
+      requireThat(readback.state==='enabled','AUTO_WIN_UNVERIFIED');
+      succeeded=true;
+      return { ...readback,clicked:false,verified };
     }
-    requireThat(readback.state==='enabled','AUTO_WIN_UNVERIFIED');
-    return { ...readback,clicked:false,verified };
+  } finally {
+    if(trace) {
+      // Node-only, bounded phase diagnostics. No scope, image, RPC payload or
+      // exception text is logged; logging must never affect authorization.
+      try {console.warn(JSON.stringify({event:'timing.auto-win-verify',atomicAck:options.atomicAck===true,
+        succeeded,attempts:trace.attempts,totalMs:performance.now()-trace.started}));} catch { /* Diagnostics only. */ }
+    }
   }
 }

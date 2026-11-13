@@ -60,7 +60,7 @@ test('room flags cannot replace automatic switch readback and final verification
       const report = await acceptLivePage(h.page, { ...h.options, discardOnce:true });
       assert.equal(report.status,'blocked'); assert.equal(h.page.sends,0);
       assert.deepEqual(report.executionDiagnostic,failure==='final' ?
-        {phase:'prepare',code:'AUTO_WIN_UNVERIFIED',invocationStarted:false}:null);
+        {phase:'preflight',code:'AUTO_WIN_UNVERIFIED',invocationStarted:false}:null);
       assert.equal(h.page.calls.includes('prepare'),false);
       assert.equal(h.page.controls.at(-1)?.paused,true);
       const db = new DatabaseSync(h.page.databasePath,{readOnly:true});

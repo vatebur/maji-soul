@@ -9,6 +9,7 @@ import { ActionExecutor, type ProductionTransport } from '../application/game/ex
 import { bridgeCall, EgoProductionTransport, type EgoPagePort } from '../adapters/majsoul/ego-transport.ts';
 import type { ActionAttempt, FriendRoom } from '../domain/game/types.ts';
 import { digest, requireThat } from '../domain/game/value.ts';
+import { roomClockSeconds } from '../domain/game/room-clock.ts';
 import { exportLiveCapture } from './live-capture.ts';
 import { requireLiveActionScope, selectLiveAction, validateLiveActionSelection, type LiveActionSelection } from './live-action-selection.ts';
 import { isBoundaryProofFailure, LiveBoundaryFenceChallenge } from './live-boundary-fence.ts';
@@ -67,12 +68,14 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
   let liveSession: LiveGameSession | undefined;
   let runner: Pick<AkagiRunner, 'init' | 'decide' | 'close'> | undefined;
   let beganAtMatchOpening = false;
-  const automated = { attempted: 0, confirmed: 0, confirmedDiscards: 0, acceptedPasses: 0, skippedExpiredWindows: 0 };
+  const automated = { attempted: 0, confirmed: 0, confirmedDiscards: 0, acceptedPasses: 0, skippedExpiredWindows: 0,
+    skippedUnverifiedTimingWindows: 0 };
   try {
     actor = await GameActor.open(storage, sessionId, randomUUID());
     const transport = boundaryChallenge ? undefined : new EgoProductionTransport(page);
     if (transport) {
       const guarded: ProductionTransport = { kind: 'live', invalidate: c => transport.invalidate(c),
+        preflight: (snapshot, intent, signal) => transport.preflight(snapshot, intent, signal),
         prepare: async (command, snapshot, intent) => {
           const send = await transport.prepare(command, snapshot, intent);
           return async action => {
@@ -181,20 +184,25 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
         await new Promise(r => setTimeout(r, 100));
       }
     }
-    const pump = async () => {
+    const pump = async (finalPause=false) => {
       const handStarts = session.counts.handStarts;
-      await session.pump();
+      if(finalPause)await session.pauseAndDrain();else await session.pump();
       if (session.counts.handStarts>handStarts) boundaryChallenge?.checkAfterHandStart(actor!);
     };
     const observeUntil = performance.now()+observeMs;
     let previousWindow: { sourceCursor: string; gameHandKey: string; until: number } | undefined;
     let timingRetry: { sourceCursor: string | null; gameHandKey: string | null; attempts: number; until: number } | undefined;
     let awaitingAutoWin: { cursor: string; until: number } | undefined;
+    // A local permit can expire while the server still allows the full turn,
+    // and an accepted pass can wait for another seat's unused time bank. This
+    // bounds ingestion only; it never grants or extends an action deadline.
+    const [fixedSeconds, addSeconds] = roomClockSeconds(options.room.rules.displayTimeSetting);
+    const advancementWaitMs = (options.room.rules.displayTimeSetting === '5+20' ? 28_000 : (fixedSeconds + addSeconds) * 1_000) + 10_000;
     const skipExpiredWindow = async (sourceCursor: string, gameHandKey: string) => {
       await session.skipExpiredWindow(sourceCursor, gameHandKey);
       automated.skippedExpiredWindows++;
       // Keep ingesting while this exact offer closes; never resample or retry it.
-      previousWindow = { sourceCursor, gameHandKey, until: performance.now() + 10_000 };
+      previousWindow = { sourceCursor, gameHandKey, until: performance.now() + advancementWaitMs };
     };
     while (!signal?.aborted && observeMs>0 && performance.now()<observeUntil && actor.projection.matchStatus!=='finished') {
       await pump();
@@ -215,6 +223,18 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
             } else {
               awaitingAutoWin = undefined;
               const fresh = await session.synchronize(true, true).catch(async error => {
+                if (error instanceof Error && ['COUNTDOWN_PROTOCOL_MISMATCH','COUNTDOWN_BANK_MISMATCH'].includes(error.message)) {
+                  // Pixel/protocol disagreement still rejects the timing proof.
+                  // Only this paused, zero-send, exact-window rejection may
+                  // wait for authoritative advancement instead of ending play.
+                  await session.skipUnverifiedTimingWindow(error,projection.sourceCursor!,projection.gameHandKey!);
+                  automated.skippedUnverifiedTimingWindows++;
+                  timingRetry=undefined;
+                  previousWindow={sourceCursor:projection.sourceCursor!,gameHandKey:projection.gameHandKey!,
+                    until:performance.now()+advancementWaitMs};
+                  await pump();
+                  return null;
+                }
                 if (error instanceof Error && error.message === 'AUTO_WIN_WINDOW_EXPIRED' && !actor!.control.needsSync) {
                   await skipExpiredWindow(projection.sourceCursor!, projection.gameHandKey!);
                   await pump();
@@ -277,15 +297,21 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
                   automated.confirmed++;
                   if (selected.action.kind === 'discard' || selected.action.kind === 'riichi-discard') automated.confirmedDiscards++;
                 }
-                previousWindow = { sourceCursor: snapshot.sourceCursor, gameHandKey: fresh.sync.gameHandKey, until };
+                previousWindow = { sourceCursor: snapshot.sourceCursor, gameHandKey: fresh.sync.gameHandKey,
+                  until: selected.action.kind === 'pass' ? performance.now() + advancementWaitMs : until };
               } catch (error) {
                 const diagnostic = executor!.diagnostic;
-                const expired = error instanceof Error && ['DEADLINE_EXCEEDED', 'PERMIT_EXPIRED'].includes(error.message);
+                const refusedExpiry = diagnostic?.code === 'TRANSPORT_NOT_SENT' &&
+                  ['DEADLINE_EXCEEDED', 'PERMIT_EXPIRED', 'AUTO_WIN_READBACK_EXPIRED'].includes(diagnostic.notSentReason ?? '') &&
+                  attempt?.status === 'not-dispatched' && attempt.receipt?.delivery === 'not-sent';
+                const expired = error instanceof Error && (['DEADLINE_EXCEEDED', 'PERMIT_EXPIRED'].includes(error.message) ||
+                  error.message === 'TRANSPORT_NOT_SENT' && refusedExpiry);
                 const notSent = !executing || diagnostic && !diagnostic.invocationStarted &&
                   ['DEADLINE_EXCEEDED', 'PERMIT_EXPIRED'].includes(diagnostic.code) &&
-                  (!attempt || attempt.status === 'not-dispatched' && attempt.receipt?.delivery === 'not-sent');
+                  (!attempt || attempt.status === 'not-dispatched' && attempt.receipt?.delivery === 'not-sent') || refusedExpiry;
                 // Expiration before persistence, after strategy, or during
-                // prepare is recoverable only when dispatch never started.
+                // final page preparation is recoverable only with zero-send
+                // proof. A refused browser expiry never authorizes a retry.
                 if (!expired || !notSent || actor.control.needsSync) throw error;
                 await skipExpiredWindow(projection.sourceCursor!, fresh.sync.gameHandKey);
               }
@@ -295,11 +321,10 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       }
       await new Promise(r=>setTimeout(r,100));
     }
-    actor.pause(); await actor.awaitControlBarrier();
     // Settle ingress that raced the observation deadline or final pause. This is
     // a bounded drain; later changes make the report blocked rather than extend
     // observation indefinitely or claim an unobserved boundary was accepted.
-    await pump();
+    await pump(true);
     const inspection = await storage.inspect(sessionId);
     const attempt = attemptId ? await storage.getAttempt(attemptId) : null;
     const captures = [];
@@ -327,8 +352,9 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       attempt?.receipt?.delivery==='accepted' && !!attempt.confirmationEventId;
     const forcedRiichiDiscards = [...session.forcedRiichiDiscards].filter(cursor => !initialForcedRiichiDiscards.has(cursor));
     const expiredWindowDiscards = [...session.expiredWindowDiscards];
+    const unverifiedTimingWindowDiscards = [...session.unverifiedTimingWindowDiscards];
     const unmatchedOwnDiscards = inspection.counts.outbox - initialOwnDiscards - automated.confirmedDiscards - forcedRiichiDiscards.length -
-      (options.resumeMatch === true ? expiredWindowDiscards.length : 0);
+      (options.resumeMatch === true ? expiredWindowDiscards.length + unverifiedTimingWindowDiscards.length : 0);
     const matchLedger = akagi && actor.projection.gameMatchKey ? await storage.inspectMatch(actor.projection.gameMatchKey) : null;
     const observationLimitReached = akagi && !signal?.aborted && performance.now() >= observeUntil &&
       actor.projection.matchStatus === 'playing';
@@ -375,7 +401,7 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       lifecycle: { ...liveSession.counts, handOrdinal:actor.projection.handOrdinal,handStatus:actor.projection.handStatus,
         matchStatus:actor.projection.matchStatus,matchEndPending:actor.projection.matchEndPending ?? false,
         awaitingSettlement:liveSession.awaitingSettlement,recovering:liveSession.recovering },
-      ...(akagi ? { automated, beganAtMatchOpening, initialOwnDiscards, forcedRiichiDiscards, expiredWindowDiscards, unmatchedOwnDiscards, matchCompletion, gameMatchKey: inspection.projection.gameMatchKey, roomId: options.room.roomId,
+      ...(akagi ? { automated, beganAtMatchOpening, initialOwnDiscards, forcedRiichiDiscards, expiredWindowDiscards, unverifiedTimingWindowDiscards, unmatchedOwnDiscards, matchCompletion, gameMatchKey: inspection.projection.gameMatchKey, roomId: options.room.roomId,
         matchResult: inspection.projection.matchResult ?? null } : {}),
       automationEnabled: akagi, captureDirectory: capture.directory, captureDirectories:captures.map(c=>c.directory),
       reportPath: join(directory, 'report.json') };
@@ -402,7 +428,8 @@ export async function acceptLivePage(page: EgoPagePort, options: LiveAcceptanceO
       ...(boundaryChallenge ? {boundaryFenceChallenge:boundaryChallenge.report} : {}),
       autoWinRecovery:liveSession?.autoWinRecovery ?? null,autoWinRecoveries:liveSession?.autoWinRecoveries ?? [],
       browserStatsBefore:diagnostics?.browserStatsBefore ?? null,browserStatsAfter:summarizeBrowserStats(pageAfter?.stats),
-      ...(akagi ? { automated, beganAtMatchOpening, gameMatchKey: actor?.projection.gameMatchKey ?? null, roomId: options.room.roomId } : {}),
+      ...(akagi ? { automated, beganAtMatchOpening, unverifiedTimingWindowDiscards:[...(liveSession?.unverifiedTimingWindowDiscards ?? [])],
+        gameMatchKey: actor?.projection.gameMatchKey ?? null, roomId: options.room.roomId } : {}),
       automationEnabled: akagi, reportPath: join(directory, 'report.json') };
     await writeFile(report.reportPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
     return report;

@@ -28,7 +28,7 @@ ssh root@192.168.1.2 'umask 027; cat > /etc/maji-soul/app.env; chown root:maji-s
 
 `FISH_API_KEY`、`FISH_REFERENCE_ID` 用于中文语音，模型字段用于讲解。B站直接弹幕需要额外的登录 cookie 文件与 `--bili-direct`，部署不会自动传输浏览器账号或 B站 cookie。服务默认启用语音；密钥缺失会明确启动失败，日志不会输出密钥。
 
-直播参数在 `/etc/maji-soul/live.json`。样例中的 `roomId: pending` 是启动占位符，房间准备流程会读取实际房间号。`observeMs` 只是单次观察工作的分片时长，不是直播运行上限。
+直播参数在 `/etc/maji-soul/live.json`。样例中的 `roomId: pending` 是启动占位符，房间准备流程会读取实际房间号。`room.rules.displayTimeSetting` 的部署样例为 `"5+20"`；也支持 `"60+0"`，每次操作上限一分钟，校验完成后立即出牌。时钟由新房的原生选项设置并读取服务器规则确认；修改文件后需重启项目读取配置，不会改变进行中对局的规则。`observeMs` 只是单次观察工作的分片时长，不是直播运行上限。
 
 ## 登录和打开控制台
 

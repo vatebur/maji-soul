@@ -64,7 +64,7 @@ test('worker migration, strict ingress, atomic deduplication and rollback preser
     assert.equal(inspection.counts.events, 4); assert.equal(inspection.counts.outbox, 0); assert.deepEqual(inspection.projection, env.projection);
     assert.equal((await stat(env.path)).mode & 0o777, 0o600);
     const raw = new DatabaseSync(env.path, { readOnly: true });
-    try { assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 4); assert.equal(raw.prepare('PRAGMA journal_mode').get()?.journal_mode, 'wal'); }
+    try { assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 5); assert.equal(raw.prepare('PRAGMA journal_mode').get()?.journal_mode, 'wal'); }
     finally { raw.close(); }
   } finally { await env.cleanup(); }
 });
@@ -269,7 +269,7 @@ test('v1 migration preserves populated claims, references and contract evidence'
     } finally { migrated.close(); }
     const checked = new DatabaseSync(legacyPath, { readOnly: true });
     try {
-      assert.equal(checked.prepare('PRAGMA user_version').get()?.user_version, 4);
+      assert.equal(checked.prepare('PRAGMA user_version').get()?.user_version, 5);
       assert.deepEqual(checked.prepare('PRAGMA foreign_key_check').all(), []);
       assert.equal(checked.prepare('SELECT evidence_kind FROM action_confirmations').get()?.evidence_kind, 'contract-test');
     } finally { checked.close(); }

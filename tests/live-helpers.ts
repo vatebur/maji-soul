@@ -81,6 +81,20 @@ export class ScriptedPage implements EgoPagePort {
       if (this.captureRace) return { ...cursor, generation: 1, lastStep: 1, records: [{ kind: 'action' }] };
       const records = this.#records.splice(0); return { ...cursor, records };
     }
+    if (method === 'dispatchPrepared') {
+      // Model the actual page's combined guard, retaining overrides used by
+      // tests to inject a refusal before any simulated network send.
+      let prepared;
+      try {
+        prepared = await this.evaluate(_source,{method:'prepare',argument:input});
+        if(Date.parse(input.command.expiresAt)<=Date.now())throw Error('PERMIT_EXPIRED');
+      } catch(error) {
+        const allowed=['DEADLINE_EXCEEDED','PERMIT_EXPIRED','FENCE_STALE','INGRESS_PENDING','AUTO_WIN_UNVERIFIED'];
+        const code=error instanceof Error && allowed.includes(error.message)?error.message:'BRIDGE_GUARD_FAILED';
+        return{callId:`bridge:1:not-sent:${code}:00000000-0000-4000-8000-000000000000`,delivery:'not-sent',observedAt:new Date().toISOString()};
+      }
+      return this.evaluate(_source,{method:'dispatch',argument:{command:input.command,token:prepared.token}});
+    }
     if (method === 'prepare') {
       assert.equal(this.#timingVerified,true,'toggle input revoked timing; acknowledge after enabling');
       // The page must receive an intent that the actual worker has already committed.

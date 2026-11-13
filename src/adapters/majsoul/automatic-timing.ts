@@ -1,7 +1,8 @@
 import { bridgeCall, type EgoPagePort } from './ego-transport.ts';
-import { sampleSyncOperationTiming, validateCountdownCalibration, validateCountdownUnitPair,
+import { sampleSyncOperationTiming, validateCountdownCalibration, validateCountdownSample, validateCountdownUnitPair,
   type AutomaticCountdownSample, type CountdownCalibrationScope, type SyncCountdownEvidence } from './operation-timing.ts';
 import { inspectClientCountdown } from './countdown.ts';
+import type { AutoWinReadback } from './auto-win.ts';
 import { canonical, digest, requireThat } from '../../domain/game/value.ts';
 
 // A page-owned cache is not exposed through the bridge API. It contains only
@@ -32,14 +33,21 @@ function scopeFromReads(raw: any, before: any, after: any, clientProfile: string
  * pair can be reused only in its original page/restore/game/room/rules/hand,
  * with the same wall-to-monotonic offset and at most five minutes of age. */
 async function collect(page: EgoPagePort) {
+  const traceStarted=performance.now();
   const samples: AutomaticCountdownSample[] = [];
+  let autoWinReadback:AutoWinReadback|null=null;
+  let mismatches = 0;
+  const retryUntil = performance.now() + 7_000;
   let raw = await bridgeCall(page, 'sync');
   const current = raw.game_restore?.actions?.at(-1)?.payload;
-  if (raw.is_end || ['ActionHule','ActionNoTile','ActionLiuJu'].includes(raw.game_restore?.actions?.at(-1)?.name) || !current?.operation?.operation_list?.length) {
-    // A terminal/empty restore cannot carry a calibration into a later hand.
+  if (raw.is_end || ['ActionHule','ActionNoTile','ActionLiuJu'].includes(raw.game_restore?.actions?.at(-1)?.name)) {
+    // Ended hands explicitly retire their unit evidence.
     calibrations.delete(page);
-    return { raw, evidence: null };
+    return { raw, evidence: null, autoWinReadback };
   }
+  // Another seat's turn or a superseded offer says nothing about the measured
+  // unit. A later offered window must still revalidate every calibration scope.
+  if (!current?.operation?.operation_list?.length) return { raw, evidence: null, autoWinReadback };
   for (let i = 0; i < 2; i++) {
     if (i) {
       // A bounded wait establishes the elapsed unit through a measured difference.
@@ -49,30 +57,70 @@ async function collect(page: EgoPagePort) {
       await new Promise(resolve => setTimeout(resolve, delay));
       raw = await bridgeCall(page, 'sync');
     }
-    let display, before;
+    let sample: AutomaticCountdownSample;
     const settleMs = i === 0 ? current.operation.time_fixed === 8000 ? 1800 : 2500 : 1000;
     // Long-clock windows use the same entrance animation as short clocks.
     // Wait only for visible digits, retaining the same window and generation.
     const until = performance.now() + settleMs;
     for (;;) {
       const operation = raw.game_restore?.actions?.at(-1)?.payload?.operation;
-      before = await bridgeCall(page, 'read');
-      try { display = await inspectClientCountdown(page, operation?.time_add > 0); break; }
+      const before = await bridgeCall(page, 'read');
+      try {
+        const display = await inspectClientCountdown(page, operation?.time_add > 0, {nativeRegion:true});
+        requireThat(display.pageEpoch === raw.pageEpoch && display.generation === raw.generation, 'COUNTDOWN_SAMPLE_STALE');
+        const after = await bridgeCall(page, 'read');
+        const scope = scopeFromReads(raw, before, after, display.profileVersion);
+        if (scope) raw = { ...raw, timingScope: scope };
+        sample = sampleSyncOperationTiming(raw, display);
+        if(process.env.MAJI_TIMING_TRACE==='1') {
+          try { console.warn(JSON.stringify({event:'timing.automatic-sample',step:sample.step,
+            fixedMs:sample.fixedMs,addMs:sample.addMs,passedWaitingTime:sample.passedWaitingTime,
+            syncRttMs:sample.receivedMonoMs-sample.requestedMonoMs,
+            wireToCaptureStartMs:sample.displaySampledMonoMs-sample.receivedMonoMs,
+            collectionMs:performance.now()-traceStarted,sampleIndex:i})); } catch { /* Diagnostics never control timing or gameplay. */ }
+        }
+        try { validateCountdownSample(sample); }
+        catch (error) {
+          // Keep the rejected wire/display values even when collection fails
+          // before the worker receives an acquisition. Never log game payloads.
+          if (error instanceof Error && ['COUNTDOWN_PROTOCOL_MISMATCH','COUNTDOWN_BANK_MISMATCH'].includes(error.message)) {
+            try { console.warn(JSON.stringify({ event:'countdown.sample-rejected',code:error.message,
+              pageEpoch:sample.pageEpoch,generation:sample.generation??null,step:sample.step,
+              passedWaitingTime:sample.passedWaitingTime,fixedMs:sample.fixedMs,addMs:sample.addMs,
+              displayedRemainingMs:sample.displayedRemainingMs,displayedBankMs:sample.displayedBankMs??null,
+              requestedMonoMs:sample.requestedMonoMs,receivedMonoMs:sample.receivedMonoMs,
+              displaySampledMonoMs:sample.displaySampledMonoMs })); } catch { /* Diagnostic output never controls gameplay. */ }
+          }
+          throw error;
+        }
+        // Only the latest accepted image travels with the acquisition. The
+        // unit-calibration cache never retains or refreshes this visual proof.
+        autoWinReadback=display.autoWinReadback;
+        break;
+      }
       catch (error) {
         const timerNotVisible = error instanceof Error && ['COUNTDOWN_LAYOUT_UNVERIFIED', 'COUNTDOWN_DIGITS_UNREADABLE',
           'COUNTDOWN_GLYPH_UNVERIFIED', 'COUNTDOWN_BANK_UNREADABLE'].includes(error.message);
-        if (!timerNotVisible || performance.now() >= until) throw error;
+        const mismatch = error instanceof Error && ['COUNTDOWN_PROTOCOL_MISMATCH','COUNTDOWN_BANK_MISMATCH'].includes(error.message);
+        if (mismatch) {
+          if (++mismatches > 2 || performance.now() >= retryUntil) throw error;
+        } else if (!timerNotVisible || performance.now() >= until) throw error;
         await new Promise(resolve => setTimeout(resolve, 150));
         const next = await bridgeCall(page, 'sync');
         requireThat(next.pageEpoch === raw.pageEpoch && next.generation === raw.generation && next.step === raw.step, 'COUNTDOWN_SAMPLE_STALE');
+        // Rejected pixels can be an animation from the previous offer. Wait
+        // for matching pixels only within the same connection/game/hand/rules.
+        if (mismatch) {
+          const current = await bridgeCall(page, 'read');
+          const keys = ['pageEpoch','generation','lastStep','nativeRestoreRevision','sourceStream','gameUuid','controlEpoch'];
+          requireThat(keys.every(key => current[key] === before[key]) && next.gameUuid === raw.gameUuid &&
+            canonical(next.authSummary ?? null) === canonical(raw.authSummary ?? null) &&
+            canonical(next.game_restore?.actions?.find((a:any) => a.name === 'ActionNewRound') ?? null) ===
+              canonical(raw.game_restore?.actions?.find((a:any) => a.name === 'ActionNewRound') ?? null), 'COUNTDOWN_SAMPLE_STALE');
+        }
         raw = next;
       }
     }
-    requireThat(display.pageEpoch === raw.pageEpoch && display.generation === raw.generation, 'COUNTDOWN_SAMPLE_STALE');
-    const after = await bridgeCall(page, 'read');
-    const scope = scopeFromReads(raw, before, after, display.profileVersion);
-    if (scope) raw = { ...raw, timingScope: scope };
-    const sample = sampleSyncOperationTiming(raw, display);
     samples.push(sample);
     if (i === 0) {
       const cached = calibrations.get(page);
@@ -81,7 +129,7 @@ async function collect(page: EgoPagePort) {
           validateCountdownCalibration(sample, cached);
           const evidence: SyncCountdownEvidence = { source: 'automatic-client-countdown', samples,
             calibration: { source: 'observed-unit-pair-v1', samples: structuredClone(cached) } };
-          return { raw, evidence };
+          return { raw, evidence, autoWinReadback };
         } catch (error) {
           // A changed scope/clock/lifetime needs a new unit measurement. Other
           // errors (such as disagreement with current pixels) remain failures.
@@ -99,10 +147,13 @@ async function collect(page: EgoPagePort) {
   // still derives that separately and can only report COUNTDOWN_EXPIRED.
   validateCountdownUnitPair(samples);
   if (samples.every(sample => sample.scope)) calibrations.set(page, structuredClone(samples));
-  return { raw, evidence };
+  return { raw, evidence, autoWinReadback };
 }
 
 export async function collectAutomaticTiming(page: EgoPagePort) {
-  try { return await collect(page); }
-  catch (error) { calibrations.delete(page); throw error; }
+  // A rejected current image cannot authorize anything, but does not invalidate
+  // the independent, previously verified unit pair. Every subsequent use runs
+  // the full fresh-sample, scope, lifetime and clock checks above; its age is
+  // never renewed by retries or reuse.
+  return collect(page);
 }

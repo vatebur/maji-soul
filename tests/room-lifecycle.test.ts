@@ -5,25 +5,27 @@ import {invitation,invitationCount} from '../src/application/live/recruitment.ts
 import {buildPhase1Fixture} from '../scripts/build-phase1-fixtures.ts';
 import type {AutomationView} from '../src/app/console/automation.ts';
 const configured=buildPhase1Fixture().events.find(e=>e.type==='RoomVerified')!.payload.room;
+configured.rules.displayTimeSetting='5+20';
 const page={evaluate:async()=>null};
 const mode={mode:2,detail_rule:{time_fixed:5,time_add:20,dora_count:3,init_point:25000}};
-function harness(){
+function harness(roomMode=mode){
   let now=0,exists=false,humans=1,robots=0,roomId='89160',reloaded=0;
-  const patches:Partial<AutomationView>[]=[],fills:number[]=[],removals:number[]=[],clicks:string[]=[];
+  const patches:Partial<AutomationView>[]=[],fills:number[]=[],removals:number[]=[],clicks:string[]=[],clocks:string[]=[];
   const controller=new AbortController();
   const {dismissNotice:_dismissNotice,...baseDriver}=roomDriver;
   const driver:typeof roomDriver={...baseDriver,now:()=>now,sleep:async(ms)=>{now+=ms;},
     install:async()=>{reloaded++;exists=true;return{} as any;},
     screen:async()=>({screen:'create',width:2036,height:918}),
     click:async(_page,screen)=>{clicks.push(screen);exists=true;},
+    create:async(_page,clock,signal)=>{assert.equal(signal,controller.signal);clocks.push(clock);clicks.push('create');exists=true;},
     call:async(_page,method)=>{
       if(method==='read')return{connected:false};
       if(method==='fillRoom'){fills.push(now);robots++;}
       if(method==='clearRoomRobots'){removals.push(now);robots--;}
       if(!exists)throw Error('ROOM_NOT_READY');
-      return{roomId,owned:true,maxPlayers:4,humans,robots,playing:false,ready:true,mode};
+      return{roomId,owned:true,maxPlayers:4,humans,robots,playing:false,ready:true,mode:roomMode};
     }};
-  return {driver,controller,patches,fills,removals,clicks,publish:async(p:Partial<AutomationView>)=>{patches.push(p);},
+  return {driver,controller,patches,fills,removals,clicks,clocks,publish:async(p:Partial<AutomationView>)=>{patches.push(p);},
     get now(){return now;},get reloaded(){return reloaded;},set exists(v:boolean){exists=v;},set humans(v:number){humans=v;},set robots(v:number){robots=v;},set roomId(v:string){roomId=v;}};
 }
 test('every round frees computers left in the same room before starting a fresh countdown',async()=>{
@@ -90,6 +92,42 @@ test('default creation reads a changing room ID, waits three minutes, then fills
   assert.deepEqual(h.clicks,['create']);assert.equal(room!.roomId,'89160');assert.equal(room!.rules.length,'south');
   assert.equal(room!.rules.displayTimeSetting,'5+20');assert.equal(room!.rules.computerSeats,1);
   assert.deepEqual(h.fills,[180_500]);assert.equal(h.patches.find(p=>p.status==='recruiting')!.roomId,'89160');
+});
+test('the sixty-second target is verified before recruiting or filling its room',async()=>{
+  const target=structuredClone(configured);target.rules.displayTimeSetting='60+0';
+  const sixty={...mode,detail_rule:{...mode.detail_rule,time_fixed:60,time_add:0}};
+  const h=harness(sixty);
+  const room=await prepareAudienceRoom(page,target,h.controller.signal,h.publish,h.driver);
+  assert.equal(room!.rules.displayTimeSetting,'60+0');assert.equal(h.now,180_500);assert.deepEqual(h.clocks,['60+0']);
+  const wrong=harness();wrong.exists=true;
+  await assert.rejects(prepareAudienceRoom(page,target,wrong.controller.signal,wrong.publish,wrong.driver),/DEFAULT_ROOM_RULES_MISMATCH/);
+  assert.deepEqual(wrong.patches,[]);assert.deepEqual(wrong.fills,[]);assert.deepEqual(wrong.removals,[]);
+});
+test('room clock changes in robot responses cannot escape final verification',async()=>{
+  for(const stage of ['clearRoomRobots','fillRoom']){
+    const h=harness();h.exists=true;if(stage==='clearRoomRobots')h.robots=1;
+    const call=h.driver.call;
+    h.driver.call=async(p,method,arg)=>{
+      const value=await call(p,method,arg);
+      return method===stage?{...value,mode:{...mode,detail_rule:{...mode.detail_rule,time_fixed:60,time_add:0}}}:value;
+    };
+    await assert.rejects(prepareAudienceRoom(page,configured,h.controller.signal,h.publish,h.driver),/DEFAULT_ROOM_RULES_MISMATCH/);
+    assert.ok(h.fills.length<=1);
+  }
+});
+test('joining a running game identifies the complete supported clock rather than assuming a long clock',async()=>{
+  for(const [fixed,add,clock] of [[5,20,'5+20'],[60,0,'60+0'],[300,0,'300+0'],[10,20,undefined],[60,20,undefined]] as const){
+    const h=harness();
+    h.driver.call=async(_p,method)=>{
+      assert.equal(method,'read');
+      return{connected:true,matchEnded:false,authSummary:{roomId:'89160',robotSeatCount:3,
+        gameConfig:{mode:{...mode,detail_rule:{...mode.detail_rule,time_fixed:fixed,time_add:add}}}}};
+    };
+    const result=prepareAudienceRoom(page,configured,h.controller.signal,h.publish,h.driver);
+    if(clock)assert.equal((await result)!.rules.displayTimeSetting,clock);
+    else await assert.rejects(result,/FRIEND_ROOM_CLOCK_UNSUPPORTED/);
+    assert.deepEqual(h.clicks,[]);assert.deepEqual(h.fills,[]);
+  }
 });
 test('a new room restarts recruitment and cannot fill based on an older room countdown',async()=>{
   const h=harness();h.exists=true;const sleep=h.driver.sleep;
@@ -196,6 +234,17 @@ test('a positively confirmed ended-game notice allows preparation to continue wi
   const prepared=await prepareAudienceRoom(page,configured,h.controller.signal,h.publish,h.driver);
   assert.equal(prepared!.roomId,'89160');assert.equal(dismissals,1);assert.equal(h.reloaded,0);assert.deepEqual(h.clicks,[]);
   assert.deepEqual(h.fills,[180_000,180_000,180_000]);
+});
+
+test('deferring a notice sample does not renew the preparation deadline or claim progress',async()=>{
+  const h=harness(),call=h.driver.call;let inspections=0;
+  h.driver.call=async(p,method,arg)=>method==='read'?{...noticeScope,generation:inspections+3}:call(p,method,arg);
+  h.driver.screen=async()=>({screen:'unknown',width:1919,height:992});
+  h.driver.dismissNotice=async()=>{inspections++;return false;};
+  await assert.rejects(prepareAudienceRoom(page,configured,h.controller.signal,h.publish,h.driver),/LOGIN_REQUIRED/);
+  assert.ok(inspections>1);assert.equal(h.now,90_000);assert.equal(h.reloaded,0);
+  assert.deepEqual(h.clicks,[]);assert.deepEqual(h.fills,[]);
+  assert.equal(h.patches.some(p=>p.lastProgressAt),false);
 });
 
 test('an unknown popup or an active executor cannot authorize a notice dismissal or a room click',async()=>{

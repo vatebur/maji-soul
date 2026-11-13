@@ -71,7 +71,76 @@ test('lossless Linux screenshot optimization preserves geometry and explicit cap
     assert.equal(socket.sent.at(-1).params.optimizeForSpeed, false);
     await page.cdp('Page.captureScreenshot', { format: 'jpeg', quality: 60 });
     assert.deepEqual(socket.sent.at(-1).params, { format: 'jpeg', quality: 60 });
+    await page.captureViewportPng();
+    assert.deepEqual(socket.sent.at(-1).params, { format: 'png', fromSurface: false,
+      captureBeyondViewport: false, optimizeForSpeed: true });
   } finally { page.close(); }
+});
+
+test('native region capture requires this session to own an unscaled viewport and validates its bounds', async t => {
+  mocks(t);
+  const page = await ChromiumPage.connect('http://127.0.0.1:9222'), socket = Socket.current;
+  const region = { x: 211, y: 464, width: 58, height: 266 };
+  try {
+    await assert.rejects(page.captureViewportPngRegion(region), /BROWSER_REGION_CAPTURE_UNAVAILABLE/);
+    assert.equal(socket.sent.some(request => request.method === 'Page.captureScreenshot'), false);
+    await page.cdp('Emulation.setDeviceMetricsOverride', { width: 2036, height: 918, deviceScaleFactor: 1, mobile: false });
+    await page.captureViewportPngRegion(region);
+    assert.deepEqual(socket.sent.at(-1).params, { format: 'png', fromSurface: true, captureBeyondViewport: false,
+      optimizeForSpeed: true, clip: { ...region, scale: 1 } });
+    const sent = socket.sent.length;
+    for (const bad of [{ ...region, width: 0 }, { ...region, x: -1 }, { ...region, y: 0.5 }, { ...region, width: 2036 }])
+      await assert.rejects(page.captureViewportPngRegion(bad), /BROWSER_SCREENSHOT_REGION_INVALID/);
+    assert.equal(socket.sent.length, sent);
+    await page.cdp('Emulation.setDeviceMetricsOverride', { width: 2036, height: 918, deviceScaleFactor: 2, mobile: false });
+    await assert.rejects(page.captureViewportPngRegion(region), /BROWSER_REGION_CAPTURE_UNAVAILABLE/);
+    await page.cdp('Emulation.clearDeviceMetricsOverride');
+    await assert.rejects(page.captureViewportPngRegion(region), /BROWSER_REGION_CAPTURE_UNAVAILABLE/);
+  } finally { page.close(); }
+});
+
+test('full, native region, direct screenshots and viewport changes serialize and a failure releases the queue', async t => {
+  mocks(t);
+  const page = await ChromiumPage.connect('http://127.0.0.1:9222'), socket = Socket.current;
+  try {
+    await page.cdp('Emulation.setDeviceMetricsOverride', { width: 2036, height: 918, deviceScaleFactor: 1, mobile: false });
+    socket.reply = false;
+    const baseline = socket.sent.length, full = page.captureViewportPng();
+    const region = { x: 211, y: 464, width: 58, height: 266 }, cropped = page.captureViewportPngRegion(region);
+    const refused = assert.rejects(cropped, /BROWSER_COMMAND_FAILED/);
+    region.width = 999;
+    const direct = page.cdp('Page.captureScreenshot', { format: 'jpeg', quality: 60 });
+    const cleared = page.cdp('Emulation.clearDeviceMetricsOverride');
+    assert.equal(socket.sent.length, baseline + 1);
+    const read = page.evaluate('42');
+    assert.equal(socket.sent.at(-1).method, 'Runtime.evaluate');
+    socket.receive({ id: socket.sent.at(-1).id, result: { result: { value: 42 } } });
+    await read;
+    socket.receive({ id: socket.sent[baseline].id, result: { data: 'whole' } });
+    assert.deepEqual(await full, { data: 'whole' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(socket.sent.at(-1).params.clip, { x: 211, y: 464, width: 58, height: 266, scale: 1 });
+    socket.receive({ id: socket.sent.at(-1).id, error: { message: 'private' } });
+    await refused; await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(socket.sent.at(-1).params, { format: 'jpeg', quality: 60 });
+    socket.receive({ id: socket.sent.at(-1).id, result: { data: 'jpeg' } });
+    await direct; await new Promise(resolve => setImmediate(resolve));
+    assert.equal(socket.sent.at(-1).method, 'Emulation.clearDeviceMetricsOverride');
+    socket.receive({ id: socket.sent.at(-1).id, result: {} }); await cleared;
+    await assert.rejects(page.captureViewportPngRegion({ x: 211, y: 464, width: 58, height: 266 }), /BROWSER_REGION_CAPTURE_UNAVAILABLE/);
+  } finally { page.close(); }
+});
+
+test('closing a page rejects both its active screenshot and queued captures without another CDP request', async t => {
+  mocks(t);
+  const page = await ChromiumPage.connect('http://127.0.0.1:9222'), socket = Socket.current;
+  await page.cdp('Emulation.setDeviceMetricsOverride', { width: 2036, height: 918, deviceScaleFactor: 1, mobile: false });
+  socket.reply = false;
+  const first = assert.rejects(page.captureViewportPng(), /BROWSER_DISCONNECTED/);
+  const second = assert.rejects(page.captureViewportPngRegion({ x: 211, y: 464, width: 58, height: 266 }), /BROWSER_DISCONNECTED/);
+  const count = socket.sent.length;
+  page.close(); await Promise.all([first, second]);
+  assert.equal(socket.sent.length, count);
 });
 
 test('out-of-order replies are matched and disconnect rejects all outstanding work', async t => {

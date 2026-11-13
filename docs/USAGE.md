@@ -272,7 +272,7 @@ npm start -- live-install SPACE_ID p1 --akagi
 npm start -- live-akagi SPACE_ID p1 /absolute/path/live-options.json
 ```
 
-沿用上文的房间配置，`verifiedOptions` 包含 `doraRule: "standard-riichi"` 和 `redFives: 3`。支持四人东、三电脑、25,000 起点、食断及 `displayTimeSetting: "5+20"` 或 `"300+0"`。开播页仍使用 Unity 4.0.51、2036×918 CSS 像素、DPR=1。5＋20 秒核对白色基础倒计时和橙色时间池，首弃可能有额外的基本时间，以当前操作窗口的读回为准。
+沿用上文的房间配置，`verifiedOptions` 包含 `doraRule: "standard-riichi"` 和 `redFives: 3`。支持四人东、三电脑、25,000 起点、食断及 `displayTimeSetting: "5+20"`、`"60+0"` 或 `"300+0"`。60＋0 表示每次操作上限一分钟，策略完成并通过校验后立即出牌。开播页仍使用 Unity 4.0.51、2036×918 CSS 像素、DPR=1。5＋20 秒核对白色基础倒计时和橙色时间池，首弃可能有额外的基本时间，以当前操作窗口的读回为准。
 
 Akagi 以当前小局的完整可见历史推理，每个动作仍经雀魂候选、操作时间、持久台账和最终页面许可复核。雀魂的合法列表与权威结算决定能否执行，Akagi 内置规则用于本地推理。弃牌和副露只有收到匹配的权威事件才计确认；跳过鸣牌的成功回执单列，之后还需等牌局推进。自动和牌由客户端执行。
 
@@ -291,7 +291,7 @@ npm start -- console --space SPACE_ID --page p1 --live-options /absolute/path/li
 npm start -- console --browser-endpoint http://127.0.0.1:9222 --live-options /absolute/path/live-options.json --auto-start
 ```
 
-打开启动输出的 `consoleUrl`，在「对局与运行」点击「启用自动出牌」；使用 `--auto-start` 时已经启用。按钮切换为「停止自动出牌」，可随时停止。已有对局会从当前进度接入；大厅里会自动进入友人场并按默认设置创建四人半庄、5+20 秒的房间。控制台自动跟随每场新台账，无须手动更换 `--follow` 的会话 ID。可叠加 `--audio --commentary --bili-direct`；`--db` 必须与配置中的数据库一致。完整 Fish 配置会自动开启实场语音，错误播报不要求配置 LLM。
+打开启动输出的 `consoleUrl`，在「对局与运行」点击「启用自动出牌」；使用 `--auto-start` 时已经启用。按钮切换为「停止自动出牌」，可随时停止。已有对局会从当前进度接入；大厅里会自动进入友人场创建四人半庄，按配置选择并核实 5+20 或 60+0 秒，Debian 部署样例使用 5+20。300+0 仅支持接入已创建的房间或对局，尚未校准其自动创建选项。控制台自动跟随每场新台账，无须手动更换 `--follow` 的会话 ID。可叠加 `--audio --commentary --bili-direct`；`--db` 必须与配置中的数据库一致。完整 Fish 配置会自动开启实场语音，错误播报不要求配置 LLM。
 
 控制台默认监听 `127.0.0.1:17361`，干净画面监听 `127.0.0.1:17362`，可分别用 `--port` 和 `--relay-port` 调整。远程访问 Debian 时使用 SSH 转发实际使用的两个端口，浏览器登录和服务器音轨配置见[Debian 部署](./DEPLOY_DEBIAN.md)。网页转发不传输服务器播放的声音。
 

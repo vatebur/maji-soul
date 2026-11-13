@@ -54,6 +54,8 @@ async function resumedScenario(mode: 'play' | 'expired' | 'expired-discard' | 'n
       value.akagiEnabled = true; value.phase2ActionsEnabled = true;
       value.connected = true; value.freshConnection = true;
       value.paused = h.page.controls.at(-1)?.paused ?? true;
+      value.controlEpoch = h.page.controls.at(-1)?.controlEpoch;
+      value.sourceStream = 0; value.nativeRestoreRevision = 0; value.handSha256 = 'a'.repeat(64);
       value.queued = 0;
       value.matchEnded = ended;
       value.authSummary.otherSeatsAreRobots = true;
@@ -134,31 +136,40 @@ test('continuous play skips an expired offer and keeps ingesting until the match
   } finally { await h.cleanup(); }
 });
 
-test('continuous play still rejects a countdown mismatch instead of treating it as expiration', async () => {
+test('a countdown mismatch cannot be skipped when its zero-send page fence changes', async () => {
   const h = await resumedScenario('expired');
   const evaluate = h.page.evaluate.bind(h.page);
+  let rejected=false;
   h.page.evaluate = async (source, argument) => {
     const value = await evaluate(source, argument);
-    if ((argument as { method: string }).method === 'automaticTiming') value.evidence.samples[1].displayedRemainingMs -= 10_000;
+    if ((argument as { method: string }).method === 'automaticTiming') {
+      value.evidence.samples[1].displayedRemainingMs -= 10_000;rejected=true;
+    }
+    if ((argument as { method: string }).method === 'read' && rejected)value.stats.bridgeActionSends++;
     return value;
   };
   try {
     const report = await acceptLivePage(h.page, { ...h.options, akagi: true, resumeMatch: true, observeMs: 2_000 }, undefined, createRunner);
     assert.equal(report.status, 'blocked');
     assert.ok('code' in report);
-    assert.equal(report.code, 'COUNTDOWN_PROTOCOL_MISMATCH');
+    assert.equal(report.code, 'UNVERIFIED_TIMING_WINDOW_SCOPE_CHANGED');
+    assert.equal(report.automated?.skippedUnverifiedTimingWindows,0);
+    assert.equal(report.automated?.skippedExpiredWindows,0);
     assert.equal(h.page.sends, 0);
   } finally { await h.cleanup(); }
 });
 
 test('continuous play survives expiration at each pre-send gate without retrying or confirming the skipped action', async t => {
-  for (const stage of ['ackTiming', 'freeze', 'strategy', 'prepare', 'permit'] as const) await t.test(stage, async () => {
+  for (const stage of ['ackTiming', 'freeze', 'strategy', 'prepare', 'permit', 'auto-win-expired'] as const) await t.test(stage, async () => {
     const h = await resumedScenario('expired-discard');
     if (stage === 'freeze' || stage === 'strategy') h.options.room.rules.displayTimeSetting = '5+20';
     const evaluate = h.page.evaluate.bind(h.page);
     let acquisitions = 0;
     h.page.evaluate = async (source, argument) => {
       const method = (argument as { method: string }).method;
+      if(method==='dispatchPrepared' && stage==='auto-win-expired')return {
+        callId:'bridge:1:not-sent:AUTO_WIN_READBACK_EXPIRED:00000000-0000-4000-8000-000000000000',
+        delivery:'not-sent',observedAt:new Date().toISOString()};
       const value = await evaluate(source, argument);
       if (method === 'sync' && (stage === 'freeze' || stage === 'strategy'))
         value.game_restore.actions.at(-1).payload.operation.time_fixed = 5000;
@@ -201,11 +212,67 @@ test('continuous play survives expiration at each pre-send gate without retrying
       assert.equal(h.page.sends, 0);
       assert.equal(h.page.calls.includes('dispatch'), false);
       assert.equal(h.page.controls.at(-1)?.paused, true);
-      if (stage === 'prepare' || stage === 'permit') {
-        assert.equal(report.executionDiagnostic?.invocationStarted, false);
-        assert.equal(report.executionDiagnostic?.code, stage === 'permit' ? 'PERMIT_EXPIRED' : 'DEADLINE_EXCEEDED');
+      if (stage === 'prepare' || stage === 'permit' || stage==='auto-win-expired') {
+        assert.equal(report.executionDiagnostic?.invocationStarted, true);
+        assert.equal(report.executionDiagnostic?.code,'TRANSPORT_NOT_SENT');
+        assert.equal(report.executionDiagnostic?.notSentReason, stage === 'permit' ? 'PERMIT_EXPIRED' :
+          stage==='auto-win-expired'?'AUTO_WIN_READBACK_EXPIRED':'DEADLINE_EXCEEDED');
       }
     } finally { await h.cleanup(); }
+  });
+});
+
+test('a revoked local permit waits for the server turn beyond ten seconds without resending', async t => {
+  for(const outcome of ['advance','stalled'] as const) await t.test(outcome,async t=>{
+    const h=await resumedScenario('play');
+    h.options.room.rules.displayTimeSetting='5+20';
+    const evaluate=h.page.evaluate.bind(h.page),now=performance.now.bind(performance);
+    let elapsed=0,expired=false,polls=0,ended=false,acquisitions=0;
+    t.mock.method(performance,'now',()=>now()+elapsed);
+    h.page.evaluate=async(source,argument)=>{
+      const method=(argument as {method:string}).method;
+      if(method==='prepare'){expired=true;throw Error('DEADLINE_EXCEEDED');}
+      const value=await evaluate(source,argument);
+      if(method==='sync'){
+        Object.assign(value.game_restore.actions.at(-1).payload.operation,{time_fixed:5000,time_add:20000});
+        value.authSummary={gameConfig:{mode:{detail_rule:{time_fixed:5,time_add:20}}}};
+      }
+      if(method==='read')Object.assign(value.authSummary.gameConfig.mode.detail_rule,{time_fixed:5,time_add:20});
+      if(method==='automaticTiming'){
+        acquisitions++;
+        for(const sample of value.evidence.samples){
+          sample.fixedMs=5000;sample.addMs=20000;sample.displayedRemainingMs=0;
+          sample.displayedBankMs=25000-sample.passedWaitingTime*1000;
+        }
+      }
+      if(method==='drain' && expired && !ended){
+        polls++;
+        elapsed=polls===1?12000:outcome==='stalled'?39000:13000;
+        if(polls>1 && outcome==='advance'){
+          ended=true;
+          value.records=[
+            {kind:'action',name:'ActionDiscardTile',step:11,receivedAt:h.page.at,
+              payload:{seat:1,tile:'0m',moqie:true,is_liqi:false,is_wliqi:false}},
+            {kind:'action',name:'ActionNoTile',step:12,receivedAt:h.page.at,
+              payload:{liujumanguan:false,gameend:true,scores:[]}},
+            {kind:'match-end',receivedAt:h.page.at,payload:{result:{players:[0,1,2,3].map(seat=>({seat,part_point_1:25000}))}}},
+          ];
+        }
+      }
+      if(ended && ['read','drain'].includes(method))Object.assign(value,{lastStep:12,generation:1,matchEnded:true});
+      return value;
+    };
+    try{
+      const report=await acceptLivePage(h.page,{...h.options,akagi:true,resumeMatch:true,observeMs:60000},undefined,createRunner);
+      assert.equal(report.status,outcome==='advance'?'passed':'blocked',JSON.stringify(report));
+      if(outcome==='stalled'){assert.ok('code' in report);assert.equal(report.code,'AKAGI_WINDOW_DID_NOT_ADVANCE');}
+      else{assert.ok('expiredWindowDiscards' in report);assert.equal(report.expiredWindowDiscards?.length,1);}
+      assert.equal(report.automated?.skippedExpiredWindows,1);
+      assert.equal(report.automated?.confirmed,0);
+      assert.equal(acquisitions,1);
+      assert.equal(h.page.sends,0);
+      assert.equal(h.page.calls.includes('dispatch'),false);
+    }finally{await h.cleanup();}
   });
 });
 
@@ -315,21 +382,24 @@ test('after timing or visual expiration the next own turn is freshly synchronize
 });
 
 test('continuous play retains blocking for other preparation failures and uncertain or refused sends', async t => {
-  for (const mode of ['other-error', 'not-sent', 'unknown'] as const) await t.test(mode, async () => {
+  for (const mode of ['other-error', 'not-sent', 'unknown', 'unknown-auto-win-expired', 'auto-win-unverified'] as const) await t.test(mode, async () => {
     const h = await resumedScenario('play');
     const evaluate = h.page.evaluate.bind(h.page);
     h.page.evaluate = async (source, argument) => {
       if ((argument as { method: string }).method === 'prepare' && mode === 'other-error') throw Error('FENCE_STALE');
+      if((argument as {method:string}).method==='dispatchPrepared' && ['unknown-auto-win-expired','auto-win-unverified'].includes(mode))return {
+        callId:`bridge:1:not-sent:${mode==='auto-win-unverified'?'AUTO_WIN_UNVERIFIED':'AUTO_WIN_READBACK_EXPIRED'}:00000000-0000-4000-8000-000000000000`,
+        delivery:mode==='auto-win-unverified'?'not-sent':'unknown',observedAt:new Date().toISOString()};
       return evaluate(source, argument);
     };
-    if (mode !== 'other-error') h.page.delivery = mode;
+    if (mode==='not-sent' || mode==='unknown') h.page.delivery = mode;
     try {
       const report = await acceptLivePage(h.page, { ...h.options, akagi: true, resumeMatch: true, observeMs: 1000 }, undefined, createRunner);
       assert.equal(report.status, 'blocked', JSON.stringify(report));
       assert.equal(report.automated?.skippedExpiredWindows, 0);
       assert.equal(report.automated?.confirmed, 0);
-      assert.equal(h.page.calls.filter(method => method === 'dispatch').length, mode === 'other-error' ? 0 : 1);
-      if (mode === 'unknown') {
+      assert.equal(h.page.calls.filter(method => method === 'dispatch').length, mode === 'not-sent' || mode==='unknown' ? 1 : 0);
+      if (mode === 'unknown' || mode==='unknown-auto-win-expired') {
         assert.ok('recovery' in report);
         assert.equal(report.recovery.canResume, false);
         assert.equal(report.recovery.unresolvedAttempts, 1);

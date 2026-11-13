@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { collectAutomaticTiming } from '../src/adapters/majsoul/automatic-timing.ts';
 import { deriveSyncOperationTiming } from '../src/adapters/majsoul/operation-timing.ts';
 import type { EgoPagePort } from '../src/adapters/majsoul/ego-transport.ts';
 import { fixtures, imageFor, png } from './countdown-helpers.ts';
+import { TOOLBAR_PALETTES } from '../src/adapters/majsoul/table-pixels.ts';
 
 class TimingPage implements EgoPagePort {
   calls: string[] = []; generation = 2; pageEpoch = 1; index = 0; stale = false;
@@ -158,14 +160,161 @@ test('changed calibration scopes, expiry and clock offset collect a new pair', a
   });
 });
 
-test('an invalid fresh pixel reading rejects and clears the retained calibration', async () => {
+test('persistent invalid pixels reject after bounded recollection without erasing independently verified unit evidence', async t => {
   const page = new ScopedTimingPage(); boundedAcquisition(page);
-  await collectAutomaticTiming(page); page.nextWindow();
-  const original = page.images[0]!; page.images[0] = page.images[1]!;
+  const original=await collectAutomaticTiming(page);page.nextWindow();
+  const capture = page.cdp.bind(page);
+  const wrong = png(imageFor(fixtures.samples.find((s:any) => s.expectedSeconds === 95)));
+  page.cdp = async () => ({data:wrong});
+  const diagnostics:any[]=[];
+  t.mock.method(console,'warn',(line:string)=>diagnostics.push(JSON.parse(line)));
   await assert.rejects(collectAutomaticTiming(page), /COUNTDOWN_PROTOCOL_MISMATCH/);
-  page.images[0] = original; page.nextWindow();
+  assert.equal(page.calls.length,5);
+  assert.equal(diagnostics.length,3);
+  assert.equal(diagnostics[0].displayedRemainingMs,95000);
+  assert.equal(diagnostics[0].passedWaitingTime,18);
+  page.cdp = capture; page.nextWindow();
   const retry = await collectAutomaticTiming(page);
-  assert.equal(retry.evidence!.calibration, undefined); assert.equal(retry.evidence!.samples.length, 2);
+  assert.equal(retry.evidence!.samples.length,1);
+  assert.deepEqual(retry.evidence!.calibration!.samples,original.evidence!.samples);
+  assert.equal(page.calls.length,6);
+});
+
+test('a transient screenshot or sampling failure retains only the original unit pair for the next legal window',async t=>{
+  for(const failure of ['COUNTDOWN_READBACK_STALE','COUNTDOWN_SAMPLE_STALE','COUNTDOWN_SCREENSHOT_INVALID'])await t.test(failure,async()=>{
+    const page=new ScopedTimingPage();boundedAcquisition(page);
+    const original=await collectAutomaticTiming(page),pair=structuredClone(original.evidence!.samples);
+    page.nextWindow();
+    const capture=page.cdp.bind(page);
+    page.cdp=async()=>{throw Error(failure);};
+    await assert.rejects(collectAutomaticTiming(page),new RegExp(failure));
+    page.cdp=capture;page.nextWindow();
+    const result=await collectAutomaticTiming(page);
+    assert.equal(result.evidence!.samples.length,1);
+    assert.deepEqual(result.evidence!.calibration!.samples,pair);
+    assert.equal(page.calls.length,4);
+    assert.equal(deriveSyncOperationTiming(result.raw,3,result.evidence!).sampledMonoMs,result.raw.receivedMonoMs);
+  });
+});
+
+test('a same-hand empty offer retains calibration while terminal restores retire it',async t=>{
+  for(const state of ['empty','match-end','hand-end'] as const)await t.test(state,async()=>{
+    const page=new ScopedTimingPage();boundedAcquisition(page);
+    const original=await collectAutomaticTiming(page);page.nextWindow();
+    const evaluate=page.evaluate.bind(page);
+    page.evaluate=async(source,input)=>{
+      const raw=await evaluate(source,input);
+      if(input?.method==='sync'){
+        if(state==='match-end')raw.is_end=true;
+        else if(state==='hand-end')raw.game_restore.actions.at(-1).name='ActionNoTile';
+        else delete raw.game_restore.actions.at(-1).payload.operation;
+      }
+      return raw;
+    };
+    assert.equal((await collectAutomaticTiming(page)).evidence,null);
+    page.evaluate=evaluate;page.nextWindow();
+    const result=await collectAutomaticTiming(page);
+    assert.equal(result.evidence!.samples.length,state==='empty'?1:2);
+    if(state==='empty')assert.deepEqual(result.evidence!.calibration!.samples,original.evidence!.samples);
+    else assert.equal(result.evidence!.calibration,undefined);
+  });
+});
+
+test('retained evidence after a failed capture still rejects scope changes, clock drift and expiry',async t=>{
+  for(const change of ['restore','scope','clock','expired'] as const)await t.test(change,async()=>{
+    const page=new ScopedTimingPage();boundedAcquisition(page);
+    const original=await collectAutomaticTiming(page);page.nextWindow();
+    const capture=page.cdp.bind(page);
+    page.cdp=async()=>{throw Error('COUNTDOWN_SAMPLE_STALE');};
+    await assert.rejects(collectAutomaticTiming(page),/COUNTDOWN_SAMPLE_STALE/);
+    page.cdp=capture;page.nextWindow();
+    if(change==='restore')page.nativeRestoreRevision++;
+    if(change==='scope')page.handKey='b'.repeat(64);
+    if(change==='clock')page.wallShift=251;
+    if(change==='expired')page.monoShift=300001;
+    const result=await collectAutomaticTiming(page);
+    assert.equal(result.evidence!.calibration,undefined);assert.equal(result.evidence!.samples.length,2);
+    assert.notDeepEqual(result.evidence!.samples,original.evidence!.samples);
+    deriveSyncOperationTiming(result.raw,3,result.evidence!);
+  });
+});
+
+test('transient mismatched pixels are discarded before a fresh same-window unit pair', async t => {
+  const page = new ScopedTimingPage(); boundedAcquisition(page);
+  page.images = [274,274,265].map(value=>png(imageFor(fixtures.samples.find((s:any)=>s.expectedSeconds===value))));
+  const diagnostics:any[]=[];
+  t.mock.method(console,'warn',(line:string)=>diagnostics.push(JSON.parse(line)));
+  const result=await collectAutomaticTiming(page);
+  assert.equal(page.calls.length,3);
+  assert.equal(diagnostics.length,1);
+  assert.deepEqual(result.evidence!.samples.map(sample=>sample.displayedRemainingMs),[274000,265000]);
+  assert.deepEqual(result.evidence!.samples.map(sample=>sample.passedWaitingTime),[26,34]);
+  assert.equal(deriveSyncOperationTiming(result.raw,2,result.evidence!).remainingMs,266000);
+});
+
+test('transient mismatch recovery revalidates the existing pair without another calibration wait',async t=>{
+  const page=new ScopedTimingPage();boundedAcquisition(page);
+  const original=await collectAutomaticTiming(page);page.nextWindow();
+  page.images=[274,274].map(value=>png(imageFor(fixtures.samples.find((s:any)=>s.expectedSeconds===value))));
+  t.mock.method(console,'warn',()=>{});
+  const result=await collectAutomaticTiming(page);
+  assert.equal(page.calls.length,4);
+  assert.equal(result.evidence!.samples.length,1);
+  assert.equal(result.evidence!.samples[0]!.passedWaitingTime,26);
+  assert.deepEqual(result.evidence!.calibration!.samples,original.evidence!.samples);
+  assert.equal(deriveSyncOperationTiming(result.raw,3,result.evidence!).remainingMs,274000);
+});
+
+test('bank mismatch recollection retains the rejected numbers and validates the new bank pixels', async t => {
+  const linux=JSON.parse(readFileSync(new URL('./fixtures/countdown/linux-masks.json',import.meta.url),'utf8'));
+  const bankPng=(seconds:number)=>{
+    const sample=linux.samples.find((s:any)=>s.kind==='bank-only' && s.expectedSeconds===seconds);
+    const image={width:2036,height:918,rgba:new Uint8Array(2036*918*4)};
+    for(let i=3;i<image.rgba.length;i+=4)image.rgba[i]=255;
+    for(const a of TOOLBAR_PALETTES.linux)image.rgba.set([...a.rgb,255],(a.y*2036+a.x)*4);
+    const mask=Buffer.from(sample.bitmapBase64,'base64');
+    for(let i=0;i<250*130;i++)if(mask[i>>3]!>>(i%8)&1)
+      image.rgba.set([240,190,90,255],((630+Math.floor(i/250))*2036+1380+i%250)*4);
+    return png(image);
+  };
+  const page=new TimingPage();boundedAcquisition(page);
+  page.images=[10,11,3].map(bankPng);
+  const evaluate=page.evaluate.bind(page),diagnostics:any[]=[];
+  page.evaluate=async(source,input)=>{
+    const value=await evaluate(source,input);
+    if(input?.method==='sync'){
+      Object.assign(value.game_restore.actions.at(-1).payload.operation,{time_fixed:5000,time_add:20000});
+      value.authSummary={gameConfig:{mode:{detail_rule:{time_fixed:5,time_add:20}}}};
+      value.game_restore.passed_waiting_time=6+(page.index-1)*8;
+    }
+    return value;
+  };
+  t.mock.method(console,'warn',(line:string)=>diagnostics.push(JSON.parse(line)));
+  const result=await collectAutomaticTiming(page);
+  assert.equal(page.calls.length,3);
+  assert.equal(diagnostics.length,1);
+  assert.equal(diagnostics[0].code,'COUNTDOWN_BANK_MISMATCH');
+  assert.equal(diagnostics[0].displayedBankMs,10000);
+  assert.equal(diagnostics[0].passedWaitingTime,6);
+  assert.deepEqual(result.evidence!.samples.map(sample=>sample.displayedBankMs),[11000,3000]);
+  assert.equal(deriveSyncOperationTiming(result.raw,2,result.evidence!).remainingMs,3000);
+});
+
+test('mismatch recollection rejects replaced window, native restore and owner scopes', async t => {
+  for(const changed of ['step','nativeRestoreRevision','gameUuid','controlEpoch']) await t.test(changed,async t=>{
+    const page=new ScopedTimingPage();boundedAcquisition(page);
+    page.images[0]=page.images[1]!;
+    const evaluate=page.evaluate.bind(page);
+    page.evaluate=async(source,input)=>{
+      const result=await evaluate(source,input);
+      if(page.index===2 && input?.method==='sync' && changed==='step')result.step++;
+      if(page.index===2 && input?.method==='read')result[changed]=changed==='gameUuid'?'replacement':123;
+      return result;
+    };
+    t.mock.method(console,'warn',()=>{});
+    await assert.rejects(collectAutomaticTiming(page),/COUNTDOWN_SAMPLE_STALE/);
+    assert.equal(page.calls.length,2);
+  });
 });
 
 test('partial scope metadata cannot fall back to an unscoped calibration', async () => {

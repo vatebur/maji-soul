@@ -45,9 +45,10 @@ export interface GameState extends HandInitialView {
   trust: 'trusted' | 'syncing' | 'untrusted'; trustIssues: string[];
   latestAction?: ObservedAction; operationWindow?: OperationWindow;
 }
+export type RoomTimeSetting = '300+0' | '60+0' | '5+20';
 export interface FriendRoom {
   roomId: string;
-  rules: { players: 4; length: 'east' | 'south'; displayTimeSetting: '300+0' | '5+20'; computerSeats: 0 | 1 | 2 | 3;
+  rules: { players: 4; length: 'east' | 'south'; displayTimeSetting: RoomTimeSetting; computerSeats: 0 | 1 | 2 | 3;
     verifiedOptions: Record<string, string | number | boolean>; protocolVersion: string };
   autoWin: 'verified-on' | 'verified-off' | 'unknown';
 }

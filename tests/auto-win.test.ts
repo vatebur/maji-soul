@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
+import { runInNewContext } from 'node:vm';
 import { classifyAutoWinPixels, decodeScreenshotPng, DEFAULT_AUTO_WIN_PROFILE as profile,
-  ensureAutoWin, verifyAutoWin, nativeRestoreProof, hasRecoveryTableAnchors, type PixelImage } from '../src/adapters/majsoul/auto-win.ts';
+  ensureAutoWin, inspectAutoWin, verifyAutoWin, nativeRestoreProof, hasRecoveryTableAnchors, type PixelImage } from '../src/adapters/majsoul/auto-win.ts';
 import {bridgeCall, type EgoPagePort } from '../src/adapters/majsoul/ego-transport.ts';
 import { toolbarPalette, TOOLBAR_PALETTES, LINUX_TABLE_FRAME } from '../src/adapters/majsoul/table-pixels.ts';
 import { decodeScreenshotPngRegions } from '../src/adapters/browser/png.ts';
@@ -112,15 +113,22 @@ class Page implements EgoPagePort {
   nativeLifecycleTrace:any[]|undefined=nativeCycle();onRead?:()=>void;onCapture?:()=>void;reads=0;captures=0;captureRestoreProofs:any[]=[];
   recoveryModal=false;
   images=[png(imageFor(fixture.samples[1])).toString('base64'),png(imageFor(fixture.samples[0])).toString('base64')];
-  async evaluate(_source:unknown,input?:any):Promise<any>{
-    if(input?.method==='read'){this.reads++;this.onRead?.();return {pageEpoch:this.epoch,generation:this.generation,lastStep:this.step,paused:this.paused,
+  evaluations:string[]=[];
+  read(){this.reads++;this.onRead?.();return {pageEpoch:this.epoch,generation:this.generation,lastStep:this.step,paused:this.paused,
       connected:this.connected,handEnded:this.handEnded,matchEnded:this.matchEnded,sourceStream:this.sourceStream,controlEpoch:this.controlEpoch,
       nativeLifecycleTrace:this.nativeLifecycleTrace,nativeRestoreRevision:this.nativeRestoreRevision,freshConnection:true,reason:null,overflow:false};}
-    if(input?.method==='ackAutoWin'){
+  ackAutoWin(argument:any){
       this.onAck?.();
-      if(input.argument.nativeRestoreRevision!==this.nativeRestoreRevision)throw Error('AUTO_WIN_READBACK_STALE');
-      this.acknowledgements.push(input.argument);return {state:input.argument.state,pageEpoch:this.epoch};
-    }
+      if(argument.nativeRestoreRevision!==this.nativeRestoreRevision)throw Error('AUTO_WIN_READBACK_STALE');
+      this.acknowledgements.push(argument);return {state:argument.state,pageEpoch:this.epoch};
+  }
+  async evaluate(_source:any,input?:any):Promise<any>{
+    this.evaluations.push(input?.method??'layout');
+    if(input?.method==='read')return this.read();
+    if(input?.method==='ackAutoWin')return this.ackAutoWin(input.argument);
+    if(input?.method==='verifyAutoWinReadback')return runInNewContext(`(${_source.toString()})(input)`,
+      {input,Error,innerWidth:this.viewport.width,innerHeight:this.viewport.height,devicePixelRatio:this.viewport.devicePixelRatio,
+        scrollX:0,scrollY:0,window:{__majiBridge:{read:()=>this.read(),ackAutoWin:(argument:any)=>this.ackAutoWin(argument)}}});
     return {...this.viewport,scrollX:0,scrollY:0,scripts:['https://example.invalid/WebGL-release-4.0.51(test).js']};
   }
   async cdp(method:string,input?:any):Promise<any>{
@@ -147,6 +155,88 @@ test('production CDP adapter reads, clicks once, confirms and restores after rec
   page.epoch=2;page.nativeLifecycleTrace=nativeCycle(2);page.enabled=false;const restored=await ensureAutoWin(page);
   assert.equal(restored.pageEpoch,2);assert.equal(page.clicks,2);assert.equal(page.acknowledgements.at(-1).pageEpoch,2);
 });
+test('default verification preserves separate read and ACK calls for guarded diagnostic ports',async()=>{
+  const page=new Page();page.enabled=true;
+  await verifyAutoWin(page);
+  assert.deepEqual(page.evaluations,['read','read','layout','read','ackAutoWin']);
+  assert.equal(page.acknowledgements.length,1);assert.equal(page.clicks,0);
+});
+test('both verification modes reject a scope change before the capture begins',async()=>{
+  for(const atomicAck of [false,true])for(const key of ['epoch','generation','step','nativeRestoreRevision'] as const){
+    const page=new Page();page.enabled=true;
+    page.onRead=()=>{if(page.reads===2)page[key]++;};
+    await assert.rejects(verifyAutoWin(page,undefined,{atomicAck}),/AUTO_WIN_READBACK_STALE/);
+    assert.equal(page.acknowledgements.length,0);assert.equal(page.clicks,0);
+  }
+});
+test('production final verification explicitly combines scope and ACK with the original image time',async()=>{
+  const page=new Page();page.enabled=true;
+  let capturedAt=0;
+  page.onCapture=()=>{capturedAt=Date.now();};
+  const readback=await bridgeCall(page,'verifyAutoWin');
+  assert.deepEqual(page.evaluations,['read','layout','verifyAutoWinReadback']);
+  assert.equal(page.acknowledgements.length,1);assert.equal(page.captures,1);assert.equal(page.clicks,0);
+  assert.equal(readback.observedAt,page.acknowledgements[0].observedAt);
+  assert.ok(Date.parse(readback.observedAt)<=capturedAt);
+  for(const changed of ['controlEpoch','sourceStream','paused'] as const){
+    const replacement=new Page();replacement.enabled=true;
+    replacement.onCapture=()=>{if(changed==='paused')replacement.paused=false;else replacement[changed]++;};
+    await assert.rejects(bridgeCall(replacement,'verifyAutoWin'),/AUTO_WIN_READBACK_STALE/);
+    assert.equal(replacement.acknowledgements.length,0);assert.equal(replacement.clicks,0);
+  }
+});
+test('native viewport capture still rejects scope changes before acknowledging auto-win',async()=>{
+  const page=new Page();page.enabled=true;
+  let captures=0;
+  const native=Object.assign(page,{captureViewportPng:async()=>{
+    captures++;if(page.changeDuringCapture)page.generation++;
+    return {data:page.images[1]!};
+  }});
+  native.cdp=async()=>{throw Error('UNEXPECTED_CDP_CAPTURE');};
+  assert.equal((await verifyAutoWin(native)).state,'enabled');
+  assert.equal(captures,1);assert.equal(page.acknowledgements.length,1);
+  page.changeDuringCapture=true;
+  await assert.rejects(verifyAutoWin(native),/AUTO_WIN_READBACK_STALE/);
+  assert.equal(page.acknowledgements.length,1);
+});
+
+test('native production crops preserve archived glyph hashes and complete palette anchors',async()=>{
+  for(const palette of ['legacy','linux'] as const)for(const sample of fixture.samples){
+    const page=new Page(),image=imageFor(sample);
+    for(const anchor of TOOLBAR_PALETTES[palette])image.rgba.set([...anchor.rgb,255],(anchor.y*image.width+anchor.x)*4);
+    const expected=classifyAutoWinPixels(image,profile),boxes:any[]=[];
+    const native=Object.assign(page,{captureViewportPngRegion:async(box:{x:number;y:number;width:number;height:number})=>{
+      boxes.push(box);
+      const rgba=new Uint8Array(box.width*box.height*4);
+      for(let y=0;y<box.height;y++)rgba.set(image.rgba.subarray(((y+box.y)*image.width+box.x)*4,
+        ((y+box.y)*image.width+box.x+box.width)*4),y*box.width*4);
+      return {data:png({width:box.width,height:box.height,rgba}).toString('base64')};
+    }});
+    if(expected.state==='enabled'){
+      const result=await bridgeCall(native,'verifyAutoWin');
+      assert.equal(result.state,expected.state);assert.equal(result.rgbaSha256,expected.rgbaSha256);
+    }else await assert.rejects(bridgeCall(native,'verifyAutoWin'),/AUTO_WIN_UNVERIFIED/);
+    assert.deepEqual(boxes,[{x:211,y:464,width:58,height:266}]);
+    assert.equal(page.captures,0);assert.equal(page.clicks,0);
+    assert.equal(page.acknowledgements[0].state,expected.state);
+    assert.equal(page.acknowledgements[0].rgbaSha256,expected.rgbaSha256);
+  }
+});
+
+test('default verification and recovery keep full captures even when a native crop capability exists',async()=>{
+  const page=new Page();page.enabled=true;let crops=0;
+  const native=Object.assign(page,{captureViewportPngRegion:async()=>{crops++;throw Error('UNEXPECTED_REGION_CAPTURE');}});
+  await verifyAutoWin(native);await inspectAutoWin(native);await inspectAutoWin(native,profile,true);
+  await ensureAutoWin(native);
+  assert.equal(crops,0);assert.ok(page.captures>=5);assert.equal(page.clicks,0);
+});
+
+test('native region responses with the wrong dimensions cannot be padded or acknowledged',async()=>{
+  const page=new Page();page.enabled=true;
+  const native=Object.assign(page,{captureViewportPngRegion:async()=>({data:page.images[1]!})});
+  await assert.rejects(bridgeCall(native,'verifyAutoWin'),/AUTO_WIN_SCREENSHOT_REGION_INVALID/);
+  assert.equal(page.acknowledgements.length,0);assert.equal(page.clicks,0);
+});
 test('unknown UI, stale capture and unsupported viewport never click or verify',async()=>{
   for(const fault of ['unknown','stale','viewport']){
     const page=new Page();if(fault==='unknown')page.unknown=true;else if(fault==='stale')page.changeDuringCapture=true;else page.viewport.width--;
@@ -164,19 +254,22 @@ test('final verification is read-only; failed re-enable never retries a click',a
 });
 
 test('an aged acknowledgement reacquires one fresh image in the unchanged scope without clicking',async()=>{
+ for(const atomicAck of [false,true]){
   const page=new Page();page.enabled=true;let acknowledgements=0;
   page.onAck=()=>{if(++acknowledgements===1)throw Error('AUTO_WIN_READBACK_STALE');};
-  const result=await verifyAutoWin(page);
+  const result=await verifyAutoWin(page,undefined,{atomicAck});
   assert.equal(result.state,'enabled');assert.equal(result.clicked,false);
   assert.equal(page.captures,2);assert.equal(acknowledgements,2);assert.equal(page.clicks,0);
   assert.equal(page.acknowledgements.length,1);
   const alwaysStale=new Page();alwaysStale.enabled=true;
   alwaysStale.onAck=()=>{throw Error('AUTO_WIN_READBACK_STALE');};
-  await assert.rejects(verifyAutoWin(alwaysStale),/AUTO_WIN_READBACK_STALE/);
+  await assert.rejects(verifyAutoWin(alwaysStale,undefined,{atomicAck}),/AUTO_WIN_READBACK_STALE/);
   assert.equal(alwaysStale.captures,2);assert.equal(alwaysStale.clicks,0);
+ }
 });
 
 test('an expired visual acknowledgement cannot retry across game, control or native restore boundaries',async()=>{
+ for(const atomicAck of [false,true]){
   for(const changed of ['epoch','sourceStream','generation','step','nativeRestoreRevision','controlEpoch','paused','connected','handEnded','matchEnded'] as const) {
     const page=new Page();page.enabled=true;
     page.onAck=()=>{
@@ -185,12 +278,13 @@ test('an expired visual acknowledgement cannot retry across game, control or nat
       else page[changed]++;
       throw Error('AUTO_WIN_READBACK_STALE');
     };
-    await assert.rejects(verifyAutoWin(page),/AUTO_WIN_READBACK_STALE/,changed);
+    await assert.rejects(verifyAutoWin(page,undefined,{atomicAck}),/AUTO_WIN_READBACK_STALE/,changed);
     assert.equal(page.captures,1,changed);assert.equal(page.clicks,0,changed);
   }
   const page=new Page();page.enabled=true;page.onAck=()=>{throw Error('BRIDGE_UNTRUSTED');};
-  await assert.rejects(verifyAutoWin(page),/BRIDGE_UNTRUSTED/);
+  await assert.rejects(verifyAutoWin(page,undefined,{atomicAck}),/BRIDGE_UNTRUSTED/);
   assert.equal(page.captures,1);
+ }
 });
 
 test('a boundary or resume while moving the pointer cancels the old toggle before pressing',async()=>{

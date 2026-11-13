@@ -1,4 +1,4 @@
-import type { PixelImage } from './auto-win.ts';
+import { screenshotPixelRow, type ScreenshotPixels } from '../browser/png.ts';
 
 export interface TablePixelAnchor { x:number; y:number; rgb:[number,number,number]; tolerance:number }
 export type ToolbarPalette = 'legacy' | 'linux';
@@ -20,16 +20,16 @@ export const TOOLBAR_PALETTES: Record<ToolbarPalette, TablePixelAnchor[]> = {
   ],
 };
 
-export function matchesPixelAnchors(image:PixelImage,anchors:TablePixelAnchor[]):boolean {
+export function matchesPixelAnchors(image:ScreenshotPixels,anchors:TablePixelAnchor[]):boolean {
   return anchors.every(anchor=>{
-    const offset=(anchor.y*image.width+anchor.x)*4;
-    return image.rgba[offset+3]===255 && anchor.rgb.every((channel,index)=>
-      Math.abs(image.rgba[offset+index]!-channel)<=anchor.tolerance);
+    const pixel=screenshotPixelRow(image,anchor.x,anchor.y,1);
+    return pixel[3]===255 && anchor.rgb.every((channel,index)=>
+      Math.abs(pixel[index]!-channel)<=anchor.tolerance);
   });
 }
 
-export function toolbarPalette(image:PixelImage):ToolbarPalette|null {
-  if(image.width!==2036 || image.height!==918 || image.rgba.length!==2036*918*4)return null;
+export function toolbarPalette(image:ScreenshotPixels):ToolbarPalette|null {
+  if(image.width!==2036 || image.height!==918 || ('rgba' in image ? image.rgba.length!==2036*918*4 : image.kind!=='regions'))return null;
   for(const name of ['legacy','linux'] as const)if(matchesPixelAnchors(image,TOOLBAR_PALETTES[name]))return name;
   return null;
 }

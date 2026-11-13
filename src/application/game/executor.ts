@@ -13,6 +13,8 @@ export interface ContractTestTransport {
 export interface ProductionTransport {
   kind: 'live';
   invalidate(control: ActorControl): void | Promise<void>;
+  /** Read-only work after durable intent, before issuing the short send permit. */
+  preflight?(snapshot: DecisionSnapshot, intent: ActionAttempt, signal?: AbortSignal): Promise<void>;
   prepare(command: FencedActionCommand, snapshot: DecisionSnapshot, intent: ActionAttempt): Promise<(action: LegalAction) => Promise<CallReceipt>>;
 }
 export interface ExecutorOptions { transport?: ContractTestTransport | ProductionTransport; receiptTimeoutMs?: number }
@@ -32,8 +34,9 @@ const diagnosticCodes = [
   'GAME_FINISHED', 'PROCESS_INSTANCE_STALE', 'SOURCE_CURSOR_STALE', 'DURABLE_INTENT_REQUIRED',
   'UNSUPPORTED_LIVE_ACTION', 'UNSUPPORTED_OPERATION', 'PHASE2_ACTIONS_DISABLED', 'DEADLINE_PROVENANCE_UNVERIFIED',
   'EGO_PAGE_FAILED', 'GAME_SOCKET_UNAVAILABLE', 'CONNECTION_REATTACH_REQUIRED',
-  'AUTO_WIN_UNVERIFIED', 'AUTO_WIN_CDP_UNAVAILABLE', 'AUTO_WIN_PROFILE_UNVERIFIED', 'AUTO_WIN_VIEWPORT_MISMATCH',
+  'AUTO_WIN_UNVERIFIED', 'AUTO_WIN_READBACK_EXPIRED', 'AUTO_WIN_CDP_UNAVAILABLE', 'AUTO_WIN_PROFILE_UNVERIFIED', 'AUTO_WIN_VIEWPORT_MISMATCH',
   'AUTO_WIN_SCREENSHOT_INVALID', 'AUTO_WIN_SCREENSHOT_FORMAT', 'AUTO_WIN_SCREENSHOT_LIMIT', 'CLIENT_VERSION_MISMATCH',
+  'AUTO_WIN_SCREENSHOT_REGION_INVALID', 'BROWSER_REGION_CAPTURE_UNAVAILABLE', 'BROWSER_SCREENSHOT_REGION_INVALID',
   'AUTO_WIN_READBACK_STALE', 'AUTO_WIN_READBACK_INVALID', 'AUTO_WIN_READBACK_UNKNOWN', 'AUTO_WIN_READBACK_FAILED',
   'AUTO_WIN_TOGGLE_REQUIRES_PAUSE',
   'EXECUTION_ERROR', 'EXISTING_ATTEMPT', 'DISPATCH_NOT_GRANTED',
@@ -41,12 +44,14 @@ const diagnosticCodes = [
 ] as const;
 type ExecutorDiagnosticCode = typeof diagnosticCodes[number];
 type ExecutorPhase = 'control-barrier' | 'decision' | 'reserve' | 'dispatch-intent' | 'issue-permit' |
-  'prepare' | 'ledger-check' | 'consume-permit' | 'dispatch' | 'receipt' | 'simulation';
+  'preflight' | 'prepare' | 'ledger-check' | 'consume-permit' | 'dispatch' | 'receipt' | 'simulation';
 export interface ExecutorDiagnostic {
   phase: ExecutorPhase;
   code: ExecutorDiagnosticCode;
   /** The transport callback was invoked; this does not prove any bytes were sent. */
   invocationStarted: boolean;
+  /** Exact browser guard code on a proven zero-send receipt, never raw text. */
+  notSentReason?: ExecutorDiagnosticCode;
 }
 function diagnosticCode(value: unknown): ExecutorDiagnosticCode {
   return diagnosticCodes.find(code => code === value) ?? 'EXECUTION_ERROR';
@@ -119,9 +124,17 @@ export class ActionExecutor {
         if (intent.rejectionCode && intent.rejectionCode !== 'ATTEMPT_SCOPE_STALE') actor.failClosed('DISPATCH_LEDGER_STALE');
         return intent.attempt;
       }
+      const transport = this.#transport!;
+      if (transport.kind === 'live' && transport.preflight) {
+        phase = 'preflight';
+        const preflight = new AbortController();
+        try { await this.#bounded(transport.preflight(snapshot, intent.attempt, preflight.signal)); }
+        finally { preflight.abort(); }
+      }
+      // Slow screenshots must not consume the short send permit. Issuance
+      // rechecks the original decision/control/window after preflight awaits.
       phase = 'issue-permit';
       const command = actor.issuePermit(decisionId, actionId, attempt.id);
-      const transport = this.#transport!;
       phase = 'prepare';
       const send = await this.#bounded(transport.kind === 'live' ? transport.prepare(command, snapshot, intent.attempt) : transport.prepare(command));
       // Another session can advance the same authoritative hand while Page
@@ -141,8 +154,11 @@ export class ActionExecutor {
       invoked = true;
       const receipt = await this.#bounded(send(action));
       if (receipt.delivery === 'not-sent' || receipt.delivery === 'rejected' || receipt.delivery === 'unknown') {
+        const guard = receipt.delivery === 'not-sent' && /^bridge:\d+:not-sent:([A-Z][A-Z0-9_]+):[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.exec(receipt.callId);
+        const notSentReason = guard && diagnosticCodes.find(code => code === guard[1]);
         this.#diagnostic = { phase, invocationStarted:true, code:receipt.delivery === 'not-sent' ? 'TRANSPORT_NOT_SENT' :
-          receipt.delivery === 'rejected' ? 'TRANSPORT_REJECTED' : 'TRANSPORT_DELIVERY_UNKNOWN' };
+          receipt.delivery === 'rejected' ? 'TRANSPORT_REJECTED' : 'TRANSPORT_DELIVERY_UNKNOWN',
+          ...(notSentReason ? {notSentReason} : {}) };
       }
       phase = 'receipt';
       const result = await store.recordReceipt(attempt.id, receipt);

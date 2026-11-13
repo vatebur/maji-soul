@@ -92,6 +92,19 @@ test('production screenshot acquisition reads pixels automatically and preserves
   assert.equal(result.remainingMs,129000);assert.equal(result.sampledMonoMs,1000);
   assert.equal(result.pageEpoch,2);assert.equal(result.step,9);
 });
+test('native viewport capture retains countdown age and scope checks',async()=>{
+  const page=new Page();
+  const native=Object.assign(page,{captureViewportPng:async()=>{
+    if(page.stale)page.generation++;
+    return {data:page.data};
+  }});
+  native.cdp=async()=>{throw Error('UNEXPECTED_CDP_CAPTURE');};
+  assert.equal((await inspectClientCountdown(native)).sampledMonoMs,1000);
+  page.captureDelay=2001;
+  await assert.rejects(inspectClientCountdown(native),/COUNTDOWN_SAMPLE_STALE/);
+  page.captureDelay=100;page.stale=true;
+  await assert.rejects(inspectClientCountdown(native),/COUNTDOWN_READBACK_STALE/);
+});
 test('a generation change, slow capture, client-version drift and viewport drift cannot return a usable sample',async()=>{
   const stale=new Page();stale.stale=true;await assert.rejects(inspectClientCountdown(stale),/COUNTDOWN_READBACK_STALE/);
   const delayed=new Page();delayed.captureDelay=2001;await assert.rejects(inspectClientCountdown(delayed),/COUNTDOWN_SAMPLE_STALE/);

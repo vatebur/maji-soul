@@ -10,7 +10,7 @@ export type EgoPagePort = BrowserPagePort;
 export interface PageCursor { generation: number; pageEpoch: number; step: number }
 export interface AutoWinHandScope extends PageCursor { sourceStream: number }
 export function bridgeCall(page: EgoPagePort, method: string, argument?: unknown): Promise<any> {
-  requireThat(['read', 'drain', 'pause', 'sync', 'ackSync', 'prepare', 'dispatch', 'reconnect', 'restore', 'ackAutoWin', 'ackTiming', 'ensureAutoWin', 'verifyAutoWin', 'automaticTiming', 'releaseAkagi', 'startNextMatch', 'inspectRoom', 'clearRoomRobots', 'fillRoom', 'abandonOwnedRoom'].includes(method), 'BRIDGE_METHOD_INVALID');
+  requireThat(['read', 'drain', 'pause', 'sync', 'ackSync', 'prepare', 'dispatch', 'dispatchPrepared', 'reconnect', 'restore', 'ackAutoWin', 'ackTiming', 'ensureAutoWin', 'verifyAutoWin', 'automaticTiming', 'releaseAkagi', 'startNextMatch', 'inspectRoom', 'clearRoomRobots', 'fillRoom', 'abandonOwnedRoom'].includes(method), 'BRIDGE_METHOD_INVALID');
   if (method === 'ensureAutoWin' && argument != null) {
     const options=argument as {purpose?:unknown;expected?:AutoWinHandScope},expected=options.expected;
     requireThat(typeof argument==='object' && !Array.isArray(argument) && Object.hasOwn(argument,'purpose') &&
@@ -25,7 +25,7 @@ export function bridgeCall(page: EgoPagePort, method: string, argument?: unknown
   if (page.cdp && (method === 'ensureAutoWin' || method === 'verifyAutoWin')) {
     return import('./auto-win.ts').then(adapter => method === 'ensureAutoWin'
       ? adapter.ensureAutoWin(page,undefined,true,(argument as {purpose:'reconnect'|'new-hand'}|null)?.purpose ?? 'resume',
-          (argument as {expected?:AutoWinHandScope}|null)?.expected) : adapter.verifyAutoWin(page));
+          (argument as {expected?:AutoWinHandScope}|null)?.expected,{nativeRecoveryRegion:true}) : adapter.verifyAutoWin(page,undefined,{atomicAck:true}));
   }
   if (page.cdp && method === 'automaticTiming') return import('./automatic-timing.ts').then(adapter => adapter.collectAutomaticTiming(page));
   return page.evaluate(async ({ method, argument }) => {
@@ -49,16 +49,36 @@ export class EgoProductionTransport implements ProductionTransport {
   readonly #page: EgoPagePort;
   #cursor: PageCursor | undefined;
   #timing: ProtocolOperationTiming | undefined;
+  #bindingRevision = 0;
+  #preflightRequest = 0;
+  #preflight: { snapshot: string; intent: string; bindingRevision: number } | undefined;
   constructor(page: EgoPagePort) { this.#page = page; }
   bind(cursor: PageCursor, timing: ProtocolOperationTiming): void {
     requireThat(Number.isInteger(cursor.generation) && Number.isInteger(cursor.pageEpoch) && Number.isInteger(cursor.step), 'BRIDGE_CURSOR_INVALID');
     requireThat(timing.source === 'protocol-operation' && timing.origin === 'sync-game' && timing.pageEpoch === cursor.pageEpoch && timing.step === cursor.step && timing.remainingMs > timing.uncertaintyMs && Number.isFinite(Date.parse(timing.sampledAt)), 'COUNTDOWN_READBACK_REQUIRED');
+    this.#bindingRevision++; this.#preflightRequest++; this.#preflight = undefined;
     this.#cursor = { ...cursor }; this.#timing = { ...timing };
   }
   async invalidate(control: ActorControl): Promise<void> {
+    this.#bindingRevision++; this.#preflightRequest++; this.#preflight = undefined;
     await bridgeCall(this.#page, 'pause', control);
   }
+  async preflight(snapshot: DecisionSnapshot, intent: ActionAttempt, signal?: AbortSignal): Promise<void> {
+    this.#preflight = undefined;
+    const request = ++this.#preflightRequest;
+    requireThat(!signal?.aborted, 'FENCE_STALE');
+    requireThat(this.#cursor && this.#timing, 'BRIDGE_NOT_BOUND');
+    requireThat(intent.status === 'dispatching' && intent.executionMode === 'live' && intent.decisionId === snapshot.id,
+      'DURABLE_INTENT_REQUIRED');
+    const proof = { snapshot:canonical(snapshot),intent:canonical(intent),bindingRevision:this.#bindingRevision };
+    await bridgeCall(this.#page, 'verifyAutoWin');
+    requireThat(!signal?.aborted && this.#preflightRequest === request && this.#bindingRevision === proof.bindingRevision, 'FENCE_STALE');
+    this.#preflight = proof;
+  }
   async prepare(command: FencedActionCommand, snapshot: DecisionSnapshot, intent: ActionAttempt) {
+    // Consume before any await or validation. A prior image can only avoid
+    // another capture for this exact intent/snapshot and unchanged binding.
+    const proof = this.#preflight; this.#preflight = undefined; this.#preflightRequest++;
     requireThat(this.#cursor && this.#timing, 'BRIDGE_NOT_BOUND');
     const action = snapshot.legalActions.find(a => a.id === command.actionId);
     requireThat(action && action.authority === 'executor' && action.action.kind !== 'tsumo' && action.action.kind !== 'ron', 'UNSUPPORTED_LIVE_ACTION');
@@ -71,10 +91,24 @@ export class EgoProductionTransport implements ProductionTransport {
       requireThat(physical, 'ACTION_NOT_LEGAL');
       tile = physical.code.endsWith('r') ? `0${physical.code[1]}` : physical.code;
     }
-    // Fresh visual readback is checked again in the synchronous page send fence.
+    // Direct prepare callers keep their fresh read. Preflight callers retain
+    // the same original 1s visual expiry, checked by the final page send fence.
+    const matched = proof && proof.bindingRevision === this.#bindingRevision && proof.snapshot === canonical(snapshot) &&
+      proof.intent === canonical(intent);
+    const input = { command, snapshot, intent, action, ...(tile ? { tile } : {}), expected: this.#cursor, timing: this.#timing };
+    if (matched) {
+      let consumed = false;
+      return async (selected: LegalAction): Promise<CallReceipt> => {
+        requireThat(!consumed, 'PERMIT_INVALID'); consumed = true;
+        requireThat(canonical(selected) === canonical(action), 'ACTION_CHANGED');
+        // The executor has just rechecked SQLite and consumed its short permit.
+        // Prepare and final dispatch now share one page turn, so no extra IPC or
+        // database wait consumes the remaining original 1s pixel lifetime.
+        return await bridgeCall(this.#page, 'dispatchPrepared', input) as CallReceipt;
+      };
+    }
     await bridgeCall(this.#page, 'verifyAutoWin');
-    const prepared = await bridgeCall(this.#page, 'prepare', { command, snapshot, intent, action, ...(tile ? { tile } : {}),
-      expected: this.#cursor, timing: this.#timing });
+    const prepared = await bridgeCall(this.#page, 'prepare', input);
     const token = typeof prepared === 'string' ? prepared : prepared.token;
     requireThat(typeof token === 'string', 'BRIDGE_PERMIT_INVALID');
     return async (selected: LegalAction): Promise<CallReceipt> => {

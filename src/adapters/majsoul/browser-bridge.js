@@ -445,7 +445,10 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     requireThat(operation && operation.step === lastStep && operation.value.seat === ownSeat, 'WINDOW_CLOSED');
     requireThat(!operation.value.operation_list?.some(o => o.type === 8 || o.type === 9), 'CLIENT_AUTO_WIN_WINDOW');
     requireThat(autoWin?.state === 'enabled' && autoWin.pageEpoch === pageEpoch && autoWin.generation === generation && autoWin.step === lastStep &&
-      autoWin.nativeRestoreRevision===nativeRestoreRevision && performance.now() < autoWin.expiresMonoMs, 'AUTO_WIN_UNVERIFIED');
+      autoWin.nativeRestoreRevision===nativeRestoreRevision, 'AUTO_WIN_UNVERIFIED');
+    // A proven switch can age out before this final send. Preserve the same
+    // one-second bound, but distinguish expiry from missing or changed proof.
+    requireThat(performance.now() < autoWin.expiresMonoMs, 'AUTO_WIN_READBACK_EXPIRED');
     let request;
     if (phase2ActionsEnabled) {
       requireThat(same(intent.actionSpec, action.action), 'DURABLE_INTENT_REQUIRED');
@@ -459,6 +462,17 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     requireThat(performance.now() + 250 < operationTiming.deadlineMonoMs, 'DEADLINE_EXCEEDED');
     requireThat(Date.parse(snapshot.actionDeadline) > now && Date.parse(command.expiresAt) > now, 'DEADLINE_EXCEEDED');
     return request;
+  }
+  function notSentReceipt(error) {
+    // Fixed guard codes only. Keep the existing receipt schema and never place
+    // raw errors, page data or protocol payloads into the durable call id.
+    const codes = ['BRIDGE_PREPARE_INVALID','BRIDGE_UNTRUSTED','EXECUTION_PAUSED','GAME_FINISHED','INGRESS_PENDING',
+      'DURABLE_INTENT_REQUIRED','FENCE_STALE','SOURCE_CURSOR_STALE','PROCESS_INSTANCE_STALE','CLIENT_AUTO_WIN_WINDOW',
+      'PHASE2_ACTIONS_DISABLED','ACTION_NOT_LEGAL','WINDOW_CLOSED','AUTO_WIN_UNVERIFIED','AUTO_WIN_READBACK_EXPIRED','UNSUPPORTED_OPERATION',
+      'DEADLINE_PROVENANCE_UNVERIFIED','DEADLINE_EXCEEDED','PERMIT_EXPIRED','PERMIT_INVALID','BRIDGE_PERMIT_CAPACITY',
+      'ACTION_CHANGED','GAME_SOCKET_UNAVAILABLE','CONNECTION_REATTACH_REQUIRED'];
+    const code = codes.includes(error?.message) ? error.message : 'BRIDGE_GUARD_FAILED';
+    return { callId:`bridge:${pageEpoch}:not-sent:${code}:${crypto.randomUUID()}`,delivery:'not-sent',observedAt:iso() };
   }
   const api = {
     read: () => ({ schemaVersion: 1, pageEpoch, generation, nativeRestoreRevision, nativeRestorePending, lastStep, sourceStream: actionStream, ownSeat,
@@ -622,7 +636,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
         const receivedMonoMs = performance.now(), receivedAt = iso(), receivedGeneration = generation;
         const response = result.response;
         checkScope();
-        requireThat(!response.error && (response.game_restore || response.is_end), 'SYNC_RESPONSE_INCOMPLETE');
+        requireThat(!response.error, 'SYNC_RESPONSE_INCOMPLETE');
         const finishSync = async () => {
           if (response.is_end) return;
           // syncGame enters the server's syncing lifecycle. Complete this own
@@ -633,38 +647,48 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
           checkScope();
           requireThat(!finished.response.error, 'SYNC_FINISH_REJECTED');
         };
-        if (response.is_end) { closeWindow(); matchEnded = true; }
-        const restore = response.game_restore;
-        if (!restore?.actions?.length) {
-          const snapshot = {schemaVersion:1,pageEpoch,generation:receivedGeneration,startGeneration,requestedMonoMs,receivedMonoMs,receivedAt,
-            ownSeat,gameUuid,step:response.step,is_end:response.is_end,matchResult:matchResult?clone(matchResult):null,game_restore:restore?{actions:[]}:null};
+        const captureSnapshot = () => {
+          requireThat(response.game_restore || response.is_end, 'SYNC_RESPONSE_INCOMPLETE');
+          if (response.is_end) { closeWindow(); matchEnded = true; }
+          const restore = response.game_restore;
+          if (!restore?.actions?.length) {
+            const snapshot = {schemaVersion:1,pageEpoch,generation:receivedGeneration,startGeneration,requestedMonoMs,receivedMonoMs,receivedAt,
+              ownSeat,gameUuid,step:response.step,is_end:response.is_end,matchResult:matchResult?clone(matchResult):null,game_restore:restore?{actions:[]}:null};
+            return { snapshot, syncSnapshot: null };
+          }
+          const actions = restore.actions.map(a => decodedAction(a, false));
+          const firstHandIndex = actions.findIndex(a => a.name === 'ActionNewRound');
+          requireThat(actions.length > 0 && (firstHandIndex === 0 || firstHandIndex === 1 && actions[0].name === 'ActionMJStart'), 'SYNC_HISTORY_INCOMPLETE');
+          for (let i = 1; i < actions.length; i++) requireThat(actions[i].step === actions[i - 1].step + 1, 'SYNC_HISTORY_GAP');
+          requireThat(response.step === actions.at(-1).step + 1, 'SYNC_NEXT_STEP_MISMATCH');
+          const opening = actions[firstHandIndex], identity = opening.payload.sha256 || opening.fingerprint;
+          requireThat(identity===roundIdentity || !knownRounds.has(identity), 'STALE_HAND_HISTORY');
+          requireThat(identity!==roundIdentity || roundSignature===opening.fingerprint, 'SOURCE_DEDUP_CONFLICT');
+          if (identity===roundIdentity) {
+            requireThat(lastStep===null || response.step-1>=lastStep, 'SYNC_HISTORY_REGRESSION');
+            requireThat(!handEnded || endsHand(actions.at(-1).name), 'SYNC_TERMINAL_REGRESSION');
+          }
+          const syncSnapshot = { pageEpoch, generation:receivedGeneration, startGeneration, step: response.step - 1, actions, requestedMonoMs, receivedMonoMs, receivedAt,
+            identity,isEnd:response.is_end,matchResult:matchResult?clone(matchResult):null,
+            passedWaitingTime:restore.passed_waiting_time, gameState:restore.game_state,
+            lastPauseTimeMs:restore.last_pause_time_ms };
+          const snapshot = { schemaVersion: 1, pageEpoch, generation:receivedGeneration, startGeneration, requestId: result.requestId, requestedMonoMs, receivedMonoMs, receivedAt,
+            ownSeat, gameUuid, authSummary: authSummary ? clone(authSummary) : null, step: response.step, is_end: response.is_end,
+            matchResult:matchResult?clone(matchResult):null,
+            game_restore: { actions, passed_waiting_time: restore.passed_waiting_time,
+              game_state:restore.game_state,last_pause_time_ms:restore.last_pause_time_ms } };
+          return { snapshot, syncSnapshot };
+        };
+        let captured;
+        try { captured = captureSnapshot(); }
+        finally {
+          // A successful sync already changed server presence even if its
+          // history cannot be used locally. Complete it before propagating a
+          // validation error, without publishing an acknowledgement target.
           await finishSync();
-          return snapshot;
         }
-        const actions = restore.actions.map(a => decodedAction(a, false));
-        const firstHandIndex = actions.findIndex(a => a.name === 'ActionNewRound');
-        requireThat(actions.length > 0 && (firstHandIndex === 0 || firstHandIndex === 1 && actions[0].name === 'ActionMJStart'), 'SYNC_HISTORY_INCOMPLETE');
-        for (let i = 1; i < actions.length; i++) requireThat(actions[i].step === actions[i - 1].step + 1, 'SYNC_HISTORY_GAP');
-        requireThat(response.step === actions.at(-1).step + 1, 'SYNC_NEXT_STEP_MISMATCH');
-        const opening = actions[firstHandIndex], identity = opening.payload.sha256 || opening.fingerprint;
-        requireThat(identity===roundIdentity || !knownRounds.has(identity), 'STALE_HAND_HISTORY');
-        requireThat(identity!==roundIdentity || roundSignature===opening.fingerprint, 'SOURCE_DEDUP_CONFLICT');
-        if (identity===roundIdentity) {
-          requireThat(lastStep===null || response.step-1>=lastStep, 'SYNC_HISTORY_REGRESSION');
-          requireThat(!handEnded || endsHand(actions.at(-1).name), 'SYNC_TERMINAL_REGRESSION');
-        }
-        const syncSnapshot = { pageEpoch, generation:receivedGeneration, startGeneration, step: response.step - 1, actions, requestedMonoMs, receivedMonoMs, receivedAt,
-          identity,isEnd:response.is_end,matchResult:matchResult?clone(matchResult):null,
-          passedWaitingTime:restore.passed_waiting_time, gameState:restore.game_state,
-          lastPauseTimeMs:restore.last_pause_time_ms };
-        const snapshot = { schemaVersion: 1, pageEpoch, generation:receivedGeneration, startGeneration, requestId: result.requestId, requestedMonoMs, receivedMonoMs, receivedAt,
-          ownSeat, gameUuid, authSummary: authSummary ? clone(authSummary) : null, step: response.step, is_end: response.is_end,
-          matchResult:matchResult?clone(matchResult):null,
-          game_restore: { actions, passed_waiting_time: restore.passed_waiting_time,
-            game_state:restore.game_state,last_pause_time_ms:restore.last_pause_time_ms } };
-        await finishSync();
-        lastSync = syncSnapshot;
-        return snapshot;
+        lastSync = captured.syncSnapshot;
+        return captured.snapshot;
       } finally { syncPending = false; }
     },
     ackSync(expected) {
@@ -705,9 +729,18 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       tokens.set(token, { input: clone(input), request:clone(request),expiresMono: performance.now() + ttl, used: false });
       return { token, pageEpoch, generation, expiresInMs: ttl };
     },
+    dispatchPrepared(input) {
+      let prepared;
+      try { prepared = api.prepare(input); }
+      catch (error) { return Promise.resolve(notSentReceipt(error)); }
+      // dispatch runs synchronously through its final check and socket send
+      // before yielding for the RPC receipt. Do not catch post-send failures
+      // here: they must retain their unknown-delivery semantics.
+      return api.dispatch({command:input.command,token:prepared.token});
+    },
     async dispatch({ command, token }) {
       const entry = tokens.get(token);
-      if (!entry || entry.used) return { callId: `bridge:${pageEpoch}:not-sent:${crypto.randomUUID()}`, delivery: 'not-sent', observedAt: iso() };
+      if (!entry || entry.used) return notSentReceipt(Error('PERMIT_INVALID'));
       entry.used = true;
       const input = entry.input;
       const check = () => {
@@ -718,8 +751,13 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       };
       let call;
       try { call = rpc(entry.request.method, entry.request.params, check); }
-      catch { return { callId: `bridge:${pageEpoch}:not-sent`, delivery: 'not-sent', observedAt: iso() }; }
-      if (!call.sent) { await call.work.catch(() => {}); if (call.invoked) fail('ACTION_UNCERTAIN'); return { callId: `bridge:${pageEpoch}:${call.id}`, delivery: call.invoked ? 'unknown' : 'not-sent', observedAt: iso() }; }
+      catch (error) { return notSentReceipt(error); }
+      if (!call.sent) {
+        let rejected; await call.work.catch(error => { rejected=error; });
+        if (!call.invoked) return notSentReceipt(rejected);
+        fail('ACTION_UNCERTAIN');
+        return { callId:`bridge:${pageEpoch}:${call.id}`,delivery:'unknown',observedAt:iso() };
+      }
       operation = null; tokens.clear();
       try {
         const result = await call.work;
