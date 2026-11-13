@@ -15,6 +15,8 @@ export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptan
   child.stdin.on('error', () => {});
   const lines = createInterface({ input: child.stdout });
   let chain = Promise.resolve(), report: unknown, failure: string | undefined, stopped = false, closed = false;
+  let lastControl: {processInstanceId:string; controlEpoch:number} | undefined;
+  let stopBarrier: Promise<unknown> = Promise.resolve();
   let terminate: NodeJS.Timeout | undefined, kill: NodeJS.Timeout | undefined;
   const completion = Promise.withResolvers<void>();
   const send = (message: object) => { if (!closed && !child.stdin.destroyed) child.stdin.write(JSON.stringify(message) + '\n'); };
@@ -22,7 +24,12 @@ export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptan
     if (stopped || closed) return;
     stopped = true;
     send({ kind: 'stop' });
-    void bridgeCall(page, 'pause').catch(() => {});
+    // Revoke this actor's permissions without pretending that its unchanged
+    // native connection is a new page. An unfenced pause increments pageEpoch
+    // and invalidates the client's restore proof, stranding same-game recovery.
+    // Unknown/failed ownership still takes the conservative invalidation path.
+    stopBarrier = bridgeCall(page, 'pause', lastControl ? {...lastControl,paused:true} : undefined)
+      .catch(() => lastControl ? bridgeCall(page,'pause').catch(() => {}) : undefined);
     terminate = setTimeout(() => {
       child.kill('SIGTERM');
       kill = setTimeout(() => child.kill('SIGKILL'), 2_000);
@@ -43,7 +50,14 @@ export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptan
       if (message.kind !== 'page') throw Error('LIVE_CHILD_FAILED');
       try {
         if (stopped && ['prepare', 'dispatch'].includes(message.method)) throw Error('LIVE_CANCELLED');
-        const result = await bridgeCall(page, message.method, message.argument);
+        let argument=message.argument;
+        if(message.method==='pause' && typeof argument?.processInstanceId==='string' &&
+            Number.isSafeInteger(argument.controlEpoch) && argument.controlEpoch>=0){
+          lastControl={processInstanceId:argument.processInstanceId,controlEpoch:argument.controlEpoch};
+          // A queued resume publication must not undo the broker's stop.
+          if(stopped)argument={...argument,paused:true};
+        }
+        const result = await bridgeCall(page, message.method, argument);
         send({ id: message.id, ok: true, result });
       } catch (error) {
         const code = error instanceof Error && /^[A-Z][A-Z0-9_]+$/.test(error.message) ? error.message : 'EGO_PAGE_FAILED';
@@ -53,6 +67,7 @@ export async function acceptLiveViaNode(page: EgoPagePort, options: LiveAcceptan
   });
   try {
     await completion.promise;
+    await stopBarrier;
     // A blocked Page call must not hold shutdown forever. The child is gone;
     // queued calls test `closed` and may never send another action.
     if (failure) throw Error(failure);

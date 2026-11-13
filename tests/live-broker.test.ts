@@ -159,3 +159,54 @@ test('broker rejects queued dispatch after cancellation while allowing the worke
     assert.equal(report.code, 'LIVE_CANCELLED'); assert.equal(methods.includes('dispatch'), false); assert.equal(methods.includes('pause'), true);
   } finally { await fixture.cleanup(); }
 });
+
+test('cooperative cancellation preserves the native page epoch and clamps a queued actor resume to paused',async()=>{
+ const fixture=await worker(`
+  import {createInterface} from 'node:readline';
+  const lines=createInterface({input:process.stdin}),send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+  const control={processInstanceId:'actor',controlEpoch:2,paused:false};
+  lines.on('line',line=>{
+   const m=JSON.parse(line);
+   if(m.kind==='start')send({kind:'page',id:1,method:'pause',argument:control});
+   if(m.id===1)send({kind:'page',id:2,method:'read'});
+   if(m.kind==='stop')send({kind:'page',id:3,method:'pause',argument:{...control,controlEpoch:3}});
+   if(m.id===3){send({kind:'result',report:{programPaused:true}});lines.close();process.stdin.destroy();}
+  });
+ `);
+ const stop=new AbortController();let pageEpoch=1,paused=false;const controls:any[]=[];
+ try{
+  const report=await acceptLiveViaNode({evaluate:async(_source,input)=>{
+   if(input.method==='pause'){
+    controls.push(input.argument);
+    if(!input.argument)pageEpoch++;
+    paused=input.argument?.paused!==false;
+   }else if(input.method==='read')stop.abort();
+   return{pageEpoch,paused};
+  }},options,fixture.program,stop.signal);
+  assert.equal(report.programPaused,true);assert.equal(pageEpoch,1);assert.equal(paused,true);
+  assert.deepEqual(controls.map(c=>[c?.controlEpoch,c?.paused]),[[2,false],[2,true],[3,true]]);
+ }finally{await fixture.cleanup();}
+});
+
+test('a rejected cancellation fence falls back to page invalidation and finishes before the broker returns',async()=>{
+ const fixture=await worker(`
+  import {createInterface} from 'node:readline';
+  const lines=createInterface({input:process.stdin}),send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+  lines.on('line',line=>{
+   const m=JSON.parse(line);
+   if(m.kind==='start')send({kind:'page',id:1,method:'pause',argument:{processInstanceId:'actor',controlEpoch:1,paused:false}});
+   if(m.id===1)send({kind:'page',id:2,method:'read'});
+   if(m.kind==='stop'){send({kind:'result',report:{programPaused:true}});lines.close();process.stdin.destroy();}
+  });
+ `);
+ const stop=new AbortController();let invalidated=false;
+ try{
+  await acceptLiveViaNode({evaluate:async(_source,input)=>{
+   if(input.method==='read')stop.abort();
+   if(input.method==='pause'&&input.argument?.paused===true)throw Error('FENCE_STALE');
+   if(input.method==='pause'&&!input.argument){await new Promise(r=>setTimeout(r,60));invalidated=true;}
+   return{};
+  }},options,fixture.program,stop.signal);
+  assert.equal(invalidated,true);
+ }finally{await fixture.cleanup();}
+});
