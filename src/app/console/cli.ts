@@ -1,6 +1,9 @@
 import { readFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { LiveAutomation } from './automation.ts';
 import { LiveRelay } from './relay.ts';
+import { browserEndpoint as validateBrowserEndpoint } from '../../adapters/browser/chromium.ts';
+import { chromiumRelay } from '../../adapters/browser/chromium-relay.ts';
 import { validateRoom, string } from '../../schemas/game.ts';
 import { validateObservationDuration } from '../live-observation.ts';
 import type { LiveAcceptanceOptions } from '../live.ts';
@@ -19,31 +22,40 @@ import { requireThat } from '../../domain/game/value.ts';
 import { loadReplay } from '../replay.ts';
 import { ConsoleRuntime, type ConsoleSource } from './runtime.ts';
 import { createConsoleServer } from './server.ts';
+import { AvatarOutput } from '../../adapters/live/avatar-output.ts';
+import { createSoullinkMotionPlanner, soullinkMotionConfig } from '../../adapters/live/soullink-motion.ts';
+import { loadAvatarAssets } from './avatar-assets.ts';
 
 export async function runConsole(args: string[], env = process.env) {
   const replayPaths: string[] = [], switches = new Set<string>();
-  let liveOptionsPath: string | undefined, space: string | undefined, page: string | undefined;
-  let dbPath: string | undefined, follow: string | undefined, port = 17361, tickMs = 750;
+  let liveOptionsPath: string | undefined, space: string | undefined, page: string | undefined, browserEndpoint: string | undefined;
+  let dbPath: string | undefined, follow: string | undefined, port = 17361, relayPort = 17362, tickMs = 750;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     requireThat(arg === '--replay' || !switches.has(arg), 'INVALID_CLI_ARGUMENTS');
     switches.add(arg);
-    if (arg === '--audio' || arg === '--demo-chat' || arg === '--commentary' || arg === '--bili-direct') continue;
+    if (arg === '--audio' || arg === '--avatar' || arg === '--demo-chat' || arg === '--commentary' || arg === '--bili-direct' || arg === '--auto-start') continue;
     const value = args[++i];
     requireThat(value && !value.startsWith('--'), 'INVALID_CLI_ARGUMENTS');
     if (arg === '--live-options') liveOptionsPath = value;
+    else if (arg === '--browser-endpoint') browserEndpoint = validateBrowserEndpoint(value);
     else if (arg === '--space') space = value;
     else if (arg === '--page') page = value;
     else if (arg === '--replay') replayPaths.push(value);
     else if (arg === '--follow') follow = value;
     else if (arg === '--db') dbPath = value;
     else if (arg === '--port' && /^\d{1,5}$/.test(value) && Number(value) <= 65535) port = Number(value);
+    else if (arg === '--relay-port' && /^\d{1,5}$/.test(value) && Number(value) >= 1024 && Number(value) <= 65535) relayPort = Number(value);
     else if (arg === '--tick-ms' && /^\d{2,5}$/.test(value) && Number(value) >= 50 && Number(value) <= 60_000) tickMs = Number(value);
     else throw Error('INVALID_CLI_ARGUMENTS');
   }
   requireThat(replayPaths.length <= 12 && !(follow && replayPaths.length) && (!follow || dbPath), 'INVALID_CLI_ARGUMENTS');
   requireThat(!switches.has('--bili-direct') || !!(follow || liveOptionsPath) && !switches.has('--demo-chat'), 'BILI_DIRECT_REQUIRES_FOLLOW');
-  requireThat(!liveOptionsPath && !space && !page || !!liveOptionsPath && !!space && !!page && !replayPaths.length, 'LIVE_CONSOLE_OPTIONS_REQUIRED');
+  requireThat(!liveOptionsPath && !space && !page && !browserEndpoint ||
+    !!liveOptionsPath && !replayPaths.length && !follow &&
+      (browserEndpoint ? !space && !page : !!space && !!page), 'LIVE_CONSOLE_OPTIONS_REQUIRED');
+  requireThat(!switches.has('--auto-start') || !!liveOptionsPath, 'LIVE_CONSOLE_OPTIONS_REQUIRED');
+  requireThat(!liveOptionsPath || port !== relayPort, 'INVALID_CLI_ARGUMENTS');
   const liveOptions: LiveAcceptanceOptions | undefined = liveOptionsPath ? JSON.parse(await readFile(resolve(liveOptionsPath), 'utf8')) : undefined;
   if (liveOptions) {
     validateRoom(liveOptions.room);
@@ -54,8 +66,9 @@ export async function runConsole(args: string[], env = process.env) {
     requireThat(!liveOptions.databasePath || resolve(liveOptions.databasePath) === resolve(dbPath!), 'LIVE_DATABASE_MISMATCH');
     liveOptions.databasePath = resolve(dbPath!);
   }
-  const automation = liveOptions ? new LiveAutomation(space!, page!, liveOptions) : undefined;
-  const videoRelay = liveOptions ? new LiveRelay(space!, page!) : undefined;
+  const automation = liveOptions ? new LiveAutomation(space ?? '0', page ?? 'p1', liveOptions, browserEndpoint) : undefined;
+  const videoRelay = liveOptions ? new LiveRelay(space ?? '0', page ?? 'p1', relayPort,
+    browserEndpoint ? chromiumRelay(browserEndpoint) : undefined) : undefined;
   const source: ConsoleSource = follow || automation ? { kind: 'follow', sessionId: follow ?? 'live-console-idle' } : { kind: 'replay',
     fixtures: await Promise.all((replayPaths.length ? replayPaths : ['tests/fixtures/phase1-discard']).map(loadReplay)) };
   if (source.kind === 'replay') {
@@ -66,6 +79,7 @@ export async function runConsole(args: string[], env = process.env) {
   if (follow) requireThat(existsSync(databasePath), 'LEDGER_NOT_FOUND');
   const store = new StorageClient(databasePath);
   let runtime: ConsoleRuntime | undefined, server: ReturnType<typeof createConsoleServer> | undefined;
+  let avatar: AvatarOutput | undefined;
   const audioRoot = resolve('data/console/audio');
   const audioDirectory = join(audioRoot, `${process.pid}-${randomUUID()}`);
   const shutdown = Promise.withResolvers<void>();
@@ -73,7 +87,8 @@ export async function runConsole(args: string[], env = process.env) {
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   try {
-    const audio = switches.has('--audio');
+    const avatarEnabled = switches.has('--avatar') || env.MAJI_AVATAR_ENABLED === 'true';
+    const audio = avatarEnabled || switches.has('--audio') || !!liveOptions && !!env.FISH_API_KEY?.trim() && !!env.FISH_REFERENCE_ID?.trim();
     const fish = audio ? fishSpeechConfig(env) : undefined;
     const voiceId = fish?.voiceId ?? (env.FISH_REFERENCE_ID?.trim() || 'faccba1a8ac54016bcfc02761285e67f');
     const voices = voiceId ? [{ id: voiceId, label: 'Fish 中文音色', language: 'zh-CN', installed: !!fish }] : [];
@@ -88,7 +103,15 @@ export async function runConsole(args: string[], env = process.env) {
         if (Date.now() - (await stat(dir)).mtimeMs >= 7 * 86_400_000) await rm(dir, { recursive: true, force: true });
       }
     }
-    const speech = fish ? fishSpeech(audioDirectory, fish) : undefined;
+    const synthesis = fish ? fishSpeech(audioDirectory, fish) : undefined;
+    const avatarAssets = await loadAvatarAssets(env, avatarEnabled);
+    const motionConfig = avatarEnabled ? soullinkMotionConfig(env) : undefined;
+    if (avatarEnabled && synthesis) avatar = new AvatarOutput(synthesis, {
+      ...(motionConfig ? { planner: createSoullinkMotionPlanner(motionConfig) } : {}), characterName: avatarAssets.config.characterName,
+      planTimeoutMs: (motionConfig?.timeoutMs ?? 4000) + 100,
+      startTimeoutMs: Math.max(12_000, (motionConfig?.timeoutMs ?? 4000) + 2500),
+    });
+    const speech = avatar?.speech ?? synthesis;
     const demo = switches.has('--demo-chat'), { MAJI_BILI_RELAY_URL: relay, MAJI_BILI_RELAY_TOKEN: token } = env;
     const direct = switches.has('--bili-direct');
     requireThat(demo || direct || Boolean(relay) === Boolean(token), 'INVALID_BILI_RELAY');
@@ -109,15 +132,23 @@ export async function runConsole(args: string[], env = process.env) {
       await runtime.command('config.patch', { commandId: randomUUID(), issuedAt: new Date().toISOString(), sessionId: runtime.sessionId,
         expectedRevision: runtime.configRevision, changes: { interaction: { roomId: '1', dryRun: true } } });
     }
-    server = createConsoleServer(runtime, port);
+    server = createConsoleServer(runtime, port, relayPort, avatar ? { output: avatar, assets: avatarAssets } : undefined);
+    // An old browser may still hold the previous process's four-second audio lease.
+    if (avatar) await delay(4100);
     const urls = await server.listen();
-    console.log(JSON.stringify({ ...urls, source: source.kind, databasePath, audio, automationEnabled: false }, null, 2));
+    if (switches.has('--auto-start')) {
+      await runtime.command('automation.set', { commandId: randomUUID(), issuedAt: new Date().toISOString(),
+        sessionId: runtime.sessionId, enabled: true });
+    }
+    console.log(JSON.stringify({ ...urls, source: source.kind, databasePath, audio, avatar: avatarEnabled,
+      automationEnabled: automation?.view.enabled ?? false, browser: browserEndpoint ? 'chromium' : 'ego' }, null, 2));
     while (true) {
       await runtime.tick();
       const elapsed = new Promise<'tick'>(resolve => { const timer = setTimeout(() => resolve('tick'), tickMs); timer.unref(); });
       if (await Promise.race([shutdown.promise, elapsed]) !== 'tick') break;
     }
   } finally {
+    avatar?.close();
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
     try { await server?.close(); }

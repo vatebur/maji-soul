@@ -13,7 +13,7 @@
 | 了解项目 | [项目概览](../README.md) → [需求方案](./planning/PLAN.md) → [开源调研](./research/RESEARCH.md) |
 | 开始实现 | [实施阶段与门槛](./planning/IMPLEMENTATION.md) → [领域模型](./design/DOMAIN_MODEL.md) → [架构](./design/ARCHITECTURE.md) → [内部接口](./interfaces/INTERNAL_INTERFACES.md) |
 | 开发控制台或 OBS | [HTTP 与事件流](./interfaces/API.md) → [OpenAPI](./interfaces/openapi.json) → [架构中的页面边界](./design/ARCHITECTURE.md#7-本机控制台与-obs-接口) |
-| 评估 Live2D | [Live2D 专题](./research/LIVE2D.md) → [可选输出契约](./interfaces/INTERNAL_INTERFACES.md#54-live2d-角色输出可选扩展草案) → [L0—L3 验收](./research/LIVE2D.md#10-最小实施与验收) |
+| 评估 Live2D | [Live2D 专题](./research/LIVE2D.md) → [可选输出契约](./interfaces/INTERNAL_INTERFACES.md#54-live2d-角色输出可选扩展) → [当前验证](./validation/live2d.md) |
 | 检查交付进度 | [待补证据](./planning/DESIGN_REVIEW.md#3-实施时仍需补证据) → [需求追踪](./planning/IMPLEMENTATION.md#3-需求到模块的追踪) → [完成标准](./planning/IMPLEMENTATION.md#6-完成标准) |
 
 ## 全部文档
@@ -53,7 +53,7 @@ Live2D 专题同时保留源码调研与接入方案；正式内部类型集中�
 | [内部接口 · INTERNAL_INTERFACES.md](./interfaces/INTERNAL_INTERFACES.md) | 游戏适配、模型调用、Rust runner、弹幕、TTS、存储与 Worker 契约 |
 | [OpenAPI 定义 · openapi.json](./interfaces/openapi.json) | HTTP 路径、请求／响应 schema 与示例；OpenAPI 3.1.0，契约版本 `1.0.0-design` |
 
-现有 v1 HTTP 契约尚不包含 Live2D 角色配置、音频下载、播放租约或浏览器回执路由；内部相关类型标为可选扩展草案，启用前须补齐传输契约与验证证据。
+可选 Live2D 输出已补充角色配置、受限资源、音频下载、唯一播放租约和浏览器回执契约；启动与 OBS 设置见 [使用说明](./USAGE.md#live2d-口播与-obs-角色源)，当前验证范围见 [角色输出验证](./validation/live2d.md)。
 
 ## 文档职责与更新规则
 

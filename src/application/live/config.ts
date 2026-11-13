@@ -5,7 +5,7 @@ import type { DecisionMode } from '../../domain/game/types.ts';
 export type ModerationRule = { id: string; match: 'literal'; pattern: string } &
   ({ action: 'drop' } | { action: 'replace'; replacement: string });
 export interface LiveConfig {
-  run: { defaultMode: DecisionMode; maxMatches: number; maxDurationMs: number };
+  run: { defaultMode: DecisionMode };
   persona: { name: string; style: string; catchphrases: string[]; teasingIntensity: 'mild' | 'normal' | 'strong' };
   moderation: { rules: ModerationRule[] };
   interaction: { roomId: string | null; globalIntervalMs: number; viewerCooldownMs: number; replyMaxChars: number; dryRun: boolean };
@@ -17,7 +17,7 @@ export interface LiveConfig {
 
 export function defaultConfig(voiceId: string): LiveConfig {
   return {
-    run: { defaultMode: 'engine', maxMatches: 3, maxDurationMs: 3_600_000 },
+    run: { defaultMode: 'engine' },
     persona: { name: '麻将搭子', style: '', catchphrases: [], teasingIntensity: 'mild' },
     moderation: { rules: [] },
     interaction: { roomId: null, globalIntervalMs: 5000, viewerCooldownMs: 30_000, replyMaxChars: 20, dryRun: true },
@@ -38,7 +38,7 @@ export function patchConfig(current: LiveConfig, input: unknown, voices: string[
     Object.assign(next[key], patch);
   }
   const { run, persona, moderation, interaction, speech, models, output, retention } = next;
-  oneOf(run.defaultMode, ['engine', 'llm']); integer(run.maxMatches, 1, 100); integer(run.maxDurationMs, 60_000, 86_400_000);
+  oneOf(run.defaultMode, ['engine', 'llm']);
   string(persona.name, 50); text(persona.style, 2000); array(persona.catchphrases, x => string(x, 100), 20);
   oneOf(persona.teasingIntensity, ['mild','normal','strong']);
   const ids = new Set<string>();

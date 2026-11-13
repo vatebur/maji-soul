@@ -21,7 +21,7 @@ test('strategy narration coalesces observations, throttles requests, and suppres
   const config = defaultConfig('test'); config.models.commentaryProfile = 'local';
   const requests: StrategyRequest[] = [], spoken: string[] = [];
   const narrator = new StrategyNarrator({ generate: async () => null, summarizeStrategy: async input => {
-    requests.push(input); return { summary: '可以考虑先整理手牌结构。' };
+    requests.push(input); return { summary: '[纠结]先理理这手牌吧。' };
   } }, () => config, () => 0, c => spoken.push(c.text), { mergeMs: 10, intervalMs: 80, timeoutMs: 100 });
   try {
     narrator.update(state, ['旧局面'], card());
@@ -36,7 +36,7 @@ test('strategy narration coalesces observations, throttles requests, and suppres
 });
 
 test('failed, disabled, filtered, expired and revoked strategy summaries never speak raw actions', async t => {
-  for (const scenario of ['disabled', 'missing', 'failure', 'malformed', 'oversized', 'filtered', 'expired', 'revoked', 'hand-change', 'timeout'] as const) {
+  for (const scenario of ['disabled', 'missing', 'failure', 'malformed', 'oversized', 'long-sentence', 'no-mood', 'unknown-mood', 'missing-mood', 'filtered', 'expired', 'revoked', 'hand-change', 'timeout'] as const) {
     await t.test(scenario, async () => {
       const config = defaultConfig('test');
       if (scenario !== 'disabled') config.models.commentaryProfile = 'local';
@@ -59,8 +59,13 @@ test('failed, disabled, filtered, expired and revoked strategy summaries never s
           if (scenario === 'revoked') epoch++;
           if (scenario === 'hand-change') narrator.invalidate();
           if (scenario === 'timeout') await delay(30);
-          reply.resolve(scenario === 'malformed' ? { factText: '摸切五万。' } :
-            { summary: scenario === 'oversized' ? '长'.repeat(161) : scenario === 'filtered' ? '隐藏' : '可以考虑保留连张。' });
+          reply.resolve(scenario === 'malformed' ? { factText: '摸切五万。' } : { summary:
+            scenario === 'oversized' ? '长'.repeat(161) :
+            scenario === 'long-sentence' ? `[纠结]${'长'.repeat(15)}。` :
+            scenario === 'no-mood' ? '先留着连张吧。' :
+            scenario === 'unknown-mood' ? '[改配置]先留着连张吧。' :
+            scenario === 'missing-mood' ? '[纠结]先留着吧。再等等看。' :
+            scenario === 'filtered' ? '[难受]隐藏。' : '[犹豫]先留着连张吧。' });
           await delay(10);
         }
         assert.deepEqual(spoken, []);
@@ -84,7 +89,7 @@ test('strategy generation waits up to 300 seconds and refreshes playback expiry 
     await entered.promise;
     assert.deepEqual(timeouts, [300_000]);
     t.mock.timers.tick(299_000);
-    reply.resolve({ summary: '可以考虑先整理手牌结构。' });
+    reply.resolve({ summary: '[纠结]先理理这手牌吧。' });
     await until(() => spoken.length === 1);
     assert.equal(Date.parse(spoken[0]!.createdAt), Date.now());
     assert.equal(Date.parse(spoken[0]!.expiresAt), Date.now() + 20_000);
@@ -112,7 +117,7 @@ test('changing the configured interval reschedules pending work without cancelli
   const reply = deferred<unknown>(), spoken: string[] = [];
   let requests = 0;
   const narrator = new StrategyNarrator({ generate: async () => null, summarizeStrategy: async () => {
-    requests++; return requests === 1 ? reply.promise : { summary: '第二段对局思路。' };
+    requests++; return requests === 1 ? reply.promise : { summary: '[好奇]晚饭都吃啥呀？' };
   } }, () => config, () => 0, c => spoken.push(c.text), { mergeMs: 1, timeoutMs: 1000 });
   const state = { sessionId: 'session', handId: 'hand' } as GameState;
   const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -122,8 +127,8 @@ test('changing the configured interval reschedules pending work without cancelli
     narrator.update(state, [], card());
     config.models.commentaryIntervalMs = 1000;
     narrator.refreshInterval();
-    reply.resolve({ summary: '第一段对局思路。' });
-    await flush(); assert.deepEqual(spoken, ['第一段对局思路。']);
+    reply.resolve({ summary: '[无奈]搭子今天请假啦。' });
+    await flush(); assert.deepEqual(spoken, ['[无奈]搭子今天请假啦。']);
     t.mock.timers.tick(999); await flush(); assert.equal(requests, 1);
     t.mock.timers.tick(1); await flush(); assert.equal(requests, 2);
     narrator.update(state, [], card());

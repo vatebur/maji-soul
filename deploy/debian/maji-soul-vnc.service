@@ -1,0 +1,14 @@
+[Unit]
+Description=Maji Soul local-only login screen
+Requires=maji-soul-display.service
+After=maji-soul-display.service
+
+[Service]
+User=maji-soul
+Group=maji-soul
+ExecStart=/usr/bin/x11vnc -display :99 -localhost -rfbport 5900 -forever -shared -nopw
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+# Started only when the operator needs to log in, over an SSH tunnel.

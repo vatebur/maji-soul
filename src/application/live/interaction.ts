@@ -4,6 +4,7 @@ import type { StorageClient } from '../../adapters/storage/client.ts';
 import { moderate, type LiveConfig } from './config.ts';
 import { historicalAnswer, type DiscardArchive } from './explanation.ts';
 import type { SpeechContent } from './speech.ts';
+import { formatSpokenText, spokenSentences } from './spoken-text.ts';
 
 export interface BiliPort {
   readonly mode: 'simulated' | 'relay' | 'direct';
@@ -127,6 +128,7 @@ export class Interaction {
   }
   async #select(port: BiliPort, roomId: string, sender: string, signal: AbortSignal, archive: DiscardArchive[]) {
     const config = this.#config(), now = Date.now();
+    const policy = digest([config.interaction, config.moderation]);
     this.#pending = this.#pending.filter(entry => now - entry.received < 30_000);
     for (const [id, at] of this.#lastViewer) if (now - at > 600_000) this.#lastViewer.delete(id);
     if (now < this.#nextSelectionAt) return;
@@ -141,7 +143,8 @@ export class Interaction {
       signal.throwIfAborted();
       if (!answer || Date.now() - received >= 30_000) continue;
       const phrase = config.models.commentaryProfile === 'local' ? undefined : config.persona.catchphrases[0];
-      const text = moderate(`${name}说，${question}。${phrase ? phrase + ' ' : ''}${answer}`, rules);
+      const filtered = moderate(`${phrase ? phrase + ' ' : ''}${answer}`, rules);
+      const text = filtered && moderate(formatSpokenText(filtered), rules, 4096);
       if (!text) continue;
       const selectedAt = Date.now();
       this.#nextSelectionAt = selectedAt + this.#config().interaction.globalIntervalMs;
@@ -150,18 +153,20 @@ export class Interaction {
       const card = { contentId, text, handId: null, priority: 'viewer' as const,
         createdAt: new Date(now).toISOString(), expiresAt: new Date(now + 20_000).toISOString() };
       this.#onContent(card, speechEpoch);
-      await this.#reply(port, roomId, sender, signal, card, answer.match(/^.*?[。！？]/)?.[0] ?? answer);
+      // Only a selected viewer message can trigger a text reply; playback never sends chat.
+      await this.#reply(port, roomId, sender, signal, { ...card, text: spokenSentences(text)[0]! }, policy);
       return;
     }
   }
-  async #reply(port: BiliPort, roomId: string, sender: string, signal: AbortSignal, card: SpeechContent, answer: string) {
+  async #reply(port: BiliPort, roomId: string, sender: string, signal: AbortSignal, card: SpeechContent, policy: string) {
     const id = `reply-${card.contentId}`;
     if (!await this.#store.reserveDelivery(id, card.createdAt)) return;
     let status: 'published' | 'simulated' | 'blocked' | 'expired' | 'uncertain' | 'failed' = 'blocked';
     const config = this.#config();
-    const text = moderate(answer, config.moderation.rules, Math.min(config.interaction.replyMaxChars, port.mode === 'direct' ? 20 : 100));
+    const text = moderate(card.text, config.moderation.rules, Math.min(config.interaction.replyMaxChars, port.mode === 'direct' ? 20 : 100));
     if (Date.now() >= Date.parse(card.expiresAt)) status = 'expired';
-    else if (!signal.aborted && this.#roomId === roomId && this.#senderId === sender && config.interaction.roomId === roomId && text) {
+    else if (!signal.aborted && policy === digest([config.interaction, config.moderation]) &&
+        this.#roomId === roomId && this.#senderId === sender && config.interaction.roomId === roomId && text) {
       if (config.interaction.dryRun || port.mode === 'simulated') status = 'simulated';
       else {
         status = 'uncertain';

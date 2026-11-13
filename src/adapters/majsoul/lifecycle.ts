@@ -67,6 +67,9 @@ export function normalizeHandEnd(name: string, payload: unknown, context: Normal
     const deltas = entries.map(entry => {
       integer(entry.seat,0,3);
       requireThat(sameScores(scoreArray(entry.old_scores),before),'SETTLEMENT_SCORE_MISMATCH');
+      // Standard exhaustive draws with no point transfer carry an empty
+      // repeated delta field. The complete old-score vector still must match.
+      if (!input.liujumanguan && Array.isArray(entry.delta_scores) && entry.delta_scores.length === 0) return [0,0,0,0];
       return scoreArray(entry.delta_scores);
     });
     after = before.map((score,seat) => score+deltas.reduce((sum,delta) => sum+delta[seat]!,0));

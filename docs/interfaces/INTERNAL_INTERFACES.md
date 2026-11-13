@@ -2,7 +2,7 @@
 
 [文档导航](../README.md) · 接口
 
-契约版本：v1，设计日期：2026-11-05。状态：目标设计，阶段 1 子集已实现。本文落实 [架构](../design/ARCHITECTURE.md) 中的 port、事件、Worker 和引擎进程边界；领域结构以 [DOMAIN_MODEL.md](../design/DOMAIN_MODEL.md) 为准，对外服务见 [API.md](./API.md)。这里定义的是本项目的接口，不声称上游已经提供这些方法或服务。
+契约版本：v1，更新日期：2026-11-13。状态：目标设计与标注的已实现子集；常驻直播装配见第 9 节。本文落实 [架构](../design/ARCHITECTURE.md) 中的 port、事件、Worker 和引擎进程边界；领域结构以 [DOMAIN_MODEL.md](../design/DOMAIN_MODEL.md) 为准，对外服务见 [API.md](./API.md)。这里定义的是本项目的接口，不声称上游已经提供这些方法或服务。
 
 当前落地类型见 [`types.ts`](../../src/domain/game/types.ts) 与 [`StoragePort`](../../src/ports/storage.ts)。[阶段 1 实现范围](../validation/state-foundation.md#相对目标契约的实现子集)记录源键、游标、候选及同步子集。执行模式为 dry-run／contract-test／live；[ProductionTransport](../../src/application/game/executor.ts) 经持久化 dispatching、Actor 许可和浏览器最终栅栏发送，暂停需等待 `awaitControlBarrier()`。SQLite schema v2 保留两种真实／契约确认来源。[实场限制](../validation/phase1-live.md)仍适用；下文未实现的方法继续作为目标，不能直接当成生产入口。
 
@@ -18,6 +18,7 @@
 - [6. 存储与可靠通知](#6-存储与可靠通知)
 - [7. Worker 消息协议](#7-worker-消息协议)
 - [8. 必须联调的契约场景](#8-必须联调的契约场景)
+- [9. 常驻直播装配（已实现）](#9-常驻直播装配已实现)
 
 ## 1. 共同规则
 
@@ -343,92 +344,72 @@ interface PlaybackRequest {
 
 合成完成先验证 queueEpoch、过期时间、内容仍被需要和当前禁词规则；播放前再次验证。只有播放器的真实结束才可记 speech published／completed。合成失败不影响文字档案；cancelled 不计入播完。
 
-当前运行适配器为 `fishSpeech`：`SpeechPort.synthesize(text, voiceId, signal)` 调用 Fish `/v1/tts`，返回已验证非空的私有 MP3 路径，随后本机 `afplay` 播放、`release` 删除。请求和响应消费共用取消／30 秒超时信号，响应上限 8 MiB；不添加情绪标签，移除方括号指令。API 密钥仅从服务进程环境读取，不进入控制台配置与投影。`speech.provider` 当前为 `fish`，音色列表来自 `FISH_REFERENCE_ID`；旧 `macos` 配置启动时迁移并增加配置修订。上方 artifact／播放回执结构仍是独立 ArtifactStore 的设计契约。
+当前运行适配器为 `fishSpeech`：`SpeechPort.synthesize(text, voiceId, signal)` 调用 Fish `/v1/tts`，返回已验证非空的私有 MP3 路径，随后平台音频适配器播放、`release` 删除。Mac 使用 `afinfo`／`afplay`，Linux 使用 `ffprobe`／`ffplay`；共享进程执行器负责超时、取消和清理。请求和响应消费共用取消／30 秒超时信号，响应上限 8 MiB；保留已登记的中文心情标签，移除其他方括号指令。口播每句含标签和标点最多 19 字；`SpeechController` 仅负责音频播放，不触发弹幕发送。`Interaction` 仅在选中观众消息后独立发送一条简短回复，保留当前房间及账号校验、禁词、限长、冷却和持久去重。API 密钥仅从服务进程环境读取，不进入控制台配置与投影。`speech.provider` 当前为 `fish`，音色列表来自 `FISH_REFERENCE_ID`；旧 `macos` 配置启动时迁移并增加配置修订。实场 CLI 检测到完整 Fish 配置后自动启用，`--audio` 可显式要求音频。上方 artifact／播放回执结构仍是独立 ArtifactStore 的设计契约。
 
 `stop({speechId, playbackEpoch})` 只停止所指播放实例，旧停止请求不能终止新的声音。`clearPending()` 增加 queueEpoch 并取消未播内容，保留当前播放许可；`setMuted(true)` 同时撤销 queueEpoch 与 playbackEpoch，停止当前播放。每个时刻只有一个播放器持有有效许可。
 
-预留 OBS 浏览器音频适配通过独立播放租约实现：started／ended／failed 回执绑定 speechId、artifactId、租约和 playbackEpoch。其专用写权限不包含游戏控制；首版默认本机播放，因此本轮 OpenAPI 不开放播放回执或音频下载接口，启用该适配时再补完整身份与租约契约。
+可选 `AvatarOutput.speech` 与本机播放器实现同一个运行时 `SpeechPort`，由 `--avatar` 或 `MAJI_AVATAR_ENABLED=true` 选择。浏览器回执绑定 speechId、playbackEpoch 与租约；其专用写通道不包含游戏控制。播放模式只在启动时装配，HTTP 形状见 [API §7.3](./API.md#73-live2d-角色播放)。
 
-### 5.4 Live2D 角色输出（可选扩展草案）
+### 5.4 Live2D 角色输出（可选扩展）
 
-本节定义本项目的输出边界，不是 Open-LLM-VTuber 或 AIRI 已提供的外部 API。复用版本、源码差异与验收见 [LIVE2D.md](../research/LIVE2D.md)。以下类型在启用角色功能时落实为运行时 schema；当前不改变 v1 OpenAPI。
+当前实现为 `adapters/live/avatar-output.ts` 的 `AvatarOutput`、`soullink-motion.ts` 的动作规划器、`soullink-fish-voice.ts` 的 SDK 自定义语音 provider，以及 `app/console/avatar-*` 的浏览器页面。复用固定 npm 版本的 Soullink Emotion SDK；模型与 Core 使用本机资源，版本与来源见 [上游登记](../research/UPSTREAM.md)。此前 Open-LLM-VTuber／AIRI 方案保留为历史调研，不是当前运行依赖。
 
 ```ts
-type AvatarExpression = 'neutral' | 'thinking' | 'joy' | 'surprise' | 'frustrated';
-type AvatarMotion = 'idle' | 'talk' | 'greet' | 'celebrate';
-
-interface AvatarProfile {
-  profileId: string;
-  modelRevision: number; // 资源或映射变更时递增，按 profileId 计数
-  provider: 'open-llm-vtuber' | 'airi';
-  upstreamCommit: string;
-  modelAssetId: string;
-  defaultExpressionId?: string; // 缺省则恢复模型初始参数
-  expressionMap: Partial<Record<AvatarExpression, string>>;
-  motionMap: Partial<Record<AvatarMotion, string>>;
-}
-
-interface AvatarReady {
-  rendererId: string;
-  rendererEpoch: string; // 每次页面／渲染上下文重建更换
-  profileId: string;
-  modelRevision: number;
-  capabilities: {
-    expressionIds: string[];
-    motionIds: string[];
-    lipSync: 'none' | 'volume' | 'phoneme';
-  };
-}
-
-interface AvatarCue {
-  v: 1;
-  cueId: string;
-  scope?: Scope;
-  rendererEpoch: string;
-  profileId: string;
-  modelRevision: number;
-  expiresAt: string;
-  durationMs: number;
-  trigger: { kind: 'immediate' }
-    | { kind: 'speech'; speechId: string; playbackEpoch: number };
-  expression?: AvatarExpression;
-  motion?: AvatarMotion;
-}
-
-interface RendererPlaybackEvent {
-  v: 1;
-  eventId: string;
-  rendererId: string;
-  rendererEpoch: string;
-  leaseId: string;
+interface SpeechPlaybackContext {
   speechId: string;
-  artifactId: string;
   playbackEpoch: number;
-  status: 'started' | 'ended' | 'cancelled' | 'failed';
-  observedAt: string;
-  errorCode?: string;
+  text: string; // 合并、过滤、短句化之后，保留心情标签
+  expiresAt: string;
+  onStarted(): void;
+}
+interface SpeechPort {
+  readonly reportsStarted?: boolean;
+  synthesize(text: string, voiceId: string, signal: AbortSignal): Promise<string>;
+  play(artifact: string, signal: AbortSignal, context?: SpeechPlaybackContext): Promise<void>;
+  release(artifact: string): Promise<void>;
 }
 ```
 
-模型能力从实际资源与适配器确认；lipSync=phoneme 只表示该路径有相应驱动，不承诺每个模型或中文发音达到同等效果。映射值是适配器登记的资源 ID，不能接收未经登记的动作文件路径。上游某些路径只支持一个表情；本接口每条 cue 也最多一个表情与一个动作，不暗示上游能同时叠加任意表情。
+`AvatarOutput` 包装已有合成与释放方法并提供 `speech`。`reportsStarted=true` 使 `SpeechController.playingSpeechId` 等待真实回执；准备阶段计入 pendingCount，不能显示成已经开播。SpeechController 继续拥有唯一队列、内容有效期、优先级和取消信号，角色适配器最多接受一条当前播放，不缓存后续口播。
 
-| AvatarPort 方法 | 输入／结果 | 语义 |
-| --- | --- | --- |
-| `configure(profile, signal)` | AvatarProfile → AvatarReady | 验证资源、加载模型、报告能力；换模型前协调停止当前语音 |
-| `cue(cue, signal)` | AvatarCue → cueId 与 accepted／expired／unsupported | 只确认受理，不表示声音已播放；speech 触发指令等待对应实际 started |
-| `reset(target)` | rendererEpoch、profileId、modelRevision、reason | 对当前目标复位表情、口型和动作；旧目标请求不影响新模型 |
-| `events(signal)` | 角色 ready／degraded／unavailable、cue 应用／取消／失败 | 只更新表现与健康，不授予游戏控制权 |
-| `close(reason)` | 释放完成 | 停止该实例的表现并释放渲染资源 |
+`claim({rendererId,parameters})` 验证模型报告的参数边界并申请唯一租约。`poll(identity)` 续租并返回当前指令或 null，`ack` 处理准备／实际播放回执，`release` 撤销当前页面，`audio(identity,audioId)` 只读取当前实例的音频。方法签名及 HTTP DTO 以 [OpenAPI](./openapi.json) 的 Avatar schemas 为准；身份仅属于表现通道，不能提交游戏动作。
 
-同 cueId 相同载荷幂等，改变载荷拒绝；cue 至少包含 expression 或 motion，durationMs 有上限。开始前核对 scope、时效与代际，超过 expiresAt 不再应用；应用后在 durationMs、expiresAt、绑定语音终止中最早发生的时点复位。表情应用与音频交付分别记录。
+```ts
+interface AvatarFrame {
+  time: number; // 秒，相对同一音频实际起播时钟
+  duration: number;
+  label?: string;
+  parameters: Record<string, number>;
+}
+interface AvatarCommand {
+  speechId: string;
+  playbackEpoch: number;
+  phase: 'prepare' | 'play' | 'stop';
+  audioUrl: string;
+  text: string; // 展示正文，不带心情标签
+  moods: string[];
+  parameterPlan: AvatarFrame[];
+  durationSec?: number;
+}
+```
 
-浏览器音频仍由 PlaybackPort 实现。适配器把内部 PlaybackRequest 包装为带 rendererEpoch／leaseId 的传输消息，ArtifactStore 提供仅限已登记音频的读取能力。RendererPlaybackEvent 在专用通道返回并映射成 PlaybackOutcome；正常 ended 才能 completed，failed／cancelled 不能伪装为正常播完，失联未知则 uncertain。
+播放依次经过以下阶段：
 
-每个事件校验租约、speechId、artifactId 和两个播放相关代际，按 eventId 去重并检查状态转换；observedAt 由页面报告，服务端另记 receivedAt，不能依赖页面时间作授权。旧租约迟到的结束只可保留诊断，不能完成新任务；先前已判定取消／失败的任务不能被迟到 ended 改成成功。
+1. 只有已有有效渲染租约时才调用 Fish。合成完整 MP3 并完成格式校验后，控制器重新检查队列代际与有效期，将最终口播上下文交给角色输出。
+2. prepare 令页面读取受租约保护的音频并用 AudioContext 解码；页面回报实际 durationSec，尚不发声。
+3. `createSoullinkMotionPlanner` 将完整带心情台词、实际时长及最多 24 个已校准参数交给 SDK 的单阶段参数规划器，按整段音频请求 1–3 个稀疏关键帧，输出 token 上限 900。返回计划再次剔除未知参数与张嘴／下颌张开控制，并限制数值和时间范围。未配置、失败或超时返回空计划，页面继续使用本地情绪、待机与音频口型。
+4. play 允许同一个 AudioBufferSource 开始发声。动作起点与采样分析共享 AudioContext.currentTime；客户端观察到运行时钟越过起点后回报 started，调用 onStarted。自然结束且先前已 started 才可完成 Promise；failed、cancelled、租约失效或时限到期均拒绝该次播放。
+5. SpeechController 根据真实结果记录 completed／cancelled／failed，再释放 MP3。动作失败不会卡住麻将执行器；播放端整体失效也不会擅自同时切到系统播放器发声。
 
-租约必须有 expiresAt、续约、显式撤销和页面失联停播约束；接收旧命令不得续活租约。更换播放端前确认旧端停止，或等待租约到期且验证客户端看门狗确实停止；无法保证时继续语音降级，不并行开第二个声音。clear 仅清除未播放 cue／音频，保留当前句；mute、模型切换和播放端切换停止当前音频及其表现，解除后不重放旧句。
+动作模型配置优先 `MAJI_LIVE2D_AI_*`，缺省沿用 `MAJI_AI_*`。模型地址、密钥与原始 provider 响应留在服务端；动作结果只包含已验证参数。规划请求默认 12 秒限制；角色适配器根据同一配置设置整体规划等待与准备时限，始终受当前语音有效期约束。`MAJI_LIVE2D_AI_RESPONSE_FORMAT` 可选择 none／json_object／json_schema，缺省沿用通用模型配置，没有设置时为 none；避免把服务不支持的结构化响应格式强加给供应商。
 
-专用通道的身份建立、资源读取、租约与回执路由在 L2 前补齐；现有 OBS 只读 SSE 不用于回执写入。角色关闭后回到默认音频输出模式仍走同一个 SpeechController，不新增播报调度器。
+可选 `MAJI_LIVE2D_AI_REASONING_EFFORT` 为 none／minimal／low／medium／high，设置时才向兼容服务添加 reasoning_effort。该字段只影响角色动作请求，不修改生成口播正文的模型设置。控制台试听通过 `POST /api/avatar/test` 将服务端固定台词交给同一个 SpeechController，受播放端连接、空闲、静音及 30 秒冷却限制，不开放任意口播文本入口。
+
+租约默认 4 秒，页面每 500 毫秒续约；客户端用单调时钟、扣除完整往返时间设置看门狗，并安排 WebAudio 原生停止点，JS 计时器被冻结仍会停止声音。停止已派发 play 的实例时保留 stop 指令，等待 cancelled／failed／ended 回执或租约到期，期间不能给另一页面播放权。启动角色服务在监听前等待 4.1 秒，避免旧进程仍有效的租约与新播放端重叠。结束后 command=null；重连及旧回执不能重播。对正在准备且尚无播放许可的实例可以直接取消，迟到的动作规划结果被丢弃。
+
+`clearPending()` 取消所有未开始语音，包括浏览器 prepare，保留已实际 started 的当前句；`setMuted(true)` 同时停止当前音频、口型和动作，等待停止确认后才释放文件。故障播报抢占与招募取消沿用同一个信号。页面关闭／网络失败自行停播并释放；纯预览页不申请租约。
+
+`loadAvatarAssets` 仅登记 `.model3.json` 中明确引用的运行时文件，拒绝离开模型目录的路径与符号链接；Profile 和 Core 单独登记为固定 URL。前端不接收任意本机路径。角色的实际绑定、Profile 与 OBS 音轨仍需对应资源的实测证据，接口测试不代表视觉质量验收。
 
 ## 6. 存储与可靠通知
 
@@ -445,7 +426,7 @@ StoragePort 是唯一写入 SQLite 的边界，事务请求是带类型的方法
 | `confirmAction` | 匹配权威事实，写确认与决策状态、outbox | 确认记录；重复调用返回原结果 |
 | `consumeFact` | 写弃牌事实模板／去重记录，同时推进 consumer offset | 内容 ID 与最新消费游标 |
 | `updateDelivery` | 发布状态与修订校验，防止迟到回执覆盖新代际 | 每渠道真实状态 |
-| `patchConfig` | expectedRevision 校验、原子更新配置及运行限额 | 新 revision 和应用效果 |
+| `patchConfig` | expectedRevision 校验、原子更新配置；运行模式保留，场数／时长限额已移除 | 新 revision 和应用效果 |
 | `retain` | 按引用保护活动／未决记录，清理超期数据与音频元数据 | 清理摘要，不含原始内容 |
 
 上述调用的 expected 版本与数据库实际记录不符返回 `VERSION_CONFLICT`；调用者刷新状态后重新决定。存储 worker 不自行重新执行失败的副作用。操作先写意图再发送，发送后确认另一个事务，不能声称数据库事务覆盖了远端游戏。
@@ -499,3 +480,33 @@ unknown 只表示传输层尚未解析；接收端按 worker 类型＋method／t
 - outbox 重放补齐文字但不重复播音／发弹幕；回放装配没有真实副作用能力。
 
 具体客户端协议字段、mjai 方言和 B站回执由技术验证补证据并固定版本；本文件约束适配器必须提供的语义，不能用未知上游字段填造一个看似完整的响应。
+
+## 9. 常驻直播装配（已实现）
+
+控制台的进程生命周期、对局监控、房间恢复和音视频输出分为以下模块；平台差异留在适配器内：
+
+| 模块 | 职责与边界 |
+| --- | --- |
+| `app/console/automation.ts` | `AutomationPort.start()`／`stop()`／`refresh()`／`close()`；监护独立进程组，保留人工停止意图，启动不接受运行限额 |
+| `app/console/automation-loop.ts` | 通用连续对局循环、招募、观察分片与故障重试；ego／Chromium 共用，`automation-ego.ts` 仅保留兼容重导出 |
+| `app/console/automation-monitor.ts` | 进展监测、错误分类、1–60 秒退避；不执行游戏动作 |
+| `app/console/room-recovery.ts` | 旧执行器退出后刷新桥接、验证旧房、处理结束与离房；随后由 `room-lifecycle.ts` 建房和招募 |
+| `ports/browser.ts` | 平台无关的 `BrowserPagePort`；原 `EgoPagePort` 作为兼容别名保留，通用浏览器适配器不依赖雀魂传输实现 |
+| `adapters/browser/chromium.ts` | Linux Chromium 的页面与 CDP 连接，使用 loopback `--browser-endpoint` |
+| `app/console/relay.ts` | 自动开启、人工停止、画面健康检查与 2–60 秒退避；采集实现通过工厂注入 |
+| `app/console/health-announcements.ts` | 故障事件去重、按来源每分钟节流、固定语音提示，不调用 LLM |
+| `adapters/live/system-audio.ts` | Mac／Linux 音频验证和播放；进程取消、超时、退出确认 |
+
+`AutomationView` 的基础字段为 `available / enabled / status / completedMatches / sessionId`，可选字段为 `roomId / recruitUntil / errorCode / recoveryCount / lastErrorCode / lastErrorAt / nextRetryAt / heartbeatAt / lastProgressAt`。工作进程每两秒发布心跳；父进程每两秒检查，30 秒无心跳即终止旧进程组。普通阶段超过 120 秒无推进、playing／recovering 超过 180 秒无进展、招募截止后超过 180 秒仍不推进，也触发监护恢复。单次对局内部每五秒读取权威步骤、手牌摘要和结束状态，读取超过 15 秒或连续 120 秒没有变化会取消该执行器。
+
+取消后必须等旧工作排空并退出，不能并行创建新的动作执行器。恢复刷新桥接废除旧许可，`abandonOwnedRoom` 重新验证房主、四人友人房、房间身份和执行器许可；需要结束旧对局时发送一次终止请求并读回 `playing=false`，再离房和重新创建。未决动作和原始报告保留在共享台账；新的对局使用新会话，不重发旧动作或改写其确认状态。观察时限正常分片且闭合核验通过时继续同一对局，不执行房间重建。
+
+可恢复故障持续退避；人工接管、登录失效、客户端／协议不匹配、房主不成立、终止或离房被拒绝、页面歧义与无效参数进入 `faulted`，等待人工处理后重新启用。浏览器连接关闭可由监护器创建新连接；ego 适配器不调用 claim／takeOver 抢回控制。`stop()` 先写入共享停止标记并取消监护，排空超时后结束旧进程组，不能由故障重试重新开启。
+
+浏览器桥接版本为 5，`read()` 增加 `lobbyAuthenticated` 标志。大厅尚未认证且画面无法识别为已登录界面时，等待 90 秒后报告 `LOGIN_REQUIRED`，期间不刷新以免中断登录或验证。已认证但画面异常最多尝试两次刷新，每次完成后更新 `lastProgressAt`；Chromium 刷新期间连接关闭会立即报错，不以旧文档继续执行。
+
+`SpeechContent.priority` 增加 `system`。错误提示优先于 viewer／discard／recruitment，取消旧解说的合成与播放后播报；手动 mute 仍会阻止所有声音。`HealthAnnouncements` 依据 `lastErrorAt`、`recoveryCount` 和错误码识别新故障，恢复历史字段持续保留不会导致每次轮询重复播报。合成与播放失败只记录失败和字幕，不改变故障恢复的进度。
+
+`ConsoleRuntime` 首次实场 tick 自动启动转播，`relay.set` 的人工启停偏好持久保存。`RelayView.enabled` 表示用户启用意图，`recovering` 期间仍为 true；采集退出、30 秒没有首帧或 45 秒无新帧会关闭旧采集后重试。人工停止后 `enabled=false`，不再启动重试。Linux 与 ego 共用只监听 loopback 的 MJPEG 服务；OBS 字幕与游戏画面分别输出，声音由部署机器上的音频设备和推流器采集。
+
+配置的 `run` 仅保留 `defaultMode`；加载旧持久配置时删除 `maxMatches / maxDurationMs` 并增加配置修订。回放保留人工暂停和本场后停止，实场持续运行直到人工停止或需要人工处理的故障。Debian 用 systemd 处理整个程序和浏览器意外退出，服务装配、登录与音轨见[部署说明](../DEPLOY_DEBIAN.md)。

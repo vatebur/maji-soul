@@ -32,6 +32,50 @@ class TimingPage implements EgoPagePort {
   async cdp(method: string): Promise<any> { assert.equal(method,'Page.captureScreenshot'); return {data:this.images[this.index-1]}; }
 }
 
+/** Keep fake wire time advancing, while bounding each screenshot acquisition. */
+function boundedAcquisition(page: TimingPage) {
+  const evaluate = page.evaluate.bind(page);
+  let layout = false;
+  page.evaluate = async (source, input) => {
+    if (!input && String(source).includes('scripts:')) layout = true;
+    if (!input && String(source).includes('performance.now()') && !String(source).includes('scripts:') && layout) {
+      layout = false;
+      const current = await evaluate(() => ({ scripts: true }), undefined);
+      return current.sampledMonoMs + 100;
+    }
+    return evaluate(source, input);
+  };
+}
+
+class ScopedTimingPage extends TimingPage {
+  step = 10; windowStart = 0; nativeRestoreRevision = 3; sourceStream = 0;
+  gameUuid = 'game-a'; roomId = '12345'; handKey = 'a'.repeat(64); wallShift = 0; monoShift = 0;
+  rules = { category: 1, mode: { mode: 2, detail_rule: { time_fixed: 300, time_add: 0 } } };
+  override async evaluate(source: unknown, input?: any): Promise<any> {
+    const result = await super.evaluate(source, input);
+    if (input?.method === 'sync') {
+      result.pageEpoch = this.pageEpoch; result.generation = this.generation; result.step = this.step;
+      result.game_restore.actions.at(-1).step = this.step - 1;
+      result.game_restore.actions[0].payload.sha256 = this.handKey;
+      result.game_restore.passed_waiting_time = 18 + (this.index - 1 - this.windowStart) * 8;
+      result.requestedMonoMs += this.monoShift; result.receivedMonoMs += this.monoShift;
+      result.receivedAt = new Date(Date.parse(result.receivedAt) + this.monoShift + this.wallShift).toISOString();
+      result.gameUuid = this.gameUuid; result.authSummary = { roomId: this.roomId, gameConfig: this.rules };
+    } else if (input?.method === 'read') {
+      Object.assign(result, { lastStep: this.step - 1, nativeRestoreRevision: this.nativeRestoreRevision,
+        sourceStream: this.sourceStream, gameUuid: this.gameUuid, connected: true,
+        authSummary: { roomId: this.roomId, gameConfig: this.rules } });
+    } else if (typeof result === 'number') return result + this.monoShift;
+    else if (result?.sampledMonoMs !== undefined) result.sampledMonoMs += this.monoShift;
+    return result;
+  }
+  override async cdp(method: string) {
+    assert.equal(method, 'Page.captureScreenshot');
+    return { data: this.images[this.index - 1 - this.windowStart] };
+  }
+  nextWindow() { this.step += 2; this.generation++; this.windowStart = this.index; }
+}
+
 test('automatic acquisition combines real digit readback with two scoped wire samples', async () => {
   const page = new TimingPage();
   // Countdown acquisition's own latency budget remains under two seconds.
@@ -76,4 +120,62 @@ test('a long-clock animation waits for digits but rejects a replacement window',
   };
   await assert.rejects(collectAutomaticTiming(page), /COUNTDOWN_SAMPLE_STALE/);
   assert.deepEqual(page.calls, ['sync', 'sync']);
+});
+
+test('same-hand later windows take fresh pixels and one sync, keeping the current deadline', async () => {
+  const page = new ScopedTimingPage(); boundedAcquisition(page);
+  const original = await collectAutomaticTiming(page);
+  assert.equal(original.evidence!.samples.length, 2); assert.equal(original.evidence!.calibration, undefined);
+  const calibration = structuredClone(original.evidence!.samples);
+  // Returned reports cannot mutate the cache retained by the real page port.
+  original.evidence!.samples[0]!.passedWaitingTime = 500;
+  page.nextWindow();
+  const current = await collectAutomaticTiming(page);
+  assert.deepEqual(page.calls, ['sync', 'sync', 'sync']);
+  assert.equal(current.evidence!.samples.length, 1);
+  assert.deepEqual(current.evidence!.calibration!.samples, calibration);
+  assert.equal(current.evidence!.samples[0]!.displayedRemainingMs, 282000);
+  const timing = deriveSyncOperationTiming(current.raw, 3, current.evidence!);
+  assert.equal(timing.remainingMs, 282000); assert.equal(timing.step, 11);
+  assert.equal(timing.sampledMonoMs, current.raw.receivedMonoMs);
+});
+
+test('changed calibration scopes, expiry and clock offset collect a new pair', async t => {
+  const changes: Record<string, (page: ScopedTimingPage) => void> = {
+    page: page => { page.pageEpoch++; }, restore: page => { page.nativeRestoreRevision++; },
+    game: page => { page.gameUuid = 'game-b'; }, room: page => { page.roomId = '54321'; },
+    rules: page => { page.rules.mode.mode = 1; }, hand: page => { page.handKey = 'b'.repeat(64); },
+    stream: page => { page.sourceStream++; },
+    lifetime: page => { page.monoShift = 300_001; }, clock: page => { page.wallShift = 251; },
+  };
+  for (const [name, change] of Object.entries(changes)) await t.test(name, async () => {
+    const page = new ScopedTimingPage(); boundedAcquisition(page);
+    await collectAutomaticTiming(page); page.nextWindow(); change(page);
+    const result = await collectAutomaticTiming(page);
+    assert.equal(result.evidence!.calibration, undefined); assert.equal(result.evidence!.samples.length, 2);
+    assert.equal(page.calls.length, 4);
+    deriveSyncOperationTiming(result.raw, 4, result.evidence!);
+  });
+});
+
+test('an invalid fresh pixel reading rejects and clears the retained calibration', async () => {
+  const page = new ScopedTimingPage(); boundedAcquisition(page);
+  await collectAutomaticTiming(page); page.nextWindow();
+  const original = page.images[0]!; page.images[0] = page.images[1]!;
+  await assert.rejects(collectAutomaticTiming(page), /COUNTDOWN_PROTOCOL_MISMATCH/);
+  page.images[0] = original; page.nextWindow();
+  const retry = await collectAutomaticTiming(page);
+  assert.equal(retry.evidence!.calibration, undefined); assert.equal(retry.evidence!.samples.length, 2);
+});
+
+test('partial scope metadata cannot fall back to an unscoped calibration', async () => {
+  const page = new ScopedTimingPage(); boundedAcquisition(page);
+  await collectAutomaticTiming(page); page.nextWindow();
+  const evaluate = page.evaluate.bind(page);
+  page.evaluate = async (source, input) => {
+    const result = await evaluate(source, input);
+    if (input?.method === 'read') delete result.nativeRestoreRevision;
+    return result;
+  };
+  await assert.rejects(collectAutomaticTiming(page), /COUNTDOWN_SAMPLE_STALE/);
 });

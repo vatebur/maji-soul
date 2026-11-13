@@ -5,6 +5,8 @@ import { deflateSync } from 'node:zlib';
 import { classifyAutoWinPixels, decodeScreenshotPng, DEFAULT_AUTO_WIN_PROFILE as profile,
   ensureAutoWin, verifyAutoWin, nativeRestoreProof, hasRecoveryTableAnchors, type PixelImage } from '../src/adapters/majsoul/auto-win.ts';
 import {bridgeCall, type EgoPagePort } from '../src/adapters/majsoul/ego-transport.ts';
+import { toolbarPalette, TOOLBAR_PALETTES, LINUX_TABLE_FRAME } from '../src/adapters/majsoul/table-pixels.ts';
+import { decodeScreenshotPngRegions } from '../src/adapters/browser/png.ts';
 
 const fixture=JSON.parse(readFileSync('tests/fixtures/auto-win/glyphs.json','utf8'));
 const recoveryFixture=JSON.parse(readFileSync('tests/fixtures/auto-win/recovery-anchors.json','utf8'));
@@ -40,6 +42,16 @@ function png(image:PixelImage, filter=0) {
 test('archived current-client glyphs distinguish grey and green despite enable animation',()=>{
   for(const sample of fixture.samples){const result=classifyAutoWinPixels(imageFor(sample),profile);assert.equal(result.state,sample.expected);assert.equal(result.rgbaSha256,sample.rgbaSha256);}
 });
+test('explicit PNG regions classify the same real glyphs without inventing missing anchor pixels',()=>{
+  const boxes=[profile.glyph,...[profile.anchors,...profile.anchorAlternatives??[]].flat()
+    .map(anchor=>({x:anchor.x,y:anchor.y,width:1,height:1}))];
+  for(const sample of fixture.samples) {
+    const image=imageFor(sample),regions=decodeScreenshotPngRegions(png(image),boxes);
+    assert.deepEqual(classifyAutoWinPixels(regions,profile),classifyAutoWinPixels(image,profile));
+    assert.equal('rgba' in regions,false);
+    assert.throws(()=>classifyAutoWinPixels({...regions,regions:regions.regions.slice(0,1)},profile),/AUTO_WIN_PIXEL_UNAVAILABLE/);
+  }
+});
 test('toolbar anchors, viewport and ambiguous glyphs fail closed',()=>{
   const im=imageFor();const anchor=profile.anchors[0]!;im.rgba.set([0,0,0,255],(anchor.y*im.width+anchor.x)*4);
   assert.equal(classifyAutoWinPixels(im,profile).state,'unknown');
@@ -49,6 +61,40 @@ test('toolbar anchors, viewport and ambiguous glyphs fail closed',()=>{
   assert.equal(classifyAutoWinPixels(blank,profile).state,'unknown');
   for(let y=g.y;y<g.y+g.height;y++)for(let x=g.x;x<g.x+g.width;x++)blank.rgba.set([40,220,70,255],(y*blank.width+x)*4);
   assert.equal(classifyAutoWinPixels(blank,profile).state,'unknown');
+});
+test('captured Linux toolbar and disabled glyph use a complete independent palette',()=>{
+  const sample=JSON.parse(readFileSync('tests/fixtures/auto-win/linux-glyph.json','utf8'));
+  const image:PixelImage={width:sample.width,height:sample.height,rgba:new Uint8Array(sample.width*sample.height*4)};
+  const g=sample.glyph,bytes=Buffer.from(g.rgba,'base64');
+  for(let y=0;y<g.height;y++)image.rgba.set(bytes.subarray(y*g.width*4,(y+1)*g.width*4),((g.y+y)*image.width+g.x)*4);
+  for(const a of sample.anchors)image.rgba.set(a.rgba,(a.y*image.width+a.x)*4);
+  assert.equal(toolbarPalette(image),'linux');
+  const result=classifyAutoWinPixels(image,profile);
+  assert.equal(result.state,'disabled');assert.equal(result.rgbaSha256,sample.glyph.sha256);
+  assert.equal(hasRecoveryTableAnchors(image),true);
+  for(const a of LINUX_TABLE_FRAME){
+    const at=(a.y*image.width+a.x)*4,original=image.rgba.slice(at,at+4);
+    image.rgba.set([0,0,0,255],at);assert.equal(hasRecoveryTableAnchors(image),false);image.rgba.set(original,at);
+  }
+  const mixed=TOOLBAR_PALETTES.legacy[0]!;
+  image.rgba.set([...mixed.rgb,255],(mixed.y*image.width+mixed.x)*4);
+  assert.equal(toolbarPalette(image),null);
+  assert.equal(classifyAutoWinPixels(image,profile).state,'unknown');
+  assert.equal(hasRecoveryTableAnchors(image),false);
+});
+test('table readiness cannot combine one renderer toolbar with the other renderer centre frame',()=>{
+  const linuxToolbarLegacyCentre=imageFor();
+  for(const anchor of TOOLBAR_PALETTES.linux)
+    linuxToolbarLegacyCentre.rgba.set([...anchor.rgb,255],(anchor.y*linuxToolbarLegacyCentre.width+anchor.x)*4);
+  assert.equal(toolbarPalette(linuxToolbarLegacyCentre),'linux');
+  assert.equal(hasRecoveryTableAnchors(linuxToolbarLegacyCentre),false);
+  const legacyToolbarLinuxCentre=imageFor();
+  for(const [x,y]of[[900,390],[1135,335],[945,440],[1080,280]])
+    legacyToolbarLinuxCentre.rgba.set([0,0,0,255],(y!*legacyToolbarLinuxCentre.width+x!)*4);
+  for(const anchor of LINUX_TABLE_FRAME)
+    legacyToolbarLinuxCentre.rgba.set([...anchor.rgb,255],(anchor.y*legacyToolbarLinuxCentre.width+anchor.x)*4);
+  assert.equal(toolbarPalette(legacyToolbarLinuxCentre),'legacy');
+  assert.equal(hasRecoveryTableAnchors(legacyToolbarLinuxCentre),false);
 });
 test('screenshot decoder restores every PNG row filter and rejects malformed images',()=>{
   const original:PixelImage={width:4,height:5,rgba:Uint8Array.from({length:80},(_,i)=>(i*29)%256)};
@@ -115,6 +161,36 @@ test('final verification is read-only; failed re-enable never retries a click',a
   page.paused=true;page.clickWorks=false;await assert.rejects(ensureAutoWin(page),/AUTO_WIN_READBACK_FAILED/);
   assert.equal(page.clicks,1);assert.ok(page.acknowledgements.every(a=>a.state!=='enabled'));
   await assert.rejects(ensureAutoWin(page,profile,true,'pause-cleanup'),/AUTO_WIN_PURPOSE_INVALID/);
+});
+
+test('an aged acknowledgement reacquires one fresh image in the unchanged scope without clicking',async()=>{
+  const page=new Page();page.enabled=true;let acknowledgements=0;
+  page.onAck=()=>{if(++acknowledgements===1)throw Error('AUTO_WIN_READBACK_STALE');};
+  const result=await verifyAutoWin(page);
+  assert.equal(result.state,'enabled');assert.equal(result.clicked,false);
+  assert.equal(page.captures,2);assert.equal(acknowledgements,2);assert.equal(page.clicks,0);
+  assert.equal(page.acknowledgements.length,1);
+  const alwaysStale=new Page();alwaysStale.enabled=true;
+  alwaysStale.onAck=()=>{throw Error('AUTO_WIN_READBACK_STALE');};
+  await assert.rejects(verifyAutoWin(alwaysStale),/AUTO_WIN_READBACK_STALE/);
+  assert.equal(alwaysStale.captures,2);assert.equal(alwaysStale.clicks,0);
+});
+
+test('an expired visual acknowledgement cannot retry across game, control or native restore boundaries',async()=>{
+  for(const changed of ['epoch','sourceStream','generation','step','nativeRestoreRevision','controlEpoch','paused','connected','handEnded','matchEnded'] as const) {
+    const page=new Page();page.enabled=true;
+    page.onAck=()=>{
+      if(changed==='paused'||changed==='connected')page[changed]=false;
+      else if(changed==='handEnded'||changed==='matchEnded')page[changed]=true;
+      else page[changed]++;
+      throw Error('AUTO_WIN_READBACK_STALE');
+    };
+    await assert.rejects(verifyAutoWin(page),/AUTO_WIN_READBACK_STALE/,changed);
+    assert.equal(page.captures,1,changed);assert.equal(page.clicks,0,changed);
+  }
+  const page=new Page();page.enabled=true;page.onAck=()=>{throw Error('BRIDGE_UNTRUSTED');};
+  await assert.rejects(verifyAutoWin(page),/BRIDGE_UNTRUSTED/);
+  assert.equal(page.captures,1);
 });
 
 test('a boundary or resume while moving the pointer cancels the old toggle before pressing',async()=>{

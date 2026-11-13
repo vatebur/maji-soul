@@ -24,7 +24,7 @@
           <p id="automation-status" role="status"></p>
           <div class="actions" id="automation-actions" hidden>
             <button data-command="automation/set" id="automation-toggle" aria-pressed="false">启用自动出牌</button>
-            <span>启用后自动继续下一场，达到场数或时长上限后停止。</span>
+            <span>启用后持续对局，异常时自动重建房间，直到手动停止。</span>
           </div>
           <div class="actions" id="game-reset-actions" hidden>
             <button data-command="display/reset">重置对局显示</button>
@@ -47,6 +47,12 @@
           <p id="bili-source"></p>
           <p id="receipts"></p>
           <p id="commentary"></p>
+          <p id="avatar-status" hidden></p>
+          <div id="avatar-controls" class="actions" hidden>
+            <a class="button" href="/avatar?debug=1&amp;preview=1" target="_blank" rel="noopener">预览 Live2D 角色 ↗</a>
+            <button id="avatar-test" type="button">试听角色</button>
+            <label>OBS 角色地址 <input id="avatar-address" readonly aria-label="OBS 角色地址"></label>
+          </div>
           <div class="actions">
             <button data-command="speech/mute" id="mute">静音</button>
             <button data-command="speech/clear">清空待播</button>
@@ -73,8 +79,6 @@
         <section class="panel">
           <h2>直播配置</h2>
           <form id="settings">
-            <label>最多场数 <input id="matches" type="number" min="1" max="100" required></label>
-            <label>时长上限（分钟） <input id="minutes" type="number" min="1" max="1440" step="any" required></label>
             <label>直播间号 <input id="room" inputmode="numeric" pattern="[1-9][0-9]{0,19}" maxlength="20"></label>
             <label>语音 <select id="voice"></select></label>
             <label>模型解说 <select id="commentary-profile"><option value="disabled">事实模板</option></select></label>

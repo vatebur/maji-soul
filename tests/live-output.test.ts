@@ -79,7 +79,7 @@ test('viewer priority, clear and mute keep one player and reject a late synthesi
     controller.enqueue(content('viewer'));
     first.resolve('obsolete audio');
     await eventually(() => plays.length === 1);
-    assert.deepEqual(plays, ['观众提问。']);
+    assert.deepEqual(plays, ['[平静]观众提问。']);
     assert.equal(controller.last?.outcome, 'cancelled');
     const epoch = controller.view.playbackEpoch;
     assert.equal(controller.clearPending(), 1);
@@ -92,7 +92,7 @@ test('viewer priority, clear and mute keep one player and reject a late synthesi
     assert.equal(controller.last?.outcome, 'cancelled');
     assert.equal(controller.view.playingSpeechId, null);
     await controller.setMuted(false);
-    assert.deepEqual(plays, ['观众提问。']);
+    assert.deepEqual(plays, ['[平静]观众提问。']);
   } finally { first.resolve('obsolete audio'); playing.resolve(); await controller.setMuted(true); }
 });
 
@@ -125,7 +125,8 @@ test('bili gateway drops own messages, deduplicates, and persists uncertain deli
     await eventually(() => interaction.lastDelivery?.status === 'simulated');
     assert.equal(sends, 0);
     assert.equal(cards.length, 1);
-    assert.match(cards[0]!.text, /访客说,上一手为什么\?/);
+    assert.match(cards[0]!.text, /^\[平静\]回顾/);
+    assert.doesNotMatch(cards[0]!.text, /访客说|上一手为什么/);
     config.interaction.dryRun = false;
     await delay(1050);
     interaction.tick(archive);
@@ -169,13 +170,13 @@ test('rehearsal restores its checkpoint paused, preserves the stop latch, and co
     const controlEpoch = runtime.projections.console.session!.controlEpoch;
     await assert.rejects(runtime.command('control.resume', { ...intent(), sessionId: runId, expectedControlEpoch: controlEpoch - 1 }), /CONTROL_EPOCH_MISMATCH/);
     await runtime.command('control.resume', { ...intent(), sessionId: runId, expectedControlEpoch: controlEpoch });
-    await runtime.command('config.patch', { ...intent(), sessionId: runId, expectedRevision: 0, changes: { run: { maxMatches: 2 } } });
+    await runtime.command('config.patch', { ...intent(), sessionId: runId, expectedRevision: 0, changes: { output: { theme: 'light' } } });
     for (let i = 0; i < 22 && runtime.projections.console.session!.completedMatches < 1; i++) await runtime.tick();
     assert.equal(runtime.projections.console.session?.completedMatches, 1);
     assert.notEqual(runtime.gameSessionId, firstGame);
     assert.equal((await store.readProjection(firstGame))?.projection.room?.roomId, runtime.projections.console.room?.roomId);
     await runtime.command('control.stop-after-match', { ...intent(), sessionId: runId });
-    await runtime.command('config.patch', { ...intent(), sessionId: runId, expectedRevision: 1, changes: { run: { maxMatches: 100 } } });
+    await runtime.command('config.patch', { ...intent(), sessionId: runId, expectedRevision: 1, changes: { output: { theme: 'dark' } } });
     for (let i = 0; i < 22; i++) await runtime.tick();
     assert.equal(runtime.projections.console.session?.status, 'stopped');
     assert.equal(runtime.projections.console.session?.completedMatches, 2);
@@ -186,7 +187,7 @@ test('rehearsal restores its checkpoint paused, preserves the stop latch, and co
   } finally { await runtime?.close(); await store.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
-test('duration latches while paused and mode changes at the next hand', async t => {
+test('elapsed time never stops a run and mode changes at the next hand', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'maji-output-duration-')), store = new StorageClient(join(dir, 'state.sqlite'));
   const fixture = await loadReplay(fixtureDirectory);
   fixture.events.push(...end);
@@ -195,25 +196,25 @@ test('duration latches while paused and mode changes at the next hand', async t 
   let now = Date.now();
   t.mock.method(Date, 'now', () => now);
   try {
-    await runtime.command('config.patch', { ...intent(), sessionId: null, expectedRevision: 0, changes: { run: { maxDurationMs: 60_000 } } });
-    await runtime.command('control.start', { ...intent(), expectedConfigRevision: 1 });
+    await runtime.command('control.start', { ...intent(), expectedConfigRevision: 0 });
     await runtime.tick();
     const sessionId = runtime.sessionId!;
     await runtime.command('control.next-mode', { ...intent(), sessionId, expectedControlEpoch: 0, mode: 'llm' });
     assert.equal(runtime.projections.console.session?.activeMode, 'engine');
     await runtime.command('control.pause', { ...intent(), sessionId });
-    now += 60_001;
+    now += 86_400_001;
     await runtime.tick();
     assert.equal(runtime.projections.console.session?.status, 'paused');
-    assert.equal(runtime.projections.console.session?.stopAfterMatch, true);
+    assert.equal(runtime.projections.console.session?.stopAfterMatch, false);
     const command = () => ({ ...intent(), issuedAt: new Date(now).toISOString(), sessionId });
-    await runtime.command('config.patch', { ...command(), expectedRevision: 1, changes: { run: { maxDurationMs: 3_600_000 } } });
+    await runtime.command('config.patch', { ...command(), expectedRevision: 0, changes: { output: { theme: 'light' } } });
     await runtime.command('control.resume', { ...command(), expectedControlEpoch: 1 });
-    for (let i = 0; i < 20; i++) await runtime.tick();
-    assert.equal(runtime.projections.console.session?.status, 'stopped');
+    for (let i = 0; i < 40 && runtime.projections.console.session!.completedMatches < 1; i++) await runtime.tick();
+    await runtime.tick();
+    assert.equal(runtime.projections.console.session?.status, 'running');
     assert.equal(runtime.projections.console.session?.activeMode, 'llm');
     assert.equal(runtime.projections.console.session?.completedMatches, 1);
-    assert.equal(await store.readProjection(sessionId + '-match-1'), null);
+    assert.ok(await store.readProjection(sessionId + '-match-1'));
   } finally { await runtime.close(); await store.close(); await rm(dir, { recursive: true, force: true }); }
 });
 

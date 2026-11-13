@@ -2,9 +2,9 @@
 
 [文档导航](../README.md) · 接口
 
-契约版本：v1，设计日期：2026-11-05（Asia/Shanghai）。状态：回放演练和台账跟随已实现，实场控制仍以阶段验收为准。本文件依据 [需求](../planning/PLAN.md)、[模型](../design/DOMAIN_MODEL.md) 和 [架构](../design/ARCHITECTURE.md)，定义本机控制台与 OBS 使用的接口。字段与路径的机器可读定义见 [openapi.json](./openapi.json)，模块、Worker 和 Rust runner 的通信见 [INTERNAL_INTERFACES.md](./INTERNAL_INTERFACES.md)。
+契约版本：v1，更新日期：2026-11-13（Asia/Shanghai）。状态：回放、台账跟随、实场连续运行、故障监控和自动转播已实现，实场效果仍按验收记录确认。本文件依据 [需求](../planning/PLAN.md)、[模型](../design/DOMAIN_MODEL.md) 和 [架构](../design/ARCHITECTURE.md)，定义控制台与 OBS 使用的接口。字段与路径的机器可读定义见 [openapi.json](./openapi.json)，模块、Worker 和 Rust runner 的通信见 [INTERNAL_INTERFACES.md](./INTERNAL_INTERFACES.md)。
 
-本轮 [Live2D 接入设计](../research/LIVE2D.md) 是可选扩展：当前 v1 不含角色配置、模型／音频资源读取、播放租约和浏览器回执接口。启用前须补齐专用身份、租约续约／撤销、失联停播、代际校验、回执去重和错误契约；HTTP 部分同步 OpenAPI，WebSocket 部分另有严格消息 schema。现有 `/obs` 与 OBS SSE 继续只读，控制台凭证不交给角色播放页面。
+可选 Live2D 输出通过 `--avatar` 装配；[角色播放接口](#73-live2d-角色播放)单独处理配置、资源、唯一播放租约和浏览器回执。现有 `/obs` 与 OBS SSE 继续只读。历史选型与当前实施边界见 [Live2D 接入设计](../research/LIVE2D.md)。
 
 当前装配通过 `npm start -- console` 启动。运行命令用于回放演练；普通台账跟随模式只读游戏事实，游戏运行控制命令返回 `UNSUPPORTED_CAPABILITY`。本机控制台提供同步命令完成结果、持久命令去重和快照流。真实游戏的开局／同步命令状态仍按下文目标契约验收。
 
@@ -135,7 +135,7 @@ pause 与 stop-after-match 不要求调用者提供旧控制代际，以便立�
 
 未证实自动和牌关闭时，pause 仍可完成程序关闸，结果使用 `clientMayAct: true` 并列出警告。存储故障时也必须先在内存关闸，但响应为 `503 STORAGE_UNAVAILABLE`，`error.effect` 标明已关闸；不能声称命令已可靠持久化。
 
-stop-after-match 成功仅表示意图生效，不表示整场已打完。暂停中的运行保持暂停；此命令不代替 resume。降低限额达到阈值后，增大限额也不自动撤销已锁存停止意图。
+stop-after-match 成功仅表示意图生效，不表示整场已打完。暂停中的运行保持暂停；此命令不代替 resume。运行没有自动场数／时长停止条件，人工停止意图不会因配置更新而撤销。
 
 next-mode 请求示例：
 
@@ -171,7 +171,7 @@ next-mode 请求示例：
 
 | 字段 | 含义 |
 | --- | --- |
-| `session` | 当前运行 ID、状态、controlEpoch、activeMode／pendingMode、原始开始时间、限额进度、停止意图；无运行时为 null |
+| `session` | 当前运行 ID、状态、controlEpoch、activeMode／pendingMode、原始开始时间、已完成场数、停止意图；无运行时为 null |
 | `room` | 房间 ID、流程状态、自动和牌验证结果及已验证规则；尚未取得房间时 null |
 | `game` | 当前公共局面卡：matchId／handId、状态可信度与时间、场况、分数、宝牌、剩余牌、最近动作；无局面时 null |
 | `modules` | 各模块 ready／degraded／unavailable／recovering 状态、错误码和更新时间 |
@@ -188,7 +188,7 @@ changes 为显式定义的嵌套部分对象：省略保留原值，对象按字
 
 | 允许的配置组 | 首版字段 | 生效规则 |
 | --- | --- | --- |
-| `run` | defaultMode、maxMatches、maxDurationMs | 默认模式只影响新 session；限额同时更新所指活动 session 并立即检查阈值 |
+| `run` | defaultMode | 默认模式只影响新 session；不接受场数或时长上限 |
 | `persona` | name、style、catchphrases、teasingIntensity | 后续内容生成；不改历史事实 |
 | `moderation` | rules（首版 literal 匹配，drop／replace） | 更新规则修订，所有待发布文字／音频重新检查 |
 | `interaction` | roomId、globalIntervalMs、viewerCooldownMs、replyMaxChars、dryRun | 调度后续任务；发送前再检查；房号变化取消旧房间待发内容 |
@@ -275,6 +275,32 @@ data: {"projection":{"epoch":"epoch-example","revision":24,"cursor":"console.epo
 
 投影序号与 `GameState.stateVersion` 不相同；语音、命令状态等也会推进投影。SSE 是有界的展示订阅，允许 reset 到最新快照；完整审计与历史决策读取持久化存储，不能依赖浏览器收到所有展示事件。客户端不得因 SSE 重放而重新发命令。
 
+### 7.3 Live2D 角色播放
+
+`GET /avatar` 是背景透明的角色浏览器源；`?debug=1` 显示配置／音频状态，`?preview=1` 只渲染模型、不申请播放权。页面使用本机服务中的受限资源 URL，不接收模型或观众指定的任意 URL。服务端的 Fish、LLM 密钥和资源原始路径不进入页面配置。
+
+`/api/avatar/*` 使用专用的直接 JSON 对象，不套用控制台 `apiVersion/requestId/data` 成功响应封套，也不使用控制台 `commandId`。角色业务错误返回 `{error: "错误码"}`；通用 JSON 解析、请求大小与服务器错误仍可能使用 `ErrorEnvelope`。所有写请求必须携带与服务一致的 Origin；请求字段与枚举严格校验，播放身份只作用于角色音频通道。
+
+| 接口 | 请求／响应 |
+| --- | --- |
+| `GET /api/avatar/config` | 返回 `enabled / modelConfigured / modelUrl / profileUrl / coreUrl / characterName`，资源缺省 URL 为 null；启用时另带 connected、plannerAvailable、phase、speaking、last |
+| `POST /api/avatar/claim` | `{rendererId, parameters}`；parameters 为模型实际参数 ID 到 `{min,max,default,name?}` 的映射。返回 `leaseId / leaseMs / serverNow / expiresAt` |
+| `POST /api/avatar/poll` | `{rendererId,leaseId}`；续租并返回租约时间及当前 `command`，无待处理指令时为 null |
+| `POST /api/avatar/ack` | 租约身份及 `speechId / playbackEpoch / status`；status 为 ready／started／ended／cancelled／failed，ready 另带实际音频 `durationSec` |
+| `POST /api/avatar/release` | `{rendererId,leaseId}`，释放当前页面的播放权并终止其未完成播放 |
+| `POST /api/avatar/test` | 空对象 `{}`，当前渲染器已连接、语音空闲且未静音时，通过原队列播放固定试听台词；返回 `{ok:true,contentId}` |
+| `GET /api/avatar/audio/{audioId}` | query 为 rendererId、leaseId；只返回当前实例的 MP3 字节，过期或取消后拒绝读取 |
+
+试听台词固定为「[开心]大家好，一起开心打牌吧。」，不能提交自定义文本，也不发送弹幕或操作牌局。成功只表示入队，真实结果从 `GET /api/output/status` 读取。每次成功请求后冷却 30 秒；未连接返回 `409 AVATAR_RENDERER_UNAVAILABLE`，忙或静音返回 `409 AVATAR_SPEECH_BUSY_OR_MUTED`，冷却内返回 `429 AVATAR_TEST_COOLDOWN`。试听同样要求严格同源 Origin。
+
+`GET /api/output/status` 在角色模式增加 `avatar`，其字段与上述播放状态相同。`/avatar-assets/model/...` 只开放模型清单与其显式引用的资源，Profile 和 Core 通过固定 URL 返回；目录中的其他文件、逃出模型目录的路径或符号链接不开放。`/avatar.bundle.js` 尚未构建时返回 `503 AVATAR_BUILD_REQUIRED`。
+
+租约默认 4 秒，页面每 500 毫秒轮询；同一时刻只允许一个正式页面获得租约，第二个页面不能抢占。`serverNow / expiresAt` 为服务器时间毫秒，页面扣除请求往返耗时后使用单调时钟设置失联停播期限。网络失败、页面关闭或租约到期时停止音频、口型与动作；重新连接不能让已结束或撤销的语音复活。
+
+每条指令绑定 `speechId / playbackEpoch`，包含 `phase`（prepare／play／stop）、`audioUrl / text / moods / parameterPlan` 和可选的 `durationSec`。音频 URL 仅授予当前租约和播放实例。prepare 只解码音频并回报 ready；完成动作规划后才发送 play。页面以同一个 AudioContext 播放音频、分析口型和推进动作，只有实际起播才回报 started，只有自然播完才回报 ended。失败与取消不能完成当前语音；旧身份、旧实例的回执不能推进新播放。
+
+「清空待播」取消尚未实际开始的准备工作，维持已经 started 的当前播放；「静音」发出 stop，并等待页面确认或有效租约到期后释放音频。准备阶段尚无发声许可，可以直接取消。结束后的轮询返回 null，不按旧字幕或 SSE 历史快照再次触发动作；已结束实例的重复回执返回 `AVATAR_PLAYBACK_EXPIRED`，不会重新完成或重播。此通道不授予游戏操作权限，也不创建第二套口播队列。
+
 ## 8. 错误与重试
 
 ```json
@@ -315,24 +341,36 @@ data: {"projection":{"epoch":"epoch-example","revision":24,"cursor":"console.epo
 
 ## 9. 契约验证要求
 
-实现阶段至少覆盖：请求字段／大小校验、同 ID 同请求与冲突请求、时效／保留清理、异步失败查询、旧 session／版本拒绝、暂停在存储失败时仍关闸、模式切换与 HandStarted 的先后顺序、配置事务和限额锁存、语音 clear／mute 的代际区别、SSE 快照订阅间隙与 reset、OBS 字段白名单。
+实现阶段至少覆盖：请求字段／大小校验、同 ID 同请求与冲突请求、时效／保留清理、异步失败查询、旧 session／版本拒绝、暂停在存储失败时仍关闸、模式切换与 HandStarted 的先后顺序、配置迁移和人工停止意图、语音 clear／mute 的代际区别、故障恢复及错误播报、SSE 快照订阅间隙与 reset、OBS 字段白名单。
 
 OpenAPI 负责 HTTP 形状、示例和可导入定义；事件游标、外部动作确认和竞态等语义以本文件和 [内部接口](./INTERNAL_INTERFACES.md) 为准。所有文件随契约变更一起更新；当前文档未表示已有服务通过了这些验证。
 
 
 ## 实场自动出牌开关
 
-通过 `--space --page --live-options` 装配后，`POST /api/automation/set` 接受 `{commandId, issuedAt, sessionId, enabled}`。无需登录，沿用来源校验和命令去重；未装配时返回 `409 UNSUPPORTED_CAPABILITY`。成功响应表示启动或停止请求已交给执行器，实际进度由快照流更新。
+通过 `--space --page --live-options`（ego）或 `--browser-endpoint --live-options`（Chromium）装配后，`POST /api/automation/set` 接受 `{commandId, issuedAt, sessionId, enabled}`。无需登录，沿用来源校验和命令去重；未装配时返回 `409 UNSUPPORTED_CAPABILITY`。成功响应表示启动或停止请求已交给执行器，实际进度由快照流更新。`--auto-start` 在服务启动后调用同一个启用入口。
 
-`ConsoleState.automation` 包含 `available`、`enabled`、`status`（idle／starting／playing／waiting／stopping／stopped／faulted）、`completedMatches`、`sessionId` 和可选的 `errorCode`。新的对局会话自动成为控制台查询和字幕档案的来源。达到启用时的运行上限、整场失败或不确定的开局回执时，不再开始下一场。进程恢复不自动启用。
+`ConsoleState.automation` 包含 `available`、`enabled`、`status`（idle／starting／creating／recruiting／recovering／playing／waiting／stopping／stopped／faulted）、`completedMatches`、`sessionId` 和可选的 `errorCode`、`roomId`、`recruitUntil`（ISO 时间或 null）。`recruiting` 为三分钟观众招募阶段，`creating` 为默认建房，`recovering` 为故障恢复或重试等待。新增可选字段为 `recoveryCount`、`lastErrorCode`、`lastErrorAt`、`nextRetryAt`、`heartbeatAt` 和 `lastProgressAt`；时间使用 ISO 格式，前三个历史故障字段恢复成功后仍保留，`errorCode` 在恢复成功后清除。OBS 仅投影 enabled、status、roomId、recruitUntil，不含会话或控制字段。新的对局会话自动成为控制台查询和字幕档案的来源。
+
+运行不设场数或时长上限；旧持久配置中的 `run.maxMatches`、`run.maxDurationMs` 在启动时删除并增加配置修订，`config.patch` 不再接受它们，`SessionView` 不再返回 `limits`。普通进程启动后由按钮开启自动出牌，`--auto-start` 则立即启用；人工停止会取消重试。
+
+对局监控每五秒检查权威进展，120 秒无变化、断连或读取超时会撤销当前工作并等待旧执行器退出。父进程还检查两秒心跳及阶段进展，playing／recovering 的阶段进展阈值均为 180 秒；失联时结束旧进程组再启动新工作。可恢复故障进入 `recovering`，按 1–60 秒退避持续重试。恢复刷新桥接废除旧许可，重新证明房主身份、四人友人房和当前对局范围后处理旧局，确认结束及离房，再创建新房、招募和重新同步出牌。恢复不增加已完成场数，不重放旧决策，不删除或伪造旧未决动作的结果。
+
+`BROWSER_CONTROL_WITH_USER`、`LOGIN_REQUIRED`、`CLIENT_VERSION_MISMATCH`、`PROTOCOL_HASH_MISMATCH`、`ROOM_OWNER_REQUIRED`、`ROOM_TERMINATE_REJECTED`、`ROOM_LEAVE_REJECTED`、`GAME_PAGE_AMBIGUOUS`、`INVALID_CLI_ARGUMENTS` 进入 `faulted` 并禁用自动出牌；用户完成登录、配置或房间处理后重新启用。主控制台继续运行，浏览器人工接管不会被自动抢回。错误播报使用固定系统提示，不依赖 LLM；每个来源去重并按一分钟节流，优先于普通解说且尊重静音。
+
+未认证且无法识别已登录画面时，建房等待 90 秒后进入 `LOGIN_REQUIRED`，期间不刷新登录页面；已认证但画面异常最多刷新两次。浏览器桥接版本 5 的 `lobbyAuthenticated` 标志用于判断，未作为控制台公开配置或授权入口。
+
+单次执行器的观察时限独立于直播持续运行。报告为 `MATCH_OBSERVATION_LIMIT` 且观察闭合、弃牌对账与共享台账核验通过时，连续模式保持 `playing`，等待旧执行器释放后以新 `sessionId` 接续同一场，不消耗异常恢复次数、不增加完成场数。停止命令可中止当前接续。核验失败进入故障恢复流程，不能把未闭合观察直接当成正常续局。
+
+整场已结束时，执行器报告的 `matchCompletion.canStartNextMatch` 单独核对完整结算、观察闭合、页面暂停及共享台账无未决动作，并绑定 `gameMatchKey`。该证明成立时，出牌覆盖未通过的 `blocked` 报告仍可正常计入完成场数并确认结算、进入下一轮招募；未覆盖弃牌仍留在报告的诊断中，不计为程序确认。缺少结算、观察尾部未闭合、未决提交或对局身份不一致不会直接进入正常续局，交给故障恢复核验。
 
 ### 干净画面转播
 
 实场装配增加 `POST /api/relay/set`，请求为 `{commandId, issuedAt, sessionId, enabled}`，沿用同源检查、严格布尔校验和持久命令去重；未装配返回 `409 UNSUPPORTED_CAPABILITY`。命令结果 `kind` 为 `relay-control`，表示启停请求已处理；异步采集结果通过快照中的 `ConsoleState.relay` 更新。
 
-`relay` 包含 `available`、`enabled`、`status`（idle／starting／live／stopped／faulted）、`obsUrl`、`previewUrl`、`fps`、`dimensions`（width／height 或 null）、`errorCode`。`RELAY_PORT_IN_USE` 表示独立服务占用了默认转播端口；`RELAY_START_FAILED` 表示启动失败；`RELAY_CAPTURE_FAILED` 表示采集进程已退出。错误不修改自动对局状态，停止转播也不会停止自动出牌。转播上传令牌不进入控制台或 OBS 投影。
+`relay` 包含 `available`、`enabled`、`status`（idle／starting／live／recovering／stopped／faulted）、`obsUrl`、`previewUrl`、`fps`、`dimensions`（width／height 或 null）、`errorCode`，以及可选的 `recoveryCount` 和 `nextRetryAt`。`enabled` 表示启用意图，恢复期间仍为 true。`RELAY_PORT_IN_USE` 表示独立服务占用了默认端口；`RELAY_START_FAILED` 表示启动失败；`RELAY_CAPTURE_FAILED` 表示采集退出；`RELAY_FRAME_TIMEOUT` 表示 30 秒没有首帧或 45 秒没有新帧。故障以 2–60 秒退避自动恢复，错误不修改自动对局状态，停止转播也不会停止自动出牌。转播上传令牌不进入控制台或 OBS 投影。
 
-转播服务只监听 `127.0.0.1:17362`，`/obs` 为 OBS 浏览器源页面，`/stream.mjpeg` 为只读画面流；与控制台 `/obs` 的字幕源区分。退出控制台会关闭其拥有的转播服务，进程恢复不自动启动。转播不发送游戏操作，也不接管用户控制权。
+转播服务只监听 `127.0.0.1:17362`，`/obs` 为 OBS 浏览器源页面，`/stream.mjpeg` 为只读画面流；与控制台 `/obs` 的字幕源区分。实场默认自动开启，人工关闭偏好持久化，重启后继续关闭直到显式启用。退出控制台会关闭其拥有的转播服务。转播不发送游戏操作，也不接管用户控制权。Debian 的控制台和画面默认通过 SSH 转发访问，网页端点不包含服务器音轨。
 
 
 ## 重置对局显示

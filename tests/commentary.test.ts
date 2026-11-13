@@ -34,14 +34,14 @@ test('ordinary viewer chat is bounded, moderated, and cancelled when settings ch
           assert.deepEqual(request.recentDiscards, archive.slice(0, 3).map(entry => entry.factText));
           entered.resolve();
           if (scenario === 'cancel') { await release.promise; assert.equal(signal.aborted, true); }
-          return { reply: scenario === 'filtered' ? '隐藏词' : scenario === 'oversized' ? '长'.repeat(21) : '你好，欢迎一起看牌！' };
+          return { reply: scenario === 'filtered' ? '[难受]隐藏词。' : scenario === 'oversized' ? '长'.repeat(21) : '[开心]来啦，一起看牌！' };
         },
       }, () => ({ config, revision: 1 }), () => {});
       try {
         const answer = service.answer('你好呀', archive, new AbortController().signal);
         await entered.promise;
         if (scenario === 'cancel') service.invalidate();
-        assert.equal(await answer, scenario === 'reply' ? '你好,欢迎一起看牌!' : null);
+        assert.equal(await answer, scenario === 'reply' ? '[开心]来啦,一起看牌!' : null);
         release.resolve();
       } finally { release.resolve(); await service.close(); }
     });
@@ -234,9 +234,9 @@ test('slow strategy narration never blocks replay and speaks the model summary',
     await runtime.tick();
     assert.ok(runtime.projections.console.game!.stateVersion > version);
     assert.equal(played.length, 0);
-    pending.resolve({ summary: '可以考虑先整理手牌结构，再结合对手立直情况决定攻守。' });
+    pending.resolve({ summary: '[纠结]先理理这手牌吧。[犹豫]有人立直就稳点。' });
     await eventually(() => played.length === 1 && !runtime.speech.busy);
-    assert.deepEqual(played, ['可以考虑先整理手牌结构,再结合对手立直情况决定攻守。']);
+    assert.deepEqual(played, ['[纠结]先理理这手牌吧。[犹豫]有人立直就稳点。']);
     const archive = await runtime.discards(runtime.gameSessionId!);
     assert.equal(archive.length, 1); assert.equal(archive[0]!.source, 'fact-template');
     await runtime.tick();
@@ -263,7 +263,7 @@ test('clear and mute revoke speech waiting for either discard commentary or a vi
       await runtime.tick(); const input = await entered.promise;
       await runtime.command(`speech.${command}`, { ...intent(), sessionId: null, ...(command === 'mute' ? { muted: true } : {}) });
       if (command === 'mute') await runtime.command('speech.mute', { ...intent(), sessionId: null, muted: false });
-      pending.resolve(kind === 'discard' ? { summary: '可以考虑保留手牌的连张。' } : selection(input.context));
+      pending.resolve(kind === 'discard' ? { summary: '[犹豫]先留着连张吧。' } : selection(input.context));
       await eventually(() => !runtime.commentary.view.busy && (kind === 'discard' || runtime.interaction.lastDelivery !== null));
       assert.deepEqual(played, []);
       assert.equal(runtime.speech.view.pendingCount, 0);
@@ -306,6 +306,10 @@ test('model HTTP modes share bounded parsing and preserve the validated commenta
       strategyInput, new AbortController().signal), { summary: '可以考虑先整理手牌结构。' });
     const strategyMessages = received[4]!.messages as { content: string }[];
     assert.match(strategyMessages[0]!.content, /不要逐条复述/);
+    assert.match(strategyMessages[0]!.content, /最多19个字符/);
+    assert.match(strategyMessages[0]!.content, /心情标签/);
+    assert.match(strategyMessages[0]!.content, /允许整段都是与牌局无关/);
+    assert.doesNotMatch(strategyMessages[0]!.content, /逐句弹幕/);
     assert.deepEqual(JSON.parse(strategyMessages[1]!.content), strategyInput);
     const config = { ...base, responseFormat: 'none' as const }, request = { name: 'test', schema: {}, messages: [] };
     response = 'x'.repeat(65537);

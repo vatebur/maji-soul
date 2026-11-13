@@ -70,7 +70,8 @@ test('a single static frame has its complete multipart delimiter without waiting
 });
 
 test('relay tracks the capture process, restarts after failure, and releases its own service', async () => {
-  const service = captureService(), relay = new LiveRelay('0', 'p1', 17362, service.launch);
+  let now = Date.now();
+  const service = captureService(), relay = new LiveRelay('0', 'p1', 17362, service.launch, () => now);
   await relay.start();
   await relay.start();
   assert.equal(service.starts(), 1);
@@ -83,12 +84,18 @@ test('relay tracks the capture process, restarts after failure, and releases its
   assert.ok(!JSON.stringify(relay.view).includes('private-upload-token'));
   Object.assign(service.stats, { running: false, workerExit: { code: 1, signal: null } });
   await relay.refresh();
-  assert.equal(relay.view.enabled, false);
+  assert.equal(relay.view.enabled, true);
+  assert.equal(relay.view.status, 'recovering');
   assert.equal(relay.view.errorCode, 'RELAY_CAPTURE_FAILED');
-  await relay.start();
+  await relay.refresh();
+  assert.equal(service.starts(), 1);
+  now += 2000;
+  await relay.refresh();
   assert.equal(service.starts(), 2);
   assert.equal(service.closes(), 1);
   await relay.stop();
+  now += 60_000;
+  await relay.refresh();
   await relay.close();
   assert.equal(service.closes(), 2);
   assert.equal(relay.view.obsUrl, null);
@@ -98,7 +105,8 @@ test('relay tracks the capture process, restarts after failure, and releases its
 test('an occupied relay port is reported without attaching to or stopping the other service', async () => {
   const relay = new LiveRelay('0', 'p1', 17362, async () => { throw Object.assign(Error('occupied'), { code: 'EADDRINUSE' }); });
   await relay.start();
-  assert.equal(relay.view.enabled, false);
+  assert.equal(relay.view.enabled, true);
+  assert.equal(relay.view.status, 'recovering');
   assert.equal(relay.view.errorCode, 'RELAY_PORT_IN_USE');
   await relay.close();
 });
@@ -114,7 +122,7 @@ test('console relay writes are idempotent, validated, origin checked, and indepe
   };
   const runtime = await ConsoleRuntime.open({ store, source: { kind: 'follow', sessionId: 'idle' },
     voices: [], voiceId: 'test', relay, automation });
-  const server = createConsoleServer(runtime, 0);
+  const server = createConsoleServer(runtime, 0, 17364);
   try {
     let origin: string;
     try { ({ origin } = await server.listen()); }
@@ -135,7 +143,7 @@ test('console relay writes are idempotent, validated, origin checked, and indepe
     assert.equal(state.data.state.relay.obsUrl, 'http://127.0.0.1:17362/obs');
     assert.ok(!JSON.stringify(state).includes('private-upload-token'));
     const page = await fetch(origin + '/');
-    assert.match(page.headers.get('content-security-policy')!, /img-src 'self' http:\/\/127.0.0.1:17362/);
+    assert.match(page.headers.get('content-security-policy')!, /img-src 'self' http:\/\/127.0.0.1:17364/);
     assert.match(await page.text(), /id="relay-toggle"/);
     assert.equal((await send({ ...command, commandId: randomUUID(), enabled: false })).status, 200);
     assert.equal(service.closes(), 1);

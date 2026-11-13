@@ -3,17 +3,14 @@ import type { ActorControl } from '../../application/game/actor.ts';
 import type { ActionAttempt, CallReceipt, DecisionSnapshot, FencedActionCommand, LegalAction } from '../../domain/game/types.ts';
 import { canonical, requireThat } from '../../domain/game/value.ts';
 import type { ProtocolOperationTiming } from './operation-timing.ts';
+import type { BrowserPagePort } from '../../ports/browser.ts';
 
-/** The documented ego Page API is supplied by the caller; no browser is launched here. */
-export interface EgoPagePort {
-  evaluate(source: string | ((argument: any) => any), argument?: any): Promise<any>;
-  cdp?(method: string, parameters?: any): Promise<any>;
-  reload?(): Promise<any>;
-}
+/** Compatibility name for existing game adapters and ego callers. */
+export type EgoPagePort = BrowserPagePort;
 export interface PageCursor { generation: number; pageEpoch: number; step: number }
 export interface AutoWinHandScope extends PageCursor { sourceStream: number }
 export function bridgeCall(page: EgoPagePort, method: string, argument?: unknown): Promise<any> {
-  requireThat(['read', 'drain', 'pause', 'sync', 'ackSync', 'prepare', 'dispatch', 'reconnect', 'restore', 'ackAutoWin', 'ackTiming', 'ensureAutoWin', 'verifyAutoWin', 'automaticTiming', 'releaseAkagi', 'startNextMatch'].includes(method), 'BRIDGE_METHOD_INVALID');
+  requireThat(['read', 'drain', 'pause', 'sync', 'ackSync', 'prepare', 'dispatch', 'reconnect', 'restore', 'ackAutoWin', 'ackTiming', 'ensureAutoWin', 'verifyAutoWin', 'automaticTiming', 'releaseAkagi', 'startNextMatch', 'inspectRoom', 'clearRoomRobots', 'fillRoom', 'abandonOwnedRoom'].includes(method), 'BRIDGE_METHOD_INVALID');
   if (method === 'ensureAutoWin' && argument != null) {
     const options=argument as {purpose?:unknown;expected?:AutoWinHandScope},expected=options.expected;
     requireThat(typeof argument==='object' && !Array.isArray(argument) && Object.hasOwn(argument,'purpose') &&

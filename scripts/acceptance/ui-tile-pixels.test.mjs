@@ -12,6 +12,10 @@ test('pixel binding uses the supplied reviewed source and rejects bytes outside 
   t.after(()=>rm(sourceDirectory,{recursive:true,force:true}));
   const image={width:2036,height:918,rgba:new Uint8Array(2036*918*4)};
   const put=(x,y,pixel)=>image.rgba.set(pixel,(y*image.width+x)*4);
+  // Match the archived legacy renderer as one complete toolbar/centre profile.
+  // The tile-source digest test must not rely on a centre-only readiness bypass.
+  for(const [x,y,...rgb] of [[268,650,139,88,37],[237,729,137,85,32],[211,600,21,37,67],[263,600,21,37,67]])
+    put(x,y,[...rgb,255]);
   for(const [x,y] of [[900,390],[1135,335],[945,440],[1080,280]])put(x,y,[69,67,78,255]);
   for(const [x,ink] of [[431,[0,0,0,255]],[511,[210,30,30,255]]]) {
     for(let y=801;y<=907;y++)for(let dx=-36;dx<=36;dx++) {

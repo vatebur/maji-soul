@@ -73,12 +73,15 @@ export class LiveGameSession {
   readonly coordinator: GameCoordinator;
   readonly segments: LiveSegment[] = [];
   readonly forcedRiichiDiscards = new Set<string>();
+  /** Authoritative tsumogiri following a skipped offer; never program confirmations. */
+  readonly expiredWindowDiscards = new Set<string>();
   readonly counts = { handStarts:0, handEnds:0, matchEnds:0, reconnects:0 };
   #page: EgoPagePort;
   #room: FriendRoom;
   #akagi: boolean;
   #gameUuid: string | null = null;
   #recovering = false;
+  #nativeRestoreDeadline: number | null = null;
   #pendingResult: any = null;
   #cursor: {generation:number;pageEpoch:number;lastStep:number|null} | null = null;
   #settlementDiagnostics: {name:string;step:number;before:number[];payload:Record<string,unknown>} | null = null;
@@ -86,6 +89,7 @@ export class LiveGameSession {
   #browserStatsBefore: ReturnType<typeof summarizeBrowserStats> = null;
   #autoWinRecoveries: AutoWinRecovery[] = [];
   #pendingAutoWinRecovery: AutoWinRecovery | null = null;
+  #expiredWindow: { gameHandKey: string; sourceCursor: string; tile: string } | null = null;
   constructor(actor: GameActor, page: EgoPagePort, room: FriendRoom, akagi = false) {
     this.coordinator = new GameCoordinator(actor); this.#page = page; this.#room = room; this.#akagi = akagi;
   }
@@ -128,10 +132,8 @@ export class LiveGameSession {
         pageState.lastStep === expected.lastStep && raw.step - 1 === expected.lastStep &&
         !pageState.reason && !pageState.overflow && pageState.queued === 0, 'AKAGI_WINDOW_CHANGED');
       await bridgeCall(this.#page,'ackSync',{generation:raw.generation,step:raw.step-1});
-      token = this.actor.beginSync();
-      await this.actor.awaitControlBarrier();
     }
-    requireThat(token, 'SYNC_REQUIRED');
+    requireThat(token || expected, 'SYNC_REQUIRED');
     requireThat(typeof pageState.gameUuid === 'string' && pageState.gameUuid.length > 0 && [0,1,2,3].includes(pageState.ownSeat),'GAME_IDENTITY_UNVERIFIED');
     requireThat(raw.gameUuid === undefined || raw.gameUuid === pageState.gameUuid,'SYNC_IDENTITY_CHANGED');
     requireThat(this.#gameUuid === null || this.#gameUuid === pageState.gameUuid,'OBSERVED_MATCH_CHANGED');
@@ -139,11 +141,11 @@ export class LiveGameSession {
     const shortClock = this.#room.rules.displayTimeSetting === '5+20';
     requireThat(!shortClock || this.#akagi, 'FRIEND_ROOM_CLOCK_UNSUPPORTED');
     const [fixed, add] = shortClock ? [5, 20] : [300, 0];
-    requireThat(config?.category === 1 && config.mode?.mode === 1 && config.mode.ai === true &&
+    requireThat(config?.category === 1 && config.mode?.mode === (this.#room.rules.length === 'south' ? 2 : 1) &&
       config.mode.detail_rule?.time_fixed === fixed && config.mode.detail_rule?.time_add === add,'FRIEND_ROOM_READBACK_MISMATCH');
     if (this.#akagi) {
       requireThat(pageState.akagiEnabled === true && pageState.phase2ActionsEnabled === true, 'AKAGI_BRIDGE_DISABLED');
-      requireThat(pageState.authSummary.otherSeatsAreRobots === true, 'AKAGI_COMPUTER_SEATS_UNVERIFIED');
+      if (this.#room.rules.computerSeats === 3) requireThat(pageState.authSummary.otherSeatsAreRobots === true, 'AKAGI_COMPUTER_SEATS_UNVERIFIED');
       const rules = config.mode.detail_rule;
       requireThat(rules.dora_count === 3 && rules.shiduan === 1 && rules.init_point === 25000 &&
         this.#room.rules.verifiedOptions.redFives === 3, 'AKAGI_ROOM_RULES_UNVERIFIED');
@@ -159,14 +161,78 @@ export class LiveGameSession {
     const handOrdinal = await this.coordinator.resolveHandOrdinal(gameMatchKey,gameHandKey);
     const terminal = raw.is_end || endNames.includes(raw.game_restore.actions.at(-1)?.name);
     const timingEvidence = terminal ? null : acquisition.evidence as SyncCountdownEvidence | null;
-    const timing = timingEvidence ? deriveSyncOperationTiming(raw,token.connectionEpoch,timingEvidence) : undefined;
+    let timing: ReturnType<typeof deriveSyncOperationTiming> | undefined;
+    let expiredWindow = false;
+    // During a window refresh, keep the committed actor available for ingress
+    // until read-only visual collection succeeds. A turn can expire while a
+    // screenshot is encoded; that must not strand it behind an uncommitted sync.
+    try { timing = timingEvidence ? deriveSyncOperationTiming(raw,token?.connectionEpoch ?? this.actor.projection.connectionEpoch,timingEvidence) : undefined; }
+    catch (error) {
+      // Continuous play can reach an offer too late to execute. Still commit
+      // the authoritative restore so subsequent ingress remains usable. The
+      // window retains an unknown deadline and cannot authorize a send.
+      if (!this.#akagi || !refreshWindow || !(error instanceof Error && error.message === 'COUNTDOWN_EXPIRED')) throw error;
+      expiredWindow = true;
+    }
     if (timing && this.#timingDiagnostics) this.#timingDiagnostics.verified=true;
     if (!expected) await bridgeCall(this.#page,'ackSync',{generation:raw.generation,step:raw.step-1});
     let autoWinReadback: any = null;
-    if (collectExecutionProofs && !terminal) {
-      autoWinReadback = await bridgeCall(this.#page,'ensureAutoWin');
+    if (collectExecutionProofs && !terminal && !expiredWindow) {
+      const previous = this.segments.at(-1)?.sync;
+      const recovery = this.#autoWinRecoveries.at(-1);
+      const alreadyVerified = refreshWindow && (previous?.gameHandKey === gameHandKey && previous.room.autoWin === 'verified-on' && this.#cursor?.pageEpoch === raw.pageEpoch ||
+        recovery?.gameHandKey === gameHandKey && recovery.pageEpoch === raw.pageEpoch && recovery.status === 'verified');
+      // A fresh read is still mandatory, but an enabled switch in this hand
+      // does not need the two-frame restore/toggle workflow on every offer.
+      autoWinReadback = alreadyVerified ? await bridgeCall(this.#page,'verifyAutoWin').catch(async error => {
+        if (error instanceof Error && error.message === 'AUTO_WIN_UNVERIFIED') return bridgeCall(this.#page,'ensureAutoWin');
+        if (error instanceof Error && error.message === 'AUTO_WIN_READBACK_STALE') {
+          const current = await bridgeCall(this.#page,'read');
+          // Only the read-only verification path may discard a stale sample.
+          // Replaced documents, restores, hands, owners or unresolved sends
+          // retain their blocking behavior; no rejected proof reaches prepare.
+          const same = current.pageEpoch === expected!.pageEpoch && current.gameUuid === pageState.gameUuid &&
+            this.actor.projection.gameHandKey === gameHandKey &&
+            Number.isSafeInteger(pageState.sourceStream) && pageState.sourceStream >= 0 &&
+            current.sourceStream === pageState.sourceStream && current.handSha256 === pageState.handSha256 &&
+            Number.isSafeInteger(pageState.nativeRestoreRevision) && pageState.nativeRestoreRevision >= 0 &&
+            current.nativeRestoreRevision === pageState.nativeRestoreRevision &&
+            Number.isSafeInteger(current.generation) && current.generation >= expected!.generation &&
+            Number.isSafeInteger(current.lastStep) && current.lastStep >= expected!.lastStep! &&
+            current.controlEpoch === this.actor.control.controlEpoch && current.paused === true && current.connected === true &&
+            current.freshConnection === true && !current.reason && !current.overflow &&
+            Number.isSafeInteger(pageState.stats?.bridgeActionSends) && pageState.stats.bridgeActionSends >= 0 &&
+            current.stats?.bridgeActionSends === pageState.stats.bridgeActionSends &&
+            this.actor.control.paused && !this.actor.control.needsSync;
+          if (same && (await this.actor.storage.inspectMatch(gameMatchKey)).unresolvedAttempts.length === 0) {
+            // Wall time can only close this window, never extend or authorize
+            // it. Mark the skipped offer before draining its native timeout
+            // discard, retaining the exact tile/cursor attribution checks.
+            const budgetExpired = timing && Date.now() - Date.parse(timing.sampledAt) >=
+              timing.remainingMs - timing.uncertaintyMs - 250;
+            throw Error(budgetExpired ? 'AUTO_WIN_WINDOW_EXPIRED' : 'AUTO_WIN_SAMPLE_STALE');
+          }
+        }
+        throw error;
+      }) : await bridgeCall(this.#page,'ensureAutoWin');
       requireThat(autoWinReadback.state === 'enabled' && autoWinReadback.pageEpoch === raw.pageEpoch,'AUTO_WIN_UNVERIFIED');
-      if (timing) await bridgeCall(this.#page,'ackTiming',timing);
+    }
+    if (expected) {
+      token = this.actor.beginSync();
+      await this.actor.awaitControlBarrier();
+      // Re-derive with the newly issued epoch rather than mutating a proof
+      // produced for the previously committed actor.
+      if (timing) timing = deriveSyncOperationTiming(raw,token.connectionEpoch,timingEvidence!);
+    }
+    requireThat(token, 'SYNC_REQUIRED');
+    if (autoWinReadback && timing) {
+        try { await bridgeCall(this.#page,'ackTiming',timing); }
+        catch (error) {
+          // Visual verification can consume the remaining budget after the
+          // samples passed. Commit this restore without an executable deadline.
+          if (!this.#akagi || !refreshWindow || !(error instanceof Error && error.message === 'DEADLINE_EXCEEDED')) throw error;
+          expiredWindow = true; timing = undefined;
+        }
     }
     const room: FriendRoom = {...this.#room,autoWin:autoWinReadback ? 'verified-on':'unknown'};
     const sync = normalizeSyncGame(raw,{...token,sessionId:this.actor.projection.sessionId,room,gameMatchKey,gameHandKey,
@@ -176,11 +242,26 @@ export class LiveGameSession {
     requireThat(!cursor.reason && !cursor.overflow && cursor.records.length === 0 && cursor.lastStep === raw.step-1,'SYNC_CAPTURE_RACE');
     this.#rememberCursor(cursor);
     this.#gameUuid = pageState.gameUuid;
-    this.#recovering = false; this.#pendingResult = null;
+    this.#recovering = false; this.#nativeRestoreDeadline = null; this.#pendingResult = null;
     this.#pendingAutoWinRecovery = null;
+    this.#expiredWindow = null;
     this.segments.push({sync,subsequent:[]});
     if (!collectExecutionProofs) await this.#restoreAutoWin(cursor,this.#recordAutoWinRecovery(cursor,!!terminal,recovering?'reconnect':'initial-sync'));
-    return {sync,cursor,timing,timingEvidence,autoWinReadback};
+    return {sync,cursor,timing,timingEvidence,autoWinReadback,expiredWindow};
+  }
+  async skipExpiredWindow(sourceCursor: string, gameHandKey: string) {
+    this.actor.suspendForBoundary();
+    await this.actor.awaitControlBarrier();
+    const p = this.actor.projection, state = p.state;
+    requireThat(this.#akagi && !this.actor.control.needsSync && state?.trust === 'trusted' &&
+      p.sourceCursor === sourceCursor && p.gameHandKey === gameHandKey, 'EXPIRED_WINDOW_SCOPE_CHANGED');
+    const ledger = await this.actor.storage.inspectMatch(p.gameMatchKey!);
+    requireThat(ledger.unresolvedAttempts.length === 0, 'ACTION_RECONCILIATION_REQUIRED');
+    const draw = state.drawnTileRef, window = state.operationWindow;
+    const tile = draw.known && draw.value ? state.ownConcealed.find(tile => tile.instanceId === draw.value) : undefined;
+    this.#expiredWindow = tile && window?.status === 'open' && window.candidates.some(candidate =>
+      candidate.authority === 'executor' && candidate.action.kind === 'discard' && candidate.action.tsumogiri && candidate.action.tile === tile.instanceId)
+      ? { gameHandKey, sourceCursor, tile: tile.code } : null;
   }
   #recordAutoWinRecovery(cursor:any,terminal:boolean,trigger:AutoWinRecovery['trigger']):AutoWinRecovery {
     const p=this.actor.projection;
@@ -262,7 +343,7 @@ export class LiveGameSession {
     }
   }
   async #ingest(observations: GameObservation[]) {
-    const state = this.actor.projection.state;
+    const projection = this.actor.projection, state = projection.state;
     const draw = state?.drawnTileRef;
     // In riichi the client can send a forced tsumogiri before ever offering
     // an executor window. Account for it separately from Akagi's sends.
@@ -272,8 +353,18 @@ export class LiveGameSession {
         event.payload.tsumogiri.known && event.payload.tsumogiri.value && !event.payload.riichiDeclaration &&
         state.ownConcealed.some(tile => tile.instanceId === draw.value && tile.code === event.payload.tile))
       : undefined;
+    const skipped = this.#expiredWindow;
+    const nextCursor = skipped && `${skipped.sourceCursor.slice(0, skipped.sourceCursor.lastIndexOf(':') + 1)}${Number(skipped.sourceCursor.split(':').at(-1)) + 1}`;
+    const expired = skipped && state && projection.gameHandKey === skipped.gameHandKey && projection.sourceCursor === skipped.sourceCursor
+      ? observations.find(event => event.type === 'TileDiscarded' && event.sourceCursor === nextCursor &&
+        event.payload.actor === state.ownSeat && event.payload.tile === skipped.tile &&
+        event.payload.tsumogiri.known && event.payload.tsumogiri.value && !event.payload.riichiDeclaration)
+      : undefined;
     await this.coordinator.ingest(observations);
     if (forced?.sourceCursor) this.forcedRiichiDiscards.add(forced.sourceCursor);
+    if (expired?.sourceCursor && expired !== forced) this.expiredWindowDiscards.add(expired.sourceCursor);
+    if (this.actor.projection.sourceCursor !== skipped?.sourceCursor || this.actor.projection.gameHandKey !== skipped?.gameHandKey)
+      this.#expiredWindow = null;
     this.segments.at(-1)!.subsequent.push(...observations);
     for (const event of observations) {
       if (event.type==='HandStarted') this.counts.handStarts++;
@@ -285,6 +376,13 @@ export class LiveGameSession {
     const batch = await bridgeCall(this.#page,'drain');
     await this.#consumeBatch(batch,true);
   }
+  #deferNativeRestore(state:any) {
+    requireThat(!state.overflow,'BRIDGE_QUEUE_OVERFLOW');
+    requireThat(!state.reason || recoverableReasons.includes(state.reason),'BRIDGE_UNTRUSTED');
+    requireThat(state.gameUuid === undefined || this.#gameUuid === null || state.gameUuid === this.#gameUuid,'OBSERVED_MATCH_CHANGED');
+    this.#nativeRestoreDeadline ??= performance.now() + 30_000;
+    requireThat(performance.now() < this.#nativeRestoreDeadline,'SYNC_NATIVE_RESTORE_TIMEOUT');
+  }
   async #consumeBatch(batch:any,allowSynchronization:boolean): Promise<void> {
     this.#rememberCursor(batch);
     this.#validateAutoWinRecovery(batch);
@@ -292,11 +390,23 @@ export class LiveGameSession {
     const disconnected = batch.records.some((r:any)=>r.kind==='disconnected');
     const reauthenticated = batch.records.some((r:any)=>r.kind==='auth-summary');
     if (batch.reason || disconnected || reauthenticated || this.#recovering) {
+      this.#expiredWindow = null;
       requireThat(!batch.reason || recoverableReasons.includes(batch.reason),'BRIDGE_UNTRUSTED');
+      requireThat(batch.gameUuid === undefined || this.#gameUuid === null || batch.gameUuid === this.#gameUuid,'OBSERVED_MATCH_CHANGED');
       if (!this.#recovering) { this.actor.failClosed('DISCONNECTED'); this.#recovering = true; }
       await this.actor.awaitControlBarrier();
       if (allowSynchronization && batch.connected === true && batch.freshConnection && batch.authSummary) {
-        await this.synchronize(false); this.counts.reconnects++;
+        // Authentication precedes Unity's replay and finishSyncGame. Let that
+        // native cycle finish before starting our own paired synchronization.
+        if (batch.nativeRestorePending === true) { this.#deferNativeRestore(batch); return; }
+        try { await this.synchronize(false); this.counts.reconnects++; }
+        catch (error) {
+          // A new native restore can start after the drain above. This refusal
+          // occurs before a bridge request; defer to a later pump without
+          // swallowing connection, match, receipt or snapshot failures.
+          if (!(error instanceof Error && error.message === 'SYNC_NATIVE_RESTORE_PENDING')) throw error;
+          this.#deferNativeRestore(await bridgeCall(this.#page,'read'));
+        }
       }
       return;
     }

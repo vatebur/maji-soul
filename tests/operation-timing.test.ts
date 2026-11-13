@@ -5,6 +5,8 @@ import { normalizeSyncGame, type SyncGameContext } from '../src/adapters/majsoul
 import { buildPhase1Fixture, initialView } from '../scripts/build-phase1-fixtures.ts';
 import { ReplayClock } from '../src/application/game/clock.ts';
 import { actorHarness } from './helpers.ts';
+import { digest } from '../src/domain/game/value.ts';
+import type { SyncCountdownEvidence } from '../src/adapters/majsoul/operation-timing.ts';
 
 function rawAt(passed = 22, receivedMonoMs = 22_500, rtt = 100) {
   const discard = (seat: number, tile: string) => ({ seat, tile, moqie: false, is_liqi: false, is_wliqi: false });
@@ -132,4 +134,75 @@ test('5+20 verifies the fixed clock and the separately displayed bank across dep
   const mismatch = structuredClone(evidence);
   mismatch.samples[1]!.displayedBankMs = 15000;
   assert.throws(() => deriveSyncOperationTiming(after, 2, mismatch), /COUNTDOWN_BANK_MISMATCH/);
+});
+
+function scopedRaw(passed: number, mono: number, step = 10, generation = 2) {
+  const raw = rawAt(passed, mono);
+  raw.step = step; raw.game_restore.actions.at(-1)!.step = step - 1;
+  (raw.game_restore.actions.at(-1)!.payload as any).operation.time_fixed = 5000;
+  const gameConfig = { category: 1, mode: { mode: 2, detail_rule: { time_fixed: 5, time_add: 20 } } };
+  return { ...raw, generation, gameUuid: 'game-a', authSummary: { roomId: '12345', gameConfig },
+    timingScope: { pageEpoch: 3, nativeRestoreRevision: 4, sourceStream: 0, gameUuid: 'game-a', roomId: '12345',
+      handKey: 'a'.repeat(64), rulesSha256: digest(gameConfig), clientProfile: 'unity-4.0.51/2036x918/linux' } };
+}
+function scopedSample(raw: ReturnType<typeof scopedRaw>) {
+  return sampleSyncOperationTiming(raw, { remainingMs: Math.max(0, 5000 - raw.game_restore.passed_waiting_time * 1000), sampledMonoMs: raw.receivedMonoMs });
+}
+function cachedEvidence(current = scopedRaw(0, 20_000, 12, 3)): SyncCountdownEvidence {
+  return { source: 'automatic-client-countdown', samples: [scopedSample(current)],
+    calibration: { source: 'observed-unit-pair-v1', samples: [scopedRaw(2, 2000), scopedRaw(4, 4400)].map(scopedSample) } };
+}
+
+test('a scoped measured unit permits one fresh sample but never reuses its old deadline', () => {
+  const raw = scopedRaw(0, 20_000, 12, 3), evidence = cachedEvidence(raw);
+  const before = structuredClone(evidence), timing = deriveSyncOperationTiming(raw, 3, evidence);
+  assert.equal(timing.remainingMs, 5000); assert.equal(timing.elapsedMs, 0); assert.equal(timing.step, 11);
+  assert.equal(timing.sampledMonoMs, 20_000); assert.equal(timing.sampledAt, raw.receivedAt); assert.equal(timing.uncertaintyMs, 2100);
+  assert.deepEqual(deriveSyncOperationTiming(raw, 4, evidence), { ...timing, connectionEpoch: 4 });
+  assert.deepEqual(evidence, before, 'two pure derivations must not consume or mutate evidence');
+  const expired = scopedRaw(4, 30_000, 14, 4);
+  assert.throws(() => deriveSyncOperationTiming(expired, 3, cachedEvidence(expired)), /COUNTDOWN_EXPIRED/);
+  assert.throws(() => deriveSyncOperationTiming(raw, 3, { source: 'automatic-client-countdown', samples: evidence.samples }), /TIMING_EVIDENCE_REQUIRED/);
+});
+
+test('calibration cannot cross page, native restore, game, room, rules, hand, stream or client profile', () => {
+  const changes: ((raw: ReturnType<typeof scopedRaw>) => void)[] = [
+    raw => { raw.pageEpoch++; raw.timingScope.pageEpoch++; },
+    raw => { raw.timingScope.nativeRestoreRevision++; },
+    raw => { raw.gameUuid = raw.timingScope.gameUuid = 'game-b'; },
+    raw => { raw.authSummary.roomId = raw.timingScope.roomId = '54321'; },
+    raw => { raw.authSummary.gameConfig.mode.mode = 1; raw.timingScope.rulesSha256 = digest(raw.authSummary.gameConfig); },
+    raw => { (raw.game_restore.actions[1]!.payload as any).sha256 = raw.timingScope.handKey = 'b'.repeat(64); },
+    raw => { raw.timingScope.sourceStream++; },
+    raw => { raw.timingScope.clientProfile = 'unity-4.0.51/2036x918'; },
+  ];
+  for (const change of changes) {
+    const raw = scopedRaw(0, 20_000, 12, 3); change(raw);
+    assert.throws(() => deriveSyncOperationTiming(raw, 3, cachedEvidence(raw)), /TIMING_CALIBRATION_SCOPE_MISMATCH/);
+  }
+  const raw = scopedRaw(0, 20_000, 12, 3), evidence = cachedEvidence(raw);
+  delete (evidence.samples[0]!.scope as any).nativeRestoreRevision;
+  assert.throws(() => deriveSyncOperationTiming(raw, 3, evidence), /TIMING_CALIBRATION_SCOPE_MISMATCH/);
+  delete (raw.timingScope as any).roomId;
+  assert.throws(() => scopedSample(raw), /TIMING_CALIBRATION_SCOPE_MISMATCH/);
+});
+
+test('calibration has a fixed lifetime and cannot survive clock jumps or forged historical evidence', () => {
+  const old = scopedRaw(0, 304_401, 12, 3);
+  assert.throws(() => deriveSyncOperationTiming(old, 3, cachedEvidence(old)), /TIMING_CALIBRATION_EXPIRED/);
+  const futurePair = scopedRaw(0, 3000, 12, 3);
+  assert.throws(() => deriveSyncOperationTiming(futurePair, 3, cachedEvidence(futurePair)), /TIMING_CLOCK_REVERSED/);
+  const jumped = scopedRaw(0, 20_000, 12, 3);
+  jumped.receivedAt = new Date(Date.parse(jumped.receivedAt) + 251).toISOString();
+  assert.throws(() => deriveSyncOperationTiming(jumped, 3, cachedEvidence(jumped)), /TIMING_WALL_CLOCK_CHANGED/);
+  const raw = scopedRaw(0, 20_000, 12, 3);
+  const wrongUnit = cachedEvidence(raw); wrongUnit.calibration!.samples[0]!.passedWaitingTime = 3;
+  assert.throws(() => deriveSyncOperationTiming(raw, 3, wrongUnit), /TIMING_ELAPSED_UNIT_UNVERIFIED/);
+  const wrongPixels = cachedEvidence(raw); wrongPixels.samples[0]!.displayedRemainingMs = 0;
+  assert.throws(() => deriveSyncOperationTiming(raw, 3, wrongPixels), /COUNTDOWN_PROTOCOL_MISMATCH/);
+  const oldCurrent = cachedEvidence(raw); oldCurrent.samples[0] = oldCurrent.calibration!.samples[1]!;
+  assert.throws(() => deriveSyncOperationTiming(raw, 3, oldCurrent), /TIMING_CLOCK_REVERSED|TIMING_SCOPE_MISMATCH/);
+  const unscoped = cachedEvidence(raw);
+  for (const sample of unscoped.calibration!.samples) { delete sample.scope; delete sample.generation; }
+  assert.throws(() => deriveSyncOperationTiming(raw, 3, unscoped), /TIMING_CALIBRATION_SCOPE_MISMATCH/);
 });

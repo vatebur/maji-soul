@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AI 雀魂 · Live2D 角色</title>
+  <link rel="stylesheet" href="/avatar.css">
+  <script type="module" src="/avatar.bundle.js"></script>
+</head>
+<body>
+  <main id="avatar" aria-label="Live2D 角色" data-state="loading"></main>
+  <aside id="diagnostics" hidden aria-label="角色状态">
+    <p class="eyebrow">AI 雀魂 · 角色输出</p>
+    <h1 id="status" role="status">正在连接角色页面</h1>
+    <p id="detail">角色会跟随当前口播活动。</p>
+    <button id="resume-audio" type="button" hidden>启用声音</button>
+    <p class="hint">OBS 使用不带 debug 参数的页面地址。预览时添加 preview=1，可避免占用正式播放端。</p>
+  </aside>
+</body>
+</html>

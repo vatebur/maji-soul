@@ -1,6 +1,10 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { AvatarError, type AvatarOutput, type AvatarAck, type AvatarIdentity } from '../../adapters/live/avatar-output.ts';
+import type { AvatarAssets } from './avatar-assets.ts';
 import { canonical } from '../../domain/game/value.ts';
 import { object, string } from '../../schemas/game.ts';
 import { ConsoleError, apiError, commandName, publicAction, type ConsoleRuntime } from './runtime.ts';
@@ -13,6 +17,8 @@ const html = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf
 const assets = new Map([
   ['/', { body: html('./control.html'), mime: 'text/html' }],
   ['/obs', { body: html('./obs.html'), mime: 'text/html' }],
+  ['/avatar', { body: html('./avatar.html'), mime: 'text/html' }],
+  ['/avatar.css', { body: html('./avatar.css'), mime: 'text/css' }],
   ['/ui.js', { body: html('./ui.js'), mime: 'text/javascript' }],
   ['/obs.js', { body: html('./obs.js'), mime: 'text/javascript' }],
   ['/ui.css', { body: html('./ui.css'), mime: 'text/css' }],
@@ -34,12 +40,15 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   catch { throw new ConsoleError(422, 'INVALID_JSON'); }
 }
 
-export function createConsoleServer(runtime: ConsoleRuntime, initialPort: number) {
+export function createConsoleServer(runtime: ConsoleRuntime, initialPort: number, relayPort = 17362,
+  avatar?: { output: AvatarOutput; assets: AvatarAssets; bundlePath?: string }) {
+  if (!Number.isInteger(relayPort) || relayPort < 1024 || relayPort > 65535) throw Error('INVALID_RELAY_PORT');
   let origin = `http://127.0.0.1:${initialPort}`;
   const epoch = randomUUID(), cursorKey = randomBytes(32);
   const viewers = new Set<Client>();
   const frames: Frame[] = [{ revision: 0, generatedAt: new Date().toISOString(), views: runtime.projections }];
   let closing = false;
+  let avatarTestAt = 0;
 
   const snapshot = (channel: Channel, frame = frames.at(-1)!) => ({
     projection: { epoch, revision: frame.revision, cursor: `${channel}.${epoch}.${frame.revision}`, generatedAt: frame.generatedAt },
@@ -139,7 +148,7 @@ export function createConsoleServer(runtime: ConsoleRuntime, initialPort: number
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
-    response.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' http://127.0.0.1:17362; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+    response.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' http://127.0.0.1:${relayPort}; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`);
     const requestId = randomUUID(), at = new Date().toISOString();
     const reply = (status: number, data: unknown, error = false) => {
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -151,6 +160,67 @@ export function createConsoleServer(runtime: ConsoleRuntime, initialPort: number
         throw new ConsoleError(403, 'ORIGIN_FORBIDDEN');
       const url = new URL(request.url, origin), path = url.pathname, method = request.method ?? '';
       if (url.origin !== origin) throw new ConsoleError(403, 'ORIGIN_FORBIDDEN');
+      if (path === '/avatar' || path === '/avatar.bundle.js' || path.startsWith('/avatar-assets/'))
+        response.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+      if (method === 'GET' && (path === '/avatar.bundle.js' || path === '/avatar.bundle.js.LEGAL.txt')) {
+        let bundle: Buffer;
+        const legal = path.endsWith('.LEGAL.txt');
+        try { bundle = await readFile((avatar?.bundlePath ?? resolve('.runtime/avatar/avatar.bundle.js')) + (legal ? '.LEGAL.txt' : '')); }
+        catch { throw new AvatarError(503, 'AVATAR_BUILD_REQUIRED'); }
+        response.writeHead(200, { 'Content-Type': (legal ? 'text/plain' : 'text/javascript') + '; charset=utf-8' }); response.end(bundle); return;
+      }
+      if (method === 'GET' && path.startsWith('/avatar-assets/')) {
+        const asset = await avatar?.assets.read(path);
+        if (!asset) throw new AvatarError(404, 'AVATAR_ASSET_NOT_FOUND');
+        response.writeHead(200, { 'Content-Type': asset.mime }); response.end(asset.bytes); return;
+      }
+      if (path.startsWith('/api/avatar/')) {
+        const avatarReply = (data: unknown) => { response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(data)); };
+        if (method === 'GET' && path === '/api/avatar/config') return avatarReply(avatar ?
+          { ...avatar.assets.config, ...avatar.output.status } : { enabled: false, modelConfigured: false, modelUrl: null, profileUrl: null, coreUrl: null, characterName: '雀魂主播' });
+        if (!avatar) throw new AvatarError(503, 'AVATAR_DISABLED');
+        const audioMatch = /^\/api\/avatar\/audio\/([a-zA-Z0-9_-]{1,128})$/.exec(path);
+        if (method === 'GET' && audioMatch) {
+          const bytes = await avatar.output.audio({ rendererId: url.searchParams.get('rendererId') ?? '', leaseId: url.searchParams.get('leaseId') ?? '' }, audioMatch[1]!);
+          response.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Content-Length': bytes.byteLength }); response.end(bytes); return;
+        }
+        if (method !== 'POST') throw new AvatarError(404, 'NOT_FOUND');
+        // Dedicated playback capabilities never grant the console's game-control commands.
+        if (request.headers.origin !== origin) throw new AvatarError(403, 'ORIGIN_FORBIDDEN');
+        if (request.headers['sec-fetch-site'] && request.headers['sec-fetch-site'] !== 'same-origin') throw new AvatarError(403, 'ORIGIN_FORBIDDEN');
+        const body = await readBody(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new AvatarError(422, 'INVALID_AVATAR_REQUEST');
+        const value = body as Record<string, unknown>;
+        if (path === '/api/avatar/test') {
+          if (Object.keys(value).length) throw new AvatarError(422, 'INVALID_AVATAR_REQUEST');
+          if (!avatar.output.status.connected) throw new AvatarError(409, 'AVATAR_RENDERER_UNAVAILABLE');
+          if (runtime.speech.view.muted || runtime.speech.busy || runtime.speech.view.pendingCount)
+            throw new AvatarError(409, 'AVATAR_SPEECH_BUSY_OR_MUTED');
+          if (Date.now() - avatarTestAt < 30_000) throw new AvatarError(429, 'AVATAR_TEST_COOLDOWN');
+          avatarTestAt = Date.now();
+          const contentId = randomUUID();
+          runtime.speech.enqueue({ contentId, handId: null, priority: 'viewer', text: '[开心]大家好，一起开心打牌吧。',
+            createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30_000).toISOString() });
+          return avatarReply({ ok: true, contentId });
+        }
+        if (path === '/api/avatar/claim') {
+          if (!avatar.assets.config.modelConfigured) throw new AvatarError(409, 'AVATAR_MODEL_NOT_CONFIGURED');
+          if (Object.keys(value).some(key => !['rendererId','parameters'].includes(key))) throw new AvatarError(422, 'INVALID_AVATAR_REQUEST');
+          return avatarReply(avatar.output.claim({ rendererId: value.rendererId as string, parameters: value.parameters }));
+        }
+        const allowed = path === '/api/avatar/ack' ? ['rendererId','leaseId','speechId','playbackEpoch','status','durationSec'] : ['rendererId','leaseId'];
+        if (Object.keys(value).some(key => !allowed.includes(key)) || typeof value.rendererId !== 'string' || typeof value.leaseId !== 'string')
+          throw new AvatarError(422, 'INVALID_AVATAR_REQUEST');
+        const identity = value as unknown as AvatarIdentity;
+        if (path === '/api/avatar/poll') return avatarReply(avatar.output.poll(identity));
+        if (path === '/api/avatar/release') return avatarReply(avatar.output.release(identity));
+        if (path === '/api/avatar/ack') {
+          if (typeof value.speechId !== 'string' || !Number.isSafeInteger(value.playbackEpoch) || (value.playbackEpoch as number) < 1)
+            throw new AvatarError(422, 'INVALID_AVATAR_REQUEST');
+          return avatarReply(avatar.output.ack(value as unknown as AvatarAck));
+        }
+        throw new AvatarError(404, 'NOT_FOUND');
+      }
       if (method === 'GET') {
         const asset = assets.get(path);
         if (asset) { response.writeHead(200, { 'Content-Type': asset.mime + '; charset=utf-8' }); response.end(asset.body); return; }
@@ -164,7 +234,7 @@ export function createConsoleServer(runtime: ConsoleRuntime, initialPort: number
         if (path === '/api/console/events') return stream(request, response, 'console', url.searchParams.get('after'));
         if (path === '/api/config') return reply(200, runtime.configView);
         if (path === '/api/capabilities') return reply(200, runtime.capabilities);
-        if (path === '/api/output/status') return reply(200, runtime.outputStatus);
+        if (path === '/api/output/status') return reply(200, { ...runtime.outputStatus, ...(avatar ? { avatar: avatar.output.status } : {}) });
         if (path === '/api/discards') {
           const id = url.searchParams.get('sessionId') ?? runtime.gameSessionId;
           if (id !== null) { try { string(id, 128); } catch { throw new ConsoleError(422, 'VALIDATION_FAILED'); } }
@@ -188,7 +258,10 @@ export function createConsoleServer(runtime: ConsoleRuntime, initialPort: number
     })().catch(error => {
       if (response.headersSent) { response.destroy(); return; }
       const storage = error instanceof Error && /^(STORAGE_|CONSOLE_STATE_CONFLICT)/.test(error.message);
-      if (error instanceof ConsoleError) reply(error.status, error.detail, true);
+      if (error instanceof AvatarError) {
+        response.writeHead(error.status, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify({ error: error.code }));
+      }
+      else if (error instanceof ConsoleError) reply(error.status, error.detail, true);
       else reply(storage ? 503 : 500, apiError(storage ? 'STORAGE_UNAVAILABLE' : 'INTERNAL_ERROR'), true);
     });
   });
@@ -212,10 +285,11 @@ export function createConsoleServer(runtime: ConsoleRuntime, initialPort: number
       const address = server.address();
       if (!address || typeof address === 'string') throw Error('CONSOLE_LISTEN_FAILED');
       origin = `http://127.0.0.1:${address.port}`;
-      return { origin, consoleUrl: `${origin}/`, obsUrl: `${origin}/obs` };
+      return { origin, consoleUrl: `${origin}/`, obsUrl: `${origin}/obs`, ...(avatar ? { avatarUrl: `${origin}/avatar` } : {}) };
     },
     async close() {
       closing = true;
+      avatar?.output.close();
       clearInterval(heartbeat);
       for (const client of viewers) client.response.destroy();
       await new Promise<void>((resolve, reject) => {

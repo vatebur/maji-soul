@@ -1,0 +1,29 @@
+[Unit]
+Description=Maji Soul continuous live console
+Requires=maji-soul-browser.service
+After=maji-soul-browser.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+User=maji-soul
+Group=maji-soul
+WorkingDirectory=/opt/maji-soul
+Environment=PATH=/opt/maji-soul/runtime/bin:/usr/local/bin:/usr/bin:/bin
+Environment=DISPLAY=:99
+Environment=MAJI_CONSOLE_PORT=17361
+Environment=MAJI_RELAY_PORT=17362
+EnvironmentFile=/etc/maji-soul/session.env
+EnvironmentFile=-/etc/maji-soul/console.env
+ExecStartPre=/opt/maji-soul/runtime/bin/node deploy/debian/wait-browser.mjs
+ExecStart=/opt/maji-soul/runtime/bin/node --env-file-if-exists=/etc/maji-soul/app.env src/cli.ts console --port ${MAJI_CONSOLE_PORT} --relay-port ${MAJI_RELAY_PORT} --browser-endpoint http://127.0.0.1:9222 --auto-start --audio --live-options /etc/maji-soul/live.json
+Restart=always
+RestartSec=10
+TimeoutStartSec=150
+TimeoutStopSec=45
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

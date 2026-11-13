@@ -347,28 +347,28 @@ LiveDirector 从 outbox 恢复所有己方弃牌的事实文字，每条按动�
 
 ### 中文语音与 OBS 音轨
 
-首版默认 `say` 合成文件，经需要的系统转换形成已验证格式，再由本机单播放器播放。使用固定可执行程序与参数数组启动，`shell: false`；用户名和模型文本不能拼进 shell 命令。声音通过配置选择，启动时检查是否安装；不合成或播放一段测试语音就声称音轨已验证。
+当前使用 Fish 云合成 MP3，经平台适配器验证后播放。默认本机播放器为 Mac `afplay` 或 Linux `ffplay`，使用固定可执行程序与参数数组启动，`shell: false`；用户名和模型文本不能拼进 shell 命令。声音通过本机 Fish 配置选择；只有合成结果不等于音轨已验证。
 
 播放模式二选一：
 
 1. **首版默认：本机播放器。** OBS 采集经验证的独立语音输出路径，字幕页只展示。调试时也可使用同一音频路径本地试听。阶段 0／3 验证当前系统与 OBS 是否能分别调节游戏和语音；做不到时必须调整输出设备或采用下述方案后再验收。
-2. **预留适配：OBS 浏览器音频。** 仅一个持有播放租约的页面播放，带 `speechId / playbackEpoch` 回报开始、结束与错误。其他预览页静音，不与本机播放器同时播音。播放回执只拥有音频确认权限，不是控制台权限。
+2. **可选角色：OBS 浏览器音频。** `--avatar` 装配 `AvatarOutput.speech`，仅一个持有播放租约的页面播放，带 `speechId / playbackEpoch` 回报开始、结束与错误。其他预览页静音，不与本机播放器同时播音。播放回执只拥有音频确认权限，不是控制台权限。
 
 播放器退出／播放结束事件是完成依据；只有合成文件、音频时长或 SSE 发送成功都不能证明已经播完。静音立即撤销播放代际、停止当前播放并取消待播任务；解除静音后只处理仍有效的内容，不补播整个历史。
 
 ### 可选 Live2D 输出
 
-优先复用 Open-LLM-VTuber 配套角色前端，AIRI 组件作为备选；固定版本、源码差异与选择依据见 [LIVE2D.md](../research/LIVE2D.md)。新增 AvatarAdapter 只转换已批准的语义表情／动作和模型配置；音频仍实现同一个 PlaybackPort，由 SpeechController 唯一调度，不把 VTB 自带对话链作为第二个内容生成入口。
+当前复用 Soullink Emotion SDK 的参数规划、情绪混合与 Live2D/Pixi 适配；固定版本与历史候选比较见 [LIVE2D.md](../research/LIVE2D.md)。最终合并并过滤的口播通过 SDK 自定义 Fish provider 合成，浏览器解码的实际时长与模型参数范围交给动作规划器；原 SpeechController 唯一调度，不增加第二份聊天回答或长期播报队列。
 
-角色模式使用一个持播放租约的浏览器端，同时驱动声音与口型；本机播放器停用，其他预览页静音。回执绑定 speechId、artifactId、playbackEpoch、rendererEpoch 与租约；开始、结束、取消和失败分别处理。租约需有失联到期停播机制，确认旧播放端停止后才允许换端。渲染重建或切换模型使旧指令失效，恢复时不补播历史。
+角色模式使用一个持播放租约的浏览器端，以同一 AudioContext 驱动声音、动作和口型；本机播放器停用，其他预览页静音。回执绑定 speechId、playbackEpoch、rendererId 与 leaseId；准备、开始、结束、取消和失败分别处理。租约具有失联到期停播机制，确认旧播放端停止或到期后才允许换端。渲染重建使旧身份失效，恢复时不补播历史；模型配置在启动时加载。
 
-角色故障降级到可用的纯音频／字幕，不改变游戏控制；播放端失联且不能确认停播时保留未决记录，不同时启动另一端补播。现有 `/obs` 与 SSE 保持只读，未来播放器的专用身份和回执通道单独设计。扩展契约见 [内部接口](../interfaces/INTERNAL_INTERFACES.md)，启用前同步 HTTP／WS schema 与验收记录。
+动作规划故障可保留本地情绪、口型与音频；整个角色播放端不可用时保留字幕，不改变游戏控制、不同时启动另一端补播。现有 `/obs` 与 SSE 保持只读，`/api/avatar/*` 单独处理唯一租约与播放回执。契约见 [内部接口](../interfaces/INTERNAL_INTERFACES.md) 和 [HTTP 定义](../interfaces/API.md#73-live2d-角色播放)，实际验收见[角色输出记录](../validation/live2d.md)。
 
 ## 7. 本机控制台与 OBS 接口
 
 服务只监听 loopback。控制台首次打开使用短期启动令牌建立本机会话；校验请求 Origin 和会话令牌。CLI 调用同一应用命令，不另建可绕过状态机的执行路径。凭证只通过本机配置引用，网页不显示或编辑真实 Cookie／密钥。
 
-接口分为本机身份、运行命令、配置与查询、语音控制、只读 OBS 投影五组。完整路由与时序集中在 [API.md](../interfaces/API.md)，路径／字段以 [openapi.json](../interfaces/openapi.json) 为准，本文不再复制另一份路由表。Live2D 的播放租约和回执尚未纳入当前 v1 HTTP 契约。
+接口包括运行命令、配置与查询、语音控制、只读 OBS 投影及可选角色播放通道。完整路由与时序集中在 [API.md](../interfaces/API.md)，路径／字段以 [openapi.json](../interfaces/openapi.json) 为准，本文不再复制另一份路由表。Live2D 专用接口使用直接 JSON，保持与控制台业务命令的身份和完成语义分离。
 
 业务修改请求带 commandId 和 issuedAt，配置更新另带 expectedRevision，需要绑定当前运行的命令带 sessionId。恢复、结束、下局模式还校验 expectedControlEpoch。冲突返回明确错误和当前版本。异步命令返回 CommandView；接受后的失败也通过该记录查询，不能把 HTTP 200／202 等同于游戏已完成。
 

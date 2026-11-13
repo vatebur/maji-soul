@@ -6,7 +6,7 @@ export async function capture({ taskSpace, space, page: label, endpoint, token, 
   const page = task.page(label);
   const headers = { authorization: `Bearer ${token}` };
   let stopping = false, mode = 'screencast', started = false;
-  let frames = 0, nextSend = 0, pending, nextControlCheck = 0;
+  let frames = 0, nextSend = 0, pending, nextControlCheck = 0, lastFrameAt = 0;
   const stop = () => { stopping = true; };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
@@ -20,6 +20,7 @@ export async function capture({ taskSpace, space, page: label, endpoint, token, 
   const send = async data => {
     await post('frame', Buffer.from(data, 'base64'), 'image/jpeg');
     frames++;
+    lastFrameAt = performance.now();
   };
   const shouldStop = async () => {
     if (stopping) return true;
@@ -34,7 +35,9 @@ export async function capture({ taskSpace, space, page: label, endpoint, token, 
     // No navigation, input, emulation or control takeover is needed to capture.
     await page.cdp('Page.startScreencast', {
       format: 'jpeg', quality, maxWidth: width, maxHeight: 2160,
-      everyNthFrame: Math.max(1, Math.round(60 / fps)),
+      // Output pacing below already caps fps. Skipping compositor frames here
+      // would also halve a browser that itself renders below 60 fps.
+      everyNthFrame: 1,
     });
     started = true;
     const firstFrameDeadline = performance.now() + 3000;
@@ -44,6 +47,11 @@ export async function capture({ taskSpace, space, page: label, endpoint, token, 
         if (event.method !== 'Page.screencastFrame') continue;
         pending = event.params.data;
         await page.cdp('Page.screencastFrameAck', { sessionId: event.params.sessionId });
+      }
+      if (frames && !pending && performance.now() - lastFrameAt >= 2000) {
+        pending = (await page.cdp('Page.captureScreenshot', {
+          format: 'jpeg', quality, fromSurface: true, captureBeyondViewport: false,
+        })).data;
       }
       if (pending && performance.now() >= nextSend) {
         // Keep the newest frame until its slot, rather than dropping frames

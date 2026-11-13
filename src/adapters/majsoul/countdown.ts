@@ -2,18 +2,14 @@ import { createHash } from 'node:crypto';
 import { decodeScreenshotPng, type PixelImage } from './auto-win.ts';
 import { COUNTDOWN_GLYPHS } from './countdown-glyphs.ts';
 import { CURRENT_COUNTDOWN_GLYPHS } from './countdown-glyphs-current.ts';
+import { LINUX_COUNTDOWN_GLYPHS, type LinuxCountdownGlyph } from './countdown-glyphs-linux.ts';
+import { toolbarPalette, type ToolbarPalette } from './table-pixels.ts';
 import { bridgeCall, type EgoPagePort } from './ego-transport.ts';
 import { requireThat } from '../../domain/game/value.ts';
 
 const PROFILE = {
   clientVersion: '4.0.51', width: 2036, height: 918,
   region: { x: 1380, y: 630, width: 250, height: 130 },
-  anchors: [
-    { x: 268, y: 650, rgb: [139,88,37] },
-    { x: 237, y: 729, rgb: [137,85,32] },
-    { x: 211, y: 600, rgb: [21,37,67] },
-    { x: 263, y: 600, rgb: [21,37,67] },
-  ],
 } as const;
 const TEMPLATE_X: Record<string, number> = { '0':36, '1':51, '2':32, '3':36, '4':35, '5':36, '6':36, '7':44, '8':34, '9':39 };
 const TEMPLATE_Y: Record<string, number> = { '0':26, '1':25, '2':25, '3':26, '4':25, '5':24, '6':25, '7':25, '8':23, '9':26 };
@@ -24,6 +20,7 @@ const unpack = (base64: string) => {
 const templates = [...COUNTDOWN_GLYPHS, ...CURRENT_COUNTDOWN_GLYPHS].map(glyph => ({
   x: TEMPLATE_X[glyph.digit]!, y: TEMPLATE_Y[glyph.digit]!, ...glyph, mask: unpack(glyph.bitmapBase64),
 }));
+const linuxTemplates=LINUX_COUNTDOWN_GLYPHS.map(glyph=>({...glyph,mask:unpack(glyph.bitmapBase64)}));
 function rankGlyph(glyph: Uint8Array) {
   const ranked = templates.map(template => ({ template, score: dice(glyph, template.mask) })).sort((a,b)=>b.score-a.score);
   // Competing examples of the same digit do not reduce its separation from
@@ -67,9 +64,42 @@ function dice(a: Uint8Array,b: Uint8Array): number {
   return 2*intersection/(areaA+areaB);
 }
 
+function readLinuxDigit(mask:Uint8Array,component:Component,stride:number,
+  kind:LinuxCountdownGlyph['kind'],digitCount:number,index:number) {
+  const glyph=normalized(mask,component,stride);
+  // A shape is supported only in its captured colour, digit count and column.
+  // Never infer a new single-digit origin from a two-digit screenshot.
+  const ranked=linuxTemplates.filter(template=>template.kind===kind && template.digitCount===digitCount && template.index===index)
+    .map(template=>({template,score:dice(glyph,template.mask)})).sort((a,b)=>b.score-a.score);
+  const best=ranked[0];
+  requireThat(best && best.score>=.96,'COUNTDOWN_GLYPH_UNVERIFIED');
+  const runnerUp=Math.max(...[...templates,...linuxTemplates].filter(template=>template.digit!==best.template.digit)
+    .map(template=>dice(glyph,template.mask)));
+  const gap=best.score-runnerUp;
+  requireThat(gap>=.18 && Math.abs(component.width-best.template.width)<=2 && Math.abs(component.height-best.template.height)<=2,
+    'COUNTDOWN_GLYPH_UNVERIFIED');
+  requireThat(Math.abs(component.x-best.template.x)<=2 && Math.abs(component.y-best.template.y)<=2,'COUNTDOWN_LAYOUT_UNVERIFIED');
+  return {value:best.template.digit,score:best.score,runnerUpGap:gap};
+}
+
+const linuxBankExamples=LINUX_COUNTDOWN_GLYPHS.filter(example=>example.kind==='bank-only'||example.kind==='bank');
+/** The small +bank display uses the existing cross-size OCR design. The
+ * supplied examples also permit held-out calibration against real masks. */
+export function classifyLinuxBankGlyph(glyph:Uint8Array,
+  examples:readonly Pick<LinuxCountdownGlyph,'digit'|'bitmapBase64'>[]=linuxBankExamples) {
+  requireThat(glyph.length===32*48,'COUNTDOWN_BANK_UNREADABLE');
+  const scores=examples.map(template=>({template,score:dice(glyph,unpack(template.bitmapBase64))})).sort((a,b)=>b.score-a.score);
+  const ranked=scores.filter((entry,index)=>scores.findIndex(other=>other.template.digit===entry.template.digit)===index);
+  const best=ranked[0],runnerUp=ranked[1];
+  requireThat(best && runnerUp,'COUNTDOWN_BANK_UNREADABLE');
+  const gap=best.score-runnerUp.score;
+  requireThat(best.score>=.96 && gap>=.18,'COUNTDOWN_BANK_UNREADABLE');
+  return {value:best.template.digit,score:best.score,runnerUpGap:gap};
+}
+
 /** Fixed-layout digit OCR. It never fills missing digits or chooses a low-confidence match. */
 const timeBankColor = (r: number, g: number, b: number) => r >= 190 && g >= 115 && g <= 236 && b <= 153 && r - b >= 65;
-function readTimeBank(image: PixelImage): number {
+function readTimeBank(image: PixelImage, palette:ToolbarPalette): number {
   const width = 122, height = 62;
   const mask = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
@@ -84,6 +114,7 @@ function readTimeBank(image: PixelImage): number {
     requireThat(component.height >= 42 && component.height <= 53 && component.width >= 13 && component.width <= 39,
       'COUNTDOWN_BANK_UNREADABLE');
     const glyph = normalized(mask, component, width);
+    if(palette==='linux')return classifyLinuxBankGlyph(glyph).value;
     const ranked = rankGlyph(glyph);
     requireThat(ranked[0]!.score >= .90 && ranked[0]!.score - ranked[1]!.score >= .10, 'COUNTDOWN_BANK_UNREADABLE');
     return ranked[0]!.template.digit;
@@ -95,10 +126,8 @@ function readTimeBank(image: PixelImage): number {
 
 export function readCountdownPixels(image: PixelImage, readBank = false) {
   requireThat(image.width===PROFILE.width && image.height===PROFILE.height && image.rgba.length===image.width*image.height*4, 'COUNTDOWN_VIEWPORT_MISMATCH');
-  for (const anchor of PROFILE.anchors) {
-    const at=(anchor.y*image.width+anchor.x)*4;
-    requireThat(image.rgba[at+3]===255 && anchor.rgb.every((channel,i)=>Math.abs(channel-image.rgba[at+i]!)<=4), 'COUNTDOWN_LAYOUT_UNVERIFIED');
-  }
+  const palette=toolbarPalette(image);
+  requireThat(palette,'COUNTDOWN_LAYOUT_UNVERIFIED');
   const region=PROFILE.region,mask=new Uint8Array(region.width*region.height);
   // Exclude the possible drawn-tile edge beneath the timer. The complete
   // countdown glyphs occupy y=23..110 in the verified client layout.
@@ -123,6 +152,7 @@ export function readCountdownPixels(image: PixelImage, readBank = false) {
   const digits=found.map((component,index)=>{
     requireThat(component.area>=800 && component.area<=3000 && component.width>=24 && component.width<=60 && component.height>=(bankOnly?74:80) && component.height<=88,
       'COUNTDOWN_GLYPH_UNVERIFIED');
+    if(palette==='linux')return readLinuxDigit(mask,component,region.width,bankOnly?'bank-only':'fixed',found.length,index);
     const glyph=normalized(mask,component);
     const ranked=rankGlyph(glyph);
     const best=ranked[0]!,gap=best.score-ranked[1]!.score;
@@ -136,7 +166,7 @@ export function readCountdownPixels(image: PixelImage, readBank = false) {
   requireThat(text.length===1 || text[0]!=='0','COUNTDOWN_DIGITS_UNREADABLE');
   const seconds=Number(text); requireThat(seconds>=0 && seconds<=(bankOnly?20:600),'COUNTDOWN_VALUE_UNVERIFIED');
   return { source:'unity-countdown-glyphs-v1' as const,remainingMs:bankOnly?0:seconds*1000,seconds,digits,
-    maskSha256:createHash('sha256').update(mask).digest('hex'),...(readBank ? { bankRemainingMs: bankOnly ? seconds*1000 : readTimeBank(image) } : {}),profileVersion:`unity-${PROFILE.clientVersion}/${PROFILE.width}x${PROFILE.height}` };
+    maskSha256:createHash('sha256').update(mask).digest('hex'),...(readBank ? { bankRemainingMs: bankOnly ? seconds*1000 : readTimeBank(image,palette) } : {}),profileVersion:`unity-${PROFILE.clientVersion}/${PROFILE.width}x${PROFILE.height}${palette==='linux'?'/linux':''}` };
 }
 
 /** Read the actual client pixels, anchoring elapsed time before requesting the screenshot. */

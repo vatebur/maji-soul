@@ -3,6 +3,7 @@ import type { CommentaryPort } from './commentary.ts';
 import { digest } from '../../domain/game/value.ts';
 import { moderate, type LiveConfig } from './config.ts';
 import type { SpeechContent } from './speech.ts';
+import { validSpokenText } from './spoken-text.ts';
 
 export const STRATEGY_TIMEOUT_MS = 300_000;
 
@@ -78,7 +79,7 @@ export class StrategyNarrator {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).length !== 1 ||
           !('summary' in raw) || typeof raw.summary !== 'string' || [...raw.summary].length > 160) return;
       const text = moderate(raw.summary, config.moderation.rules, 160);
-      if (!text || text === this.#lastText) return;
+      if (!text || !validSpokenText(text, 3) || text === this.#lastText) return;
       this.#lastText = text;
       // Generation may outlive the input card; give the completed summary its own playback window.
       const now = Date.now();

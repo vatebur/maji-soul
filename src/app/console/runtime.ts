@@ -1,3 +1,4 @@
+import { invitation, invitationCount } from '../../application/live/recruitment.ts';
 import { randomUUID } from 'node:crypto';
 import type { StorageClient } from '../../adapters/storage/client.ts';
 import type { DecisionMode, GameObservation, GameProjection } from '../../domain/game/types.ts';
@@ -13,13 +14,14 @@ import type { loadReplay } from '../replay.ts';
 import type { AutomationPort } from './automation.ts';
 import { idleRelay, type RelayPort } from './relay.ts';
 import { prepareRehearsal } from './rehearsal.ts';
+import { HealthAnnouncements } from './health-announcements.ts';
 
 type Fixture = Awaited<ReturnType<typeof loadReplay>>;
 export type ConsoleSource = { kind: 'replay'; fixtures: Fixture[] } | { kind: 'follow'; sessionId: string };
 type RunStatus = 'running' | 'paused' | 'stopping' | 'stopped' | 'faulted';
 type Run = { id: string; status: RunStatus; controlEpoch: number; startedAt: string; sourceKey: string; matchIndex: number;
   completedMatches: number; stopAfterMatch: boolean; pendingMode: DecisionMode; pauseReason?: string };
-type RuntimeState = { config: LiveConfig; configRevision: number; run: Run | null; displayReset?: { sourceKey: string; sessionIds: string[] } };
+type RuntimeState = { config: LiveConfig; configRevision: number; run: Run | null; relayEnabled?: boolean; displayReset?: { sourceKey: string; sessionIds: string[] } };
 type Projection = Awaited<ReturnType<StorageClient['readProjection']>>;
 type CommandName = keyof typeof fields;
 type Command = {
@@ -104,6 +106,11 @@ export class ConsoleRuntime {
   #revisionAt = new Date().toISOString();
   #signature = '';
   #onChange = () => {};
+  #recruitKey: string | null = null;
+  #invitationIndex = 0;
+  #usedInvitations = new Set<string>();
+  #relayInitialized = false;
+  #health = new HealthAnnouncements();
 
   private constructor(options: RuntimeOptions, version: number, saved: RuntimeState | null) {
     this.automation = options.automation;
@@ -119,10 +126,10 @@ export class ConsoleRuntime {
     this.speech = new SpeechController(options.speech, () => this.config, () => this.#changed());
     this.commentary = new CommentaryService(this.store, options.commentary, () => ({ config: this.config, revision: this.configRevision }), () => this.#changed());
     this.narration = new StrategyNarrator(options.commentary, () => this.config, () => this.speech.view.queueEpoch, card => {
-      if (this.#closed || this.#errorCode || card.handId !== this.#game?.projection.state?.handId ||
+      if (this.#closed || this.#errorCode || this.automation?.view.status === 'recruiting' || card.handId !== this.#game?.projection.state?.handId ||
           this.#game?.recoveryRequired || this.#game?.projection.state?.trust !== 'trusted' ||
           this.#game?.projection.handStatus !== 'playing') return;
-      this.#subtitle = card;
+      if (this.#subtitle?.priority !== 'system' || Date.parse(this.#subtitle.expiresAt) <= Date.now()) this.#subtitle = card;
       this.speech.enqueue(card);
       this.#changed();
     });
@@ -135,6 +142,10 @@ export class ConsoleRuntime {
   static async open(options: RuntimeOptions) {
     const { revision, body } = await options.store.readConsole();
     const runtime = new ConsoleRuntime(options, revision, body as RuntimeState | null);
+    if (Object.hasOwn(runtime.config.run, 'maxMatches') || Object.hasOwn(runtime.config.run, 'maxDurationMs')) {
+      await runtime.#save({ ...runtime.#state, configRevision: runtime.configRevision + 1,
+        config: { ...runtime.config, run: { defaultMode: runtime.config.run.defaultMode } } });
+    }
     if (runtime.config.models.commentaryIntervalMs === undefined) {
       await runtime.#save({ ...runtime.#state, configRevision: runtime.configRevision + 1,
         config: { ...runtime.config, models: { ...runtime.config.models,
@@ -179,11 +190,6 @@ export class ConsoleRuntime {
     this.#state = state;
     if (command) this.#recent = [command.view, ...this.#recent].slice(0, 20);
   }
-  #limit(run: Run, config = this.config, now = Date.now()): Run {
-    if (run.status === 'stopped' || run.stopAfterMatch ||
-        (run.completedMatches < config.run.maxMatches && now - Date.parse(run.startedAt) < config.run.maxDurationMs)) return run;
-    return { ...run, stopAfterMatch: true, status: run.status === 'running' ? 'stopping' : run.status };
-  }
   async #readGame(skipHistory = false) {
     const session = this.gameSessionId, previous = this.#game;
     this.#game = session ? await this.store.readProjection(session) : null;
@@ -192,10 +198,11 @@ export class ConsoleRuntime {
         this.#game?.recoveryRequired || this.#game?.projection.state?.trust !== 'trusted' ||
         this.#game?.projection.handStatus !== 'playing') this.narration.invalidate();
     this.speech.setHand(hand);
-    if (this.#subtitle && this.#subtitle.handId !== hand) this.#subtitle = null;
+    if (this.#subtitle?.priority === 'discard' && this.#subtitle.handId !== hand) this.#subtitle = null;
     if (!session) {
       this.#archive = []; this.#archiveSession = null; this.#knownDiscards.clear();
-      this.#subtitle = null; this.#answer = null;
+      if(this.#subtitle?.priority === 'discard')this.#subtitle = null;
+      this.#answer = null;
       return;
     }
     if (session === this.#archiveSession && previous?.projection.sequence === this.#game?.projection.sequence) return;
@@ -214,7 +221,7 @@ export class ConsoleRuntime {
         if (!text) continue;
         const card = { contentId: entry.id, handId: entry.handId, text: entry.factText, priority: 'discard' as const,
           createdAt: new Date(at).toISOString(), expiresAt: new Date(at + 20_000).toISOString() };
-        this.#subtitle = card;
+        if (this.#subtitle?.priority !== 'system' || Date.parse(this.#subtitle.expiresAt) <= now) this.#subtitle = card;
         this.#narrateStrategy(entry, card);
       }
     }
@@ -244,15 +251,14 @@ export class ConsoleRuntime {
   async #advance() {
     const current = this.#state.run;
     if (!current || current.status === 'stopped' || current.status === 'faulted' || this.source.kind !== 'replay') return;
-    const run = this.#limit(current);
-    if (run !== current) await this.#save({ ...this.#state, run });
+    const run = current;
     if (run.status === 'paused') return;
     const game = await this.store.readProjection(this.#gameSession(run));
     requireThat(game && !game.recoveryRequired, 'REPLAY_CHECKPOINT_MISSING');
     const fixture = this.#replays[run.matchIndex]!;
     const p = game.projection;
     if (p.matchStatus === 'finished') {
-      const completed = this.#limit({ ...run, completedMatches: run.completedMatches + 1 });
+      const completed = { ...run, completedMatches: run.completedMatches + 1 };
       const next = this.source.fixtures[run.matchIndex + 1];
       if (completed.stopAfterMatch || !next) await this.#save({ ...this.#state, run: { ...completed, status: 'stopped' } });
       else {
@@ -271,23 +277,61 @@ export class ConsoleRuntime {
       if (this.#closed) return;
       try {
         await this.automation?.refresh();
+        await this.#startDefaultRelay();
         await this.relay?.refresh();
         if (!this.#errorCode) await this.#advance();
         await this.#readGame();
+        this.#recruit();
         if (Date.now() >= this.#nextCleanupAt) {
           await this.store.cleanupOutput(new Date(Date.now() - this.config.retention.days * 86_400_000).toISOString());
           this.#nextCleanupAt = Date.now() + 3_600_000;
         }
       } catch (error) {
         const code = error instanceof Error ? error.message : '';
+        const previousError = this.#errorCode;
         this.#errorCode = /^[A-Z][A-Z0-9_]{1,80}$/.test(code) ? code : 'OUTPUT_LEDGER_UNAVAILABLE';
-        await this.speech.setMuted(true);
-        await this.automation?.stop();
+        if (previousError !== this.#errorCode) {
+          this.narration.invalidate();
+          this.speech.clearPending();
+          await this.automation?.stop();
+        }
       }
+      this.#announceHealth();
       if (this.#errorCode) await this.interaction.stop();
       else if (this.source.kind === 'follow' || this.#archive.length) this.interaction.tick(this.#archive);
       this.#changed();
     });
+  }
+  async #startDefaultRelay() {
+    if (this.#relayInitialized || !this.relay || this.source.kind !== 'follow') return;
+    this.#relayInitialized = true;
+    if (this.#state.relayEnabled !== false) await this.relay.start();
+  }
+  #announceHealth() {
+    for (const card of this.#health.observe(this.automation?.view, this.relay?.view, this.#errorCode, Date.now())) {
+      this.narration.invalidate();
+      this.#subtitle = card;
+      this.speech.enqueue(card);
+    }
+  }
+  #recruit() {
+    const view=this.automation?.view;
+    const active=view?.enabled && view.status==='recruiting' && view.roomId && view.recruitUntil && Date.parse(view.recruitUntil)>Date.now();
+    const key=active?`${view.roomId}/${view.recruitUntil}`:null;
+    if(key!==this.#recruitKey){
+      this.speech.cancelRecruitment();
+      if(this.#subtitle?.priority==='recruitment')this.#subtitle=null;
+      this.#recruitKey=key;this.#invitationIndex=0;this.#usedInvitations.clear();
+    }
+    if(!active || !this.audioEnabled || this.speech.busy || this.speech.view.muted || this.#invitationIndex>=invitationCount)return;
+    let text=invitation(view.roomId!,this.#invitationIndex++);
+    while(this.#usedInvitations.has(text) && this.#invitationIndex<invitationCount)text=invitation(view.roomId!,this.#invitationIndex++);
+    if(this.#usedInvitations.has(text))return;
+    this.#usedInvitations.add(text);
+    const card:SpeechContent={contentId:`recruit-${randomUUID()}`,handId:null,text,priority:'recruitment',
+      createdAt:new Date().toISOString(),expiresAt:view.recruitUntil!};
+    if (this.#subtitle?.priority !== 'system' || Date.parse(this.#subtitle.expiresAt) <= Date.now()) this.#subtitle=card;
+    this.speech.enqueue(card);
   }
   async close() {
     this.#closed = true;
@@ -344,7 +388,7 @@ export class ConsoleRuntime {
           const checkpoint = await this.store.readProjection(this.#gameSession(run));
           if (!checkpoint || checkpoint.recoveryRequired || checkpoint.projection.state?.trust === 'untrusted')
             throw new ConsoleError(409, 'RECOVERY_REQUIRED', 'none', 'after-recovery');
-          const { pauseReason: _reason, ...rest } = this.#limit(run);
+          const { pauseReason: _reason, ...rest } = run;
           const resumed: Run = { ...rest, status: rest.stopAfterMatch ? 'stopping' : 'running', controlEpoch: rest.controlEpoch + 1 };
           next = { ...next, run: resumed };
           result = this.#controlResult(resumed);
@@ -380,8 +424,7 @@ export class ConsoleRuntime {
               config.next.models.commentaryProfile === 'local' && !this.commentary.available)
             throw new ConsoleError(409, 'UNSUPPORTED_CAPABILITY');
           if (!config.next.interaction.dryRun && !this.biliSendingEnabled) throw new ConsoleError(409, 'UNSUPPORTED_CAPABILITY');
-          next = { ...next, config: config.next, configRevision: this.configRevision + 1,
-            run: run ? this.#limit(this.#limit(run), config.next) : null };
+          next = { ...next, config: config.next, configRevision: this.configRevision + 1 };
           const effects = Object.entries(config.groups).map(([group, patch]) => ({
             group, effective: group === 'interaction' && this.config.interaction.roomId !== config.next.interaction.roomId ?
               'reconnecting' : configEffects[group as keyof typeof configEffects], fields: Object.keys(patch as object),
@@ -392,7 +435,7 @@ export class ConsoleRuntime {
         case 'display.reset': {
           if (this.source.kind !== 'follow') throw new ConsoleError(409, 'UNSUPPORTED_CAPABILITY');
           const automation = this.automation?.view;
-          if (automation?.enabled || automation && ['starting','playing','waiting','stopping'].includes(automation.status))
+          if (automation?.enabled || automation && ['starting','creating','recruiting','recovering','playing','waiting','stopping'].includes(automation.status))
             throw new ConsoleError(409, 'AUTOMATION_ACTIVE');
           next = { ...next, displayReset: { sourceKey: this.#sourceKey,
             sessionIds: [...new Set([this.source.sessionId, ...(automation?.sessionId ? [automation.sessionId] : [])])] } };
@@ -401,14 +444,16 @@ export class ConsoleRuntime {
         }
         case 'relay.set': {
           if (!this.relay) throw new ConsoleError(409, 'UNSUPPORTED_CAPABILITY');
+          this.#relayInitialized = true;
           if (p.enabled) await this.relay.start();
           else await this.relay.stop();
+          next = { ...next, relayEnabled: p.enabled as boolean };
           result = { kind: 'relay-control', ...this.relay.view };
           break;
         }
         case 'automation.set': {
           if (!this.automation || this.source.kind !== 'follow') throw new ConsoleError(409, 'UNSUPPORTED_CAPABILITY');
-          if (p.enabled) await this.automation.start(this.config.run);
+          if (p.enabled) { await this.#startDefaultRelay(); await this.automation.start(); }
           else await this.automation.stop();
           result = { kind: 'automation-control', ...this.automation.view };
           break;
@@ -430,7 +475,9 @@ export class ConsoleRuntime {
       catch {
         this.#errorCode = 'OUTPUT_LEDGER_UNAVAILABLE';
         await this.automation?.stop();
-        await this.speech.setMuted(true);
+        this.narration.invalidate();
+        this.speech.clearPending();
+        this.#announceHealth();
         throw new ConsoleError(503, 'STORAGE_UNAVAILABLE', 'unknown', 'after-recovery');
       }
       if (name === 'display.reset') {
@@ -484,7 +531,6 @@ export class ConsoleRuntime {
       console: {
         session: run ? { id: run.id, status, controlEpoch: run.controlEpoch, startedAt: run.startedAt,
           completedMatches: run.completedMatches, stopAfterMatch: run.stopAfterMatch, activeMode, pendingMode: run.pendingMode,
-          limits: { maxMatches: this.config.run.maxMatches, maxDurationMs: this.config.run.maxDurationMs },
           ...(run.pauseReason ? { pauseReason: run.pauseReason } : {}) } : null,
         automation: this.automation?.view ?? { available: false, enabled: false, status: 'idle', completedMatches: 0, sessionId: null },
         relay: this.relay?.view ?? idleRelay(),
@@ -505,7 +551,7 @@ export class ConsoleRuntime {
             updatedAt: now, ...(this.interaction.gap ? { errorCode: 'MESSAGE_GAP' } : {}) },
         ],
       },
-      obs: { runStatus: status, activeMode, pendingMode, game, subtitle: this.#card(this.#subtitle),
+      obs: { automation: this.automation ? {enabled:this.automation.view.enabled,status:this.automation.view.status,roomId:this.automation.view.roomId ?? null,recruitUntil:this.automation.view.recruitUntil ?? null} : null, runStatus: status, activeMode, pendingMode, game, subtitle: this.#card(this.#subtitle),
         interaction: this.#card(this.#answer), theme: this.config.output.theme, muted: this.speech.view.muted },
     };
   }
@@ -517,7 +563,7 @@ export class ConsoleRuntime {
     this.#onChange();
   }
   get configView() {
-    return { revision: this.configRevision, values: this.config, readOnly: { players: 4, length: 'east', displayTimeSetting: this.#game?.projection.room?.rules.displayTimeSetting ?? '300+0',
+    return { revision: this.configRevision, values: this.config, readOnly: { players: 4, length: this.#game?.projection.room?.rules.length ?? 'south', displayTimeSetting: this.#game?.projection.room?.rules.displayTimeSetting ?? '300+0',
       protocolVersion: this.#game?.projection.room?.rules.protocolVersion ?? null, modelCredentialsConfigured: this.commentary.available,
       bilibiliCredentialsConfigured: this.biliSendingEnabled } };
   }

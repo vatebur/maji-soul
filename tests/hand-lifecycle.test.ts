@@ -47,6 +47,10 @@ test('exhaustive draw sums all authoritative score components and refuses an inc
   const bad=structuredClone(payload);bad.scores[1]!.old_scores[0]=28000;
   assert.throws(()=>end(p,'ActionNoTile',bad,3),/SETTLEMENT_SCORE_MISMATCH/);
   assert.equal(end(p,'ActionNoTile',{liujumanguan:false,gameend:false,scores:[]},3).state!.players[0].score,25000);
+  const unchanged={liujumanguan:false,gameend:false,scores:[{seat:0,old_scores:[25000,25000,25000,25000],delta_scores:[]}]};
+  assert.equal(end(p,'ActionNoTile',unchanged,3).state!.players[0].score,25000);
+  assert.throws(()=>end(p,'ActionNoTile',{...unchanged,liujumanguan:true},3),/INVALID_PROTOCOL_SCORES/);
+  assert.throws(()=>end(p,'ActionNoTile',{...unchanged,scores:[{...unchanged.scores[0],old_scores:[25001,25000,25000,25000]}]},3),/SETTLEMENT_SCORE_MISMATCH/);
 });
 
 test('abortive draw applies only the explicit last riichi deposit and keeps generic reason codes',()=>{

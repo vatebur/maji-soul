@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { inflateSync } from 'node:zlib';
+import { decodeScreenshotPng, decodeScreenshotPngRegions, type PixelImage, type ScreenshotRegions } from '../browser/png.ts';
 import { bridgeCall, type EgoPagePort, type AutoWinHandScope } from './ego-transport.ts';
 import { requireThat } from '../../domain/game/value.ts';
+import { TOOLBAR_PALETTES, LINUX_TABLE_FRAME, matchesPixelAnchors, toolbarPalette } from './table-pixels.ts';
 
-export interface PixelImage { width: number; height: number; rgba: Uint8Array }
+export { decodeScreenshotPng, type PixelImage } from '../browser/png.ts';
 export interface AutoWinProfile {
   schemaVersion: 1; clientVersion: string;
   viewport: { width: number; height: number; devicePixelRatio: number };
@@ -11,6 +12,8 @@ export interface AutoWinProfile {
   /** Glyph pixels and stable toolbar anchors, measured from current-client screenshots. */
   glyph: { x: number; y: number; width: number; height: number };
   anchors: { x: number; y: number; rgb: [number, number, number]; tolerance: number }[];
+  /** Additional complete, measured render palettes; never mix anchor groups. */
+  anchorAlternatives?: AutoWinProfile['anchors'][];
   enabledHashes?: string[]; disabledHashes?: string[];
   glyphMaskBase64?: string;
 }
@@ -95,6 +98,8 @@ export const DEFAULT_AUTO_WIN_PROFILE: AutoWinProfile = {
     {x:263,y:600,rgb:[21,37,67],tolerance:4},
     {x:236,y:464,rgb:[56,215,85],tolerance:20},
   ],
+  anchorAlternatives:[[...TOOLBAR_PALETTES.linux,
+    {x:236,y:464,rgb:[59,214,71],tolerance:20}]],
   enabledHashes:['fe99ac24496bbf7a364752e74a0722972ce3aee67541d8ecb07f9bae12ad1018','27616b969b9b48c834857a31f3bcf18676f53df3a822fb2a7195a1cd9c93dc54'],
   disabledHashes:['0c9a29c4dfd303e700513efcc64bebc6582d67957ff1dff29e5312871f3316b5'],
   glyphMaskBase64:'AAAAAAAAAAAAAAAAAAAAMAAAAAAfAAAA+AMAAOB/AAAA+AMAAAAAAAAAAAAAAAAYAAAAAAcAAADgDwAOAPwB8AfAP8D/AP5j/D/4H5z/x/+B4//4P/DYD/4HHviB/8ADHwD/eOAD4D8PPgD858EHwA84/AD4Af8/gD/g/wP4B/h/gOcA/wEwHMAHgIMDAAAAcAAAAAAOAAAAwAEAAAA4AAAAAAcAAADgAAAAABwAAACAAQAAAAAAAAA=',
@@ -124,52 +129,9 @@ export function hasRecoveryTableAnchors(image:PixelImage):boolean {
   // left active-seat glow in the current-client capture.
   const topRiichiFrame = [[925,320,98,93,103],[925,400,98,93,103],[1135,335,69,67,78],
     [1115,320,98,93,103],[945,440,69,67,78]];
-  return border.every(matches) || bevel.every(matches) || riichiFrame.every(matches) || topRiichiFrame.every(matches);
-}
-
-/** Deliberately bounded CDP PNG reader: only noninterlaced 8-bit RGB/RGBA screenshots. */
-export function decodeScreenshotPng(input: Uint8Array): PixelImage {
-  const data = Buffer.from(input);
-  requireThat(data.length >= 33 && data.length <= 8 * 1024 * 1024 && data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])), 'AUTO_WIN_SCREENSHOT_INVALID');
-  let width = 0, height = 0, channels = 0, ended = false;
-  const chunks: Buffer[] = [];
-  for (let offset = 8; offset < data.length;) {
-    requireThat(offset + 12 <= data.length, 'AUTO_WIN_SCREENSHOT_INVALID');
-    const length = data.readUInt32BE(offset), type = data.toString('ascii', offset + 4, offset + 8);
-    requireThat(offset + length + 12 <= data.length, 'AUTO_WIN_SCREENSHOT_INVALID');
-    const body = data.subarray(offset + 8, offset + 8 + length);
-    if (type === 'IHDR') {
-      requireThat(offset === 8 && length === 13 && body[8] === 8 && [2,6].includes(body[9]!) && body[10] === 0 && body[11] === 0 && body[12] === 0, 'AUTO_WIN_SCREENSHOT_FORMAT');
-      width = body.readUInt32BE(0); height = body.readUInt32BE(4); channels = body[9] === 6 ? 4 : 3;
-      requireThat(width > 0 && height > 0 && width * height <= 4_000_000, 'AUTO_WIN_SCREENSHOT_LIMIT');
-    } else if (type === 'IDAT') chunks.push(body);
-    else if (type === 'IEND') { ended = true; break; }
-    offset += length + 12;
-  }
-  requireThat(width && height && ended && chunks.length > 0, 'AUTO_WIN_SCREENSHOT_INVALID');
-  const stride = width * channels, expected = (stride + 1) * height;
-  const raw = inflateSync(Buffer.concat(chunks), { maxOutputLength: expected });
-  requireThat(raw.length === expected, 'AUTO_WIN_SCREENSHOT_INVALID');
-  const pixels = new Uint8Array(width * height * channels);
-  const paeth = (a: number, b: number, c: number) => {
-    const p = a + b - c, pa = Math.abs(p-a), pb = Math.abs(p-b), pc = Math.abs(p-c);
-    return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-  };
-  for (let y = 0; y < height; y++) {
-    const filter = raw[y * (stride + 1)]!; requireThat(filter <= 4, 'AUTO_WIN_SCREENSHOT_FORMAT');
-    for (let x = 0; x < stride; x++) {
-      const at = y * stride + x, left = x >= channels ? pixels[at-channels]! : 0;
-      const up = y ? pixels[at-stride]! : 0, before = y && x >= channels ? pixels[at-stride-channels]! : 0;
-      const predictor = [0,left,up,Math.floor((left+up)/2),paeth(left,up,before)][filter]!;
-      pixels[at] = (raw[y*(stride+1)+1+x]! + predictor) & 255;
-    }
-  }
-  const rgba = new Uint8Array(width * height * 4);
-  for (let i = 0; i < width*height; i++) {
-    rgba[i*4] = pixels[i*channels]!; rgba[i*4+1] = pixels[i*channels+1]!;
-    rgba[i*4+2] = pixels[i*channels+2]!; rgba[i*4+3] = channels === 4 ? pixels[i*channels+3]! : 255;
-  }
-  return { width, height, rgba };
+  const palette=toolbarPalette(image);
+  if(palette==='linux')return matchesPixelAnchors(image,LINUX_TABLE_FRAME);
+  return palette==='legacy' && (border.every(matches) || bevel.every(matches) || riichiFrame.every(matches) || topRiichiFrame.every(matches));
 }
 
 function validProfile(p: AutoWinProfile) {
@@ -178,16 +140,26 @@ function validProfile(p: AutoWinProfile) {
   requireThat(v && Number.isInteger(v.width) && Number.isInteger(v.height) && v.width > 0 && v.height > 0 && v.devicePixelRatio === 1, 'AUTO_WIN_PROFILE_UNVERIFIED');
   for (const box of [b,g]) requireThat(box && [box.x,box.y,box.width,box.height].every(Number.isInteger) && box.x >= 0 && box.y >= 0 && box.width > 0 && box.height > 0 && box.x + box.width <= v.width && box.y + box.height <= v.height, 'AUTO_WIN_PROFILE_UNVERIFIED');
   requireThat(g.x >= b.x && g.y >= b.y && g.x+g.width <= b.x+b.width && g.y+g.height <= b.y+b.height && p.anchors?.length >= 4, 'AUTO_WIN_PROFILE_UNVERIFIED');
-  for (const a of p.anchors) requireThat(Number.isInteger(a.x) && Number.isInteger(a.y) && a.x>=0 && a.y>=0 && a.x<v.width && a.y<v.height && a.rgb.length===3 && a.rgb.every(c=>Number.isInteger(c)&&c>=0&&c<=255) && a.tolerance>=0 && a.tolerance<=24, 'AUTO_WIN_PROFILE_UNVERIFIED');
+  for (const anchors of [p.anchors,...p.anchorAlternatives??[]]) {
+    requireThat(Array.isArray(anchors) && anchors.length>=4,'AUTO_WIN_PROFILE_UNVERIFIED');
+    for (const a of anchors) requireThat(Number.isInteger(a.x) && Number.isInteger(a.y) && a.x>=0 && a.y>=0 && a.x<v.width && a.y<v.height && a.rgb.length===3 && a.rgb.every(c=>Number.isInteger(c)&&c>=0&&c<=255) && a.tolerance>=0 && a.tolerance<=24, 'AUTO_WIN_PROFILE_UNVERIFIED');
+  }
   const hashes = [...p.enabledHashes ?? [], ...p.disabledHashes ?? []];
   requireThat(hashes.every(h=>/^[a-f0-9]{64}$/.test(h)) && !(p.enabledHashes ?? []).some(h=>p.disabledHashes?.includes(h)), 'AUTO_WIN_PROFILE_UNVERIFIED');
   if(p.glyphMaskBase64)requireThat(Buffer.from(p.glyphMaskBase64,'base64').length===Math.ceil(g.width*g.height/8),'AUTO_WIN_PROFILE_UNVERIFIED');
 }
 
-export function classifyAutoWinPixels(image: PixelImage, profile: AutoWinProfile) {
+export function classifyAutoWinPixels(image: PixelImage | ScreenshotRegions, profile: AutoWinProfile) {
   validProfile(profile);
-  requireThat(image.width === profile.viewport.width && image.height === profile.viewport.height && image.rgba.length === image.width*image.height*4, 'AUTO_WIN_VIEWPORT_MISMATCH');
-  const pixel = (x: number,y: number) => image.rgba.subarray((y*image.width+x)*4,(y*image.width+x)*4+4);
+  requireThat(image.width === profile.viewport.width && image.height === profile.viewport.height &&
+    ('rgba' in image ? image.rgba.length === image.width*image.height*4 : image.kind === 'regions'), 'AUTO_WIN_VIEWPORT_MISMATCH');
+  const pixel = (x: number,y: number) => {
+    if('rgba' in image)return image.rgba.subarray((y*image.width+x)*4,(y*image.width+x)*4+4);
+    const region=image.regions.find(region=>x>=region.x && x<region.x+region.width && y>=region.y && y<region.y+region.height);
+    requireThat(region && region.rgba.length===region.width*region.height*4,'AUTO_WIN_PIXEL_UNAVAILABLE');
+    const at=((y-region.y)*region.width+x-region.x)*4;
+    return region.rgba.subarray(at,at+4);
+  };
   const g = profile.glyph, rows: Uint8Array[] = [];
   let green = 0, grey = 0, opaque = 0, greenHits=0,greenExtra=0,greyHits=0,greyExtra=0;
   const mask=profile.glyphMaskBase64?Buffer.from(profile.glyphMaskBase64,'base64'):null;
@@ -199,9 +171,10 @@ export function classifyAutoWinPixels(image: PixelImage, profile: AutoWinProfile
     if (a === 255 && r >= 90 && r <= 210 && bg >= r && bg-r <= 45 && b-bg >= 5 && b-bg <= 55) {grey++;if(expectedGlyph)greyHits++;else greyExtra++;}
   }
   const rgbaSha256 = createHash('sha256').update(Buffer.concat(rows)).digest('hex');
-  const anchorsMatch = profile.anchors.every(a => {
-    const p = pixel(a.x,a.y); return p[3]===255 && a.rgb.every((c,i)=>Math.abs(c-p[i]!)<=a.tolerance);
-  });
+  const anchorsMatch = [profile.anchors,...profile.anchorAlternatives??[]].some(anchors=>anchors.every(anchor=>{
+    const observed=pixel(anchor.x,anchor.y);
+    return observed[3]===255 && anchor.rgb.every((channel,index)=>Math.abs(observed[index]!-channel)<=anchor.tolerance);
+  }));
   let state: AutoWinReadback['state'] = 'unknown';
   const area = g.width*g.height;
   if (anchorsMatch && opaque===area) {
@@ -223,12 +196,19 @@ export async function inspectAutoWin(page: EgoPagePort, profile: AutoWinProfile 
   const observedAt=new Date().toISOString();
   const screenshot = await page.cdp('Page.captureScreenshot',{ format:'png', fromSurface:true, captureBeyondViewport:false });
   requireThat(typeof screenshot?.data==='string' && screenshot.data.length<=12*1024*1024, 'AUTO_WIN_SCREENSHOT_INVALID');
-  const pixels=decodeScreenshotPng(Buffer.from(screenshot.data,'base64')),result=classifyAutoWinPixels(pixels,profile);
+  const encoded=Buffer.from(screenshot.data,'base64');
+  const fullPixels=requireRecoveryTable?decodeScreenshotPng(encoded):null;
+  // Keep CDP capture at full viewport: clipped captures can interfere with a
+  // concurrent relay. Decode only the actual glyph and anchor pixels for the
+  // frequent read-only check, with explicit coverage and no invented pixels.
+  const pixels=fullPixels??decodeScreenshotPngRegions(encoded,[profile.glyph,
+    ...[profile.anchors,...profile.anchorAlternatives??[]].flat().map(anchor=>({x:anchor.x,y:anchor.y,width:1,height:1}))]);
+  const result=classifyAutoWinPixels(pixels,profile);
   const after = await bridgeCall(page,'read');
   requireThat(after.pageEpoch===before.pageEpoch && after.generation===before.generation && after.lastStep===before.lastStep &&
     after.nativeRestoreRevision===before.nativeRestoreRevision &&
     after.connected && after.freshConnection && !after.handEnded && !after.matchEnded && !after.reason && !after.overflow, 'AUTO_WIN_READBACK_STALE');
-  requireThat(!requireRecoveryTable || hasRecoveryTableAnchors(pixels),'AUTO_WIN_RECOVERY_NOT_READY');
+  requireThat(!requireRecoveryTable || fullPixels && hasRecoveryTableAnchors(fullPixels),'AUTO_WIN_RECOVERY_NOT_READY');
   return { source:'unity-button-pixels-v1',state:result.state,observedAt,pageEpoch:after.pageEpoch,
     generation:after.generation,step:after.lastStep,nativeRestoreRevision:after.nativeRestoreRevision,
     rgbaSha256:result.rgbaSha256,profileVersion:`unity-${profile.clientVersion}/${profile.viewport.width}x${profile.viewport.height}` };
@@ -319,8 +299,26 @@ export async function ensureAutoWin(page: EgoPagePort, profile: AutoWinProfile =
 
 /** Read only: final prepare checks cannot click or accidentally reopen paused control. */
 export async function verifyAutoWin(page: EgoPagePort, profile: AutoWinProfile = DEFAULT_AUTO_WIN_PROFILE) {
-  const readback=await inspectAutoWin(page,profile);
-  const verified=await bridgeCall(page,'ackAutoWin',readback);
-  requireThat(readback.state==='enabled','AUTO_WIN_UNVERIFIED');
-  return { ...readback,clicked:false,verified };
+  const scope=await bridgeCall(page,'read');
+  const keys=['pageEpoch','sourceStream','gameUuid','handSha256','generation','lastStep','nativeRestoreRevision','controlEpoch','paused'];
+  for(let attempt=0;;attempt++) {
+    const readback=await inspectAutoWin(page,profile);
+    requireThat(readback.pageEpoch===scope.pageEpoch && readback.generation===scope.generation && readback.step===scope.lastStep &&
+      readback.nativeRestoreRevision===scope.nativeRestoreRevision,'AUTO_WIN_READBACK_STALE');
+    let verified;
+    try { verified=await bridgeCall(page,'ackAutoWin',readback); }
+    catch(error) {
+      if(attempt!==0 || !(error instanceof Error && error.message==='AUTO_WIN_READBACK_STALE'))throw error;
+      const current=await bridgeCall(page,'read');
+      // Encoding or transport can age a frame beyond the 1s acknowledgement
+      // limit. Reacquire once only if every original scope field still matches.
+      // A moving game window belongs to the session's ingress recovery, not
+      // this read-only verification. Never reuse or retimestamp the old image.
+      if(!keys.every(key=>current[key]===scope[key]) || !current.connected || !current.freshConnection ||
+          current.handEnded || current.matchEnded || current.reason || current.overflow)throw error;
+      continue;
+    }
+    requireThat(readback.state==='enabled','AUTO_WIN_UNVERIFIED');
+    return { ...readback,clicked:false,verified };
+  }
 }

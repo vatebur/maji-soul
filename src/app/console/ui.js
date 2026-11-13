@@ -26,11 +26,19 @@ function render() {
   const { session, game, speech, interaction } = state;
   const active = session && session.status !== 'stopped';
   node('source').textContent = output.source === 'replay' ? '回放演练 · 使用已保存的游戏事件' : state.automation?.available ? '实场控制 · 自动出牌与连续对局' : '台账跟随 · 只读游戏状态';
-  node('run').textContent = session ? `${statuses[session.status]} · 完成 ${session.completedMatches}/${session.limits.maxMatches} 场${session.pauseReason ? ' · ' + session.pauseReason : ''}` : output.source === 'replay' ? '当前没有回放运行' : '实场台账已连接';
+  node('run').textContent = session ? `${statuses[session.status]} · 完成 ${session.completedMatches} 场${session.pauseReason ? ' · ' + session.pauseReason : ''}` : output.source === 'replay' ? '当前没有回放运行' : '实场台账已连接 · 持续运行';
   node('game').textContent = game
     ? `${winds[game.roundWind] ?? ''}${game.handNumber}局 · ${game.honba}本场 · ${game.trust === 'trusted' ? '已同步' : '状态待同步'} · ${time(game.observedAt)} · 当前 ${modes[session?.activeMode] ?? '—'} / 下局 ${modes[session?.pendingMode] ?? '—'}`
     : '等待对局事实';
   node('speech').textContent = `语音 ${speech.muted ? '静音' : speech.playingSpeechId ? '播报中' : '空闲'} · 待播 ${speech.pendingCount}`;
+  node('avatar-status').hidden = node('avatar-controls').hidden = !output.avatar;
+  if (output.avatar) {
+    node('avatar-status').textContent = output.avatar.connected ?
+      `Live2D 已连接 · ${output.avatar.speaking ? '正在说话' : output.avatar.phase === 'prepare' ? '正在准备动作' : '待机'}` :
+      '等待 OBS 角色页面连接；角色模式的声音由该页面播放。';
+    node('avatar-address').value = location.origin + '/avatar';
+    node('avatar-test').disabled = !output.avatar.connected || speech.muted || !!speech.playingSpeechId || speech.pendingCount > 0;
+  }
   node('interaction').textContent = `弹幕 ${interaction.roomId ?? '未配置'} · ${interaction.connection} · ${interaction.dryRun ? '预演' : '真实回发'}`;
   const bili = output.bilibili;
   const biliErrors = { BILI_LOGIN_REQUIRED: '登录已失效，请更新本机登录文件', BILI_ACCOUNT_CHANGED: '登录账号不一致，请检查本机配置',
@@ -51,8 +59,21 @@ function render() {
   node('automation-actions').hidden = !automation?.available;
   node('automation-toggle').textContent = automation?.enabled ? '停止自动出牌' : '启用自动出牌';
   node('automation-toggle').setAttribute('aria-pressed', String(!!automation?.enabled));
-  const automationStates = { idle: '未启用', starting: '正在连接', playing: '自动出牌中', waiting: '等待下一场', stopping: '正在停止', stopped: '已停止', faulted: '运行异常' };
+  const automationStates = { creating:'正在创建房间', recruiting:'正在招募观众', recovering:'正在重启恢复', idle: '未启用', starting: '正在连接', playing: '自动出牌中', waiting: '等待下一场', stopping: '正在停止', stopped: '已停止', faulted: '运行异常' };
   const automationErrors = {
+    MATCH_OBSERVATION_LIMIT: '当前对局观察中断',
+    CONTROL_BARRIER_FAILED: '接管牌局失败',
+    COUNTDOWN_EXPIRED: '当前操作已超过安全出牌时限',
+    COUNTDOWN_VIEWPORT_MISMATCH: '牌桌画面尺寸不匹配',
+    AUTO_WIN_VIEWPORT_MISMATCH: '牌桌画面尺寸不匹配',
+    AUTOMATION_HEARTBEAT_TIMEOUT: '自动出牌进程未响应',
+    AUTOMATION_PROGRESS_TIMEOUT: '对局长时间没有进展',
+    BROWSER_CONTROL_WITH_USER: '浏览器已由用户接管，请交还控制后启用',
+    LOGIN_REQUIRED: '自动恢复未完成，请在雀魂页面登录后重新启用',
+    ROOM_OWNER_REQUIRED: '需要由当前账号担任四人友人房房主',
+    DEFAULT_ROOM_RULES_MISMATCH: '房间设置与默认四人半庄、5+20 秒不一致',
+    ROOM_PLAYERS_NOT_READY: '请等待房内玩家点击准备后重试',
+    ROOM_FILL_REJECTED: '补电脑失败，请检查当前房间',
     LOBBY_NOT_READY: '大厅连接未就绪，请等待雀魂加载完成后重试',
     ROOM_NOT_READY: '未进入可用的友人房，请先进入配置的房间后重试',
     ROOM_FETCH_FAILED: '读取友人房失败，请检查雀魂连接后重试',
@@ -61,17 +82,18 @@ function render() {
     GAME_START_TIMEOUT: '开局后未收到对局连接，请检查雀魂页面后重试',
   };
   node('automation-status').textContent = automation?.available
-    ? `自动出牌：${automationStates[automation.status]} · 已完成 ${automation.completedMatches} 场${automation.errorCode ? ' · ' + (automationErrors[automation.errorCode] ?? automation.errorCode) : ''}` : '';
+    ? `自动出牌：${automationStates[automation.status]}${automation.roomId ? ' · 房间 ' + automation.roomId : ''}${automation.recruitUntil && automation.status === 'recruiting' ? ' · 招募剩余 ' + Math.max(0, Math.ceil((Date.parse(automation.recruitUntil) - Date.now()) / 1000)) + ' 秒' : ''} · 已完成 ${automation.completedMatches} 场${automation.recoveryCount ? ' · 已恢复 ' + automation.recoveryCount + ' 次' : ''}${automation.nextRetryAt ? ' · ' + time(automation.nextRetryAt) + ' 重试' : ''}${automation.errorCode ? ' · ' + (automationErrors[automation.errorCode] ?? automation.errorCode) : ''}` : '';
   const relay = state.relay;
-  const relayStates = { idle: '未启动', starting: '正在连接画面', live: '转播中', stopped: '已停止', faulted: '转播异常' };
-  const relayErrors = { RELAY_PORT_IN_USE: '转播地址已被占用，请先关闭独立运行的转播程序后重试。',
-    RELAY_START_FAILED: '转播启动失败，请确认 ego 浏览器已运行后重试。',
-    RELAY_CAPTURE_FAILED: '画面连接已中断，请确认雀魂页面处于 Agent 控制状态后重新启动转播。' };
+  const relayStates = { idle: '未启动', starting: '正在连接画面', live: '转播中', recovering: '正在自动恢复画面', stopped: '已停止', faulted: '转播异常' };
+  const relayErrors = { RELAY_PORT_IN_USE: '转播地址已被占用，正在等待重试。',
+    RELAY_START_FAILED: '转播启动失败，正在自动重试。',
+    RELAY_CAPTURE_FAILED: '画面连接已中断，正在自动恢复。',
+    RELAY_FRAME_TIMEOUT: '画面更新超时，正在重新连接。' };
   node('relay-status').textContent = relay?.available ? (relayStates[relay.status] ?? '等待状态') +
-    (relay.status === 'live' ? ` · ${relay.fps} 帧/秒` : '') : '当前模式不支持画面转播';
+    (relay.status === 'live' ? ` · ${relay.fps} 帧/秒` : '') + (relay.nextRetryAt ? ` · ${time(relay.nextRetryAt)} 重试` : '') : '当前模式不支持画面转播';
   node('relay-help').textContent = !relay?.available ? '以实场模式启动控制台后，可转播同一张雀魂页面。' :
     relay.errorCode ? relayErrors[relay.errorCode] ?? '转播暂不可用，请停止后重新启动。' :
-    '将当前雀魂页面送到 OBS，不包含蓝色控制遮罩。声音继续使用 OBS 的音频采集。';
+    '实场模式自动开启干净画面转播，手动关闭后保持关闭。声音继续使用 OBS 的音频采集。';
   node('relay-toggle').textContent = relay?.enabled ? '停止转播' : '启动转播';
   node('relay-toggle').setAttribute('aria-pressed', String(!!relay?.enabled));
   const relayUrl = relay?.enabled ? relay.obsUrl : null;
@@ -136,8 +158,6 @@ async function loadConfig() {
   const [view, capabilities] = await Promise.all([api('config'), api('capabilities')]);
   config = view;
   const v = view.values;
-  node('matches').value = v.run.maxMatches;
-  node('minutes').value = v.run.maxDurationMs / 60_000;
   node('room').value = v.interaction.roomId ?? '';
   const voices = [...new Set([v.speech.voiceId, ...capabilities.voices.map(voice => voice.id)])];
   node('voice').replaceChildren(...voices.map(id => new Option(id, id)));
@@ -197,7 +217,6 @@ node('settings').addEventListener('submit', event => {
   void action(async () => {
     const values = config.values;
     const changes = {
-      run: { maxMatches: Number(node('matches').value), maxDurationMs: Math.round(Number(node('minutes').value) * 60_000) },
       interaction: { roomId: node('room').value || null, dryRun: node('dry-run').checked },
       moderation: { rules: JSON.parse(node('rules').value) },
       output: { showScores: node('show-scores').checked, theme: node('theme').value },
@@ -233,3 +252,16 @@ try {
   node('connection').textContent = '无法连接控制台，请确认程序已启动后刷新页面。';
   error(err.message);
 }
+
+setInterval(() => { if(state?.automation?.status === "recruiting") render(); }, 1000);
+
+node('avatar-test').addEventListener('click', async () => {
+  node('avatar-test').disabled = true;
+  try {
+    const response = await fetch('/api/avatar/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error === 'AVATAR_TEST_COOLDOWN' ? '请等待 30 秒后再次试听。' : '角色暂时无法试听，请确认角色已连接且语音未静音。');
+    error('');
+  } catch (failure) { error(failure.message); }
+  finally { render(); }
+});

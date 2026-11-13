@@ -1,0 +1,22 @@
+[Unit]
+Description=Maji Soul Chromium game browser
+Requires=maji-soul-display.service
+After=maji-soul-display.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=maji-soul
+Group=maji-soul
+Environment=DISPLAY=:99
+EnvironmentFile=/etc/maji-soul/session.env
+EnvironmentFile=/etc/maji-soul/browser.env
+ExecStartPre=/usr/bin/sleep 2
+ExecStart=/usr/bin/chromium $MAJI_BROWSER_FLAGS --user-data-dir=/var/lib/maji-soul/chromium --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --no-first-run --no-default-browser-check --password-store=basic --disable-dev-shm-usage --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --autoplay-policy=no-user-gesture-required --window-size=1920,1080 --start-maximized https://game.maj-soul.com/1/
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

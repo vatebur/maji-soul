@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "clientVersion": "4.0.51",
+  "renderPlatform": "debian13-chromium-xvfb",
+  "evidenceKind": "native-client-redacted-glyph-masks",
+  "sourceSha256": "8de07eeb73dbee45fd9991814054c66a0695eae16810f80ad485746fdf01a092",
+  "width": 2036,
+  "height": 918,
+  "regions": [
+    {
+      "region": {
+        "x": 950,
+        "y": 50,
+        "width": 100,
+        "height": 50
+      },
+      "white": true,
+      "text": "終局",
+      "foregroundPixels": 926,
+      "mask": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYAAAAAAAAAAAAAAA4A8AAAAAAAYAAAAA9/8DAAAABvA4AAAA8P8/AAAA8ADfBwAAAP/5AwAAAB/w/wAAAPADHwAAAPgA5wcAAAAP8AAAAIAPODwAAAB4gA8AAAB8gMMDAACAB3wAAADgAxwcAAAAePAHAAAAHuDAAQAAgOd/AAAA8LAfHgAAAPz/AwAAAA//4wAAAMD/DwAAAHhw/w8AAAD8HwAAAICHh38AAADAPwAAAAA4OPAHAAAAPgAAAADAwwF+AAAA4AEAAAAA/h/AHwAAAA/AfwAA4P8A/AMAAPDg/w8AAPwP4P8AAADf//8BAIB7AO9/AAD4/wM+AAAAZ3D4HwCA/wHgAwAAMIYD/w8AeAAAfgAAgGMc4P8BwAMA4AMAADgjAPwHADyAAz4AAMAfAAAAAOAD/+ADAAD8AHgAAAD+/w8+AADgYwAPAADg/PjwAQAAPAzwAAAAz4MPHwAAgIEABgAAeDh48AEAAEAAAAAAgIODBx8AAAAMAAAAABx4fvABAACAAQAAAOAA/4cfAAAAGAAAAAAA8D/4AQAABgAAAAAAAAeADwAAwACAAwAAAAAA/AAAABgA8AAAAAAA8AcAAIABAA4AAAAAgH8AAAAAAOABAAAAAPADAAAAAAAMAAAAAAAeAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    },
+    {
+      "region": {
+        "x": 1640,
+        "y": 820,
+        "width": 90,
+        "height": 40
+      },
+      "white": false,
+      "text": "確認",
+      "foregroundPixels": 699,
+      "mask": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAABwAAAAAAAAAAAAAcAIADAAAAAAAAAHAAAD6AHwAAAAB4wf8A8MD/AQAAAPr9hwfAw/8HAAAA+PEPDgA/Px4AAADgwD8cAP74OAAAAIAD4wAA/oDjAAAAAAbMAQD8AIcDAAAAGBDHAGAAHw4AAABwAAwDABj4PAAAAMABOA4A8MDzAAAAAEdg+AHwA88BAAAA3MfxB+ABBgcAAADwn/8PAAAYHgAAAOBz/g8A4CB+AAAAgMd8PADAQ+AAAAAAHsPhA+CHAXAAAAB8HscPAAcAwAMAAPB5nA8AAAAEDAAAYP5wPACAB3AgAAAA8MDhAwAfxAEAAADAAOcf4H8wBgAAAAAB3D8Az8mBAAAAAABwPAAcJwYGAAAAAMDxAGDeOTgAAAAAAOd/gD/H4QEAAAAA/P8Bfgz/DwAAAADw/wNwIPg/AAAAAMABAAAAgH8AAAAAAAIAAAAAeAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  ],
+  "points": [
+    {
+      "x": 1590,
+      "y": 820,
+      "rgba": [
+        252,
+        229,
+        124,
+        255
+      ]
+    },
+    {
+      "x": 1590,
+      "y": 860,
+      "rgba": [
+        233,
+        179,
+        78,
+        255
+      ]
+    },
+    {
+      "x": 1780,
+      "y": 820,
+      "rgba": [
+        250,
+        224,
+        119,
+        255
+      ]
+    },
+    {
+      "x": 1780,
+      "y": 860,
+      "rgba": [
+        233,
+        179,
+        78,
+        255
+      ]
+    }
+  ],
+  "click": {
+    "x": 1685,
+    "y": 842
+  }
+}

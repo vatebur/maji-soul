@@ -6,7 +6,8 @@ const winds = { '1z': '东', '2z': '南', '3z': '西', '4z': '北' };
 function render() {
   const state = current?.state, game = state?.game;
   document.body.dataset.theme = state?.theme ?? 'dark';
-  status.textContent = !online ? '输出连接中断 · 等待更新' : game
+  const room=state?.automation;
+  status.textContent = online && room?.enabled && room.status==='recruiting' ? `欢迎加入友人房 ${room.roomId} · 招募剩余 ${Math.max(0,Math.ceil((Date.parse(room.recruitUntil)-Date.now())/1000))} 秒` : !online ? '输出连接中断 · 等待更新' : game
     ? `${winds[game.roundWind] ?? ''}${game.handNumber}局 · ${game.honba}本场 · ${game.handStatus === 'finished' ? '已结算' : game.handStatus === 'interrupted' ? '已中断' : game.trust === 'trusted' ? '已同步' : '状态待同步'}`
     : '等待对局';
   scores.textContent = online && game?.scores ? Object.values(game.scores).join('　·　') : '';

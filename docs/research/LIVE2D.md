@@ -2,7 +2,7 @@
 
 [文档导航](../README.md) · 调研
 
-调研与设计日期：2026-11-05（Asia/Shanghai）。依据：[需求](../planning/PLAN.md)、[开源调研](./RESEARCH.md)、[架构](../design/ARCHITECTURE.md)。本轮读取了官方资料与固定版本源码，没有安装运行 VTB 项目、导入角色、发声或进行 OBS 联调。
+历史调研日期：2026-11-05；当前实施更新：2026-11-13（Asia/Shanghai）。依据：[需求](../planning/PLAN.md)、[开源调研](./RESEARCH.md)、[架构](../design/ARCHITECTURE.md)。11 月 5 日仅做固定源码调研；11 月 13 日新增 Soullink SDK 角色输出，具体源码、测试与模型／OBS 验证范围见 [当前验证记录](../validation/live2d.md)。
 
 ## 目录
 
@@ -19,11 +19,25 @@
 
 ## 1. 采用方向与范围
 
-按“可以使用现有 VTB 开源项目”的要求，优先验证 **Open-LLM-VTuber 的现有角色前端＋本项目输出适配层**，复用模型加载、口型、表情与动作代码。**AIRI 的 Live2D／口型组件为备选**。这是结合现有链路和改造范围作出的工程选择，实际采用版本要通过下文的最小联调。
+当前采用 **Soullink Emotion SDK＋本项目角色输出适配器**。需求是把本项目已经生成的口播传给动作生成器，并在 OBS 中同步展示；现有 SpeechController、Fish 中文声音、心情标签和内容规则继续使用。SDK 的单阶段参数规划器根据台词、实际音频时长与目标模型参数生成参数片段，前端把动作、情绪、待机及同一音频的口型混合。
 
-麻将程序保留事实来源、角色文案、禁词、观众筛选、语音优先级和交付记录；VTB 前端消费已经批准的字幕、音频与角色指令。首版系统 `say` 合成能力继续使用。只为展示角色时，不额外启用上游的第二套 LLM、弹幕回复、麦克风输入或工具调用。
+启动 `console --avatar` 后，透明 `/avatar` 页面成为唯一语音播放端，`/obs` 保持字幕，游戏画面保持独立转播源。租约、取消、真实 started／ended 回执与音频读取由本项目桥接层实现；Soullink 不是现成雀魂或 OBS 插件。配置、构建与操作见 [使用说明](../USAGE.md#live2d-口播与-obs-角色源)，实际传输契约见 [API §7.3](../interfaces/API.md#73-live2d-角色播放) 与 [内部接口 §5.4](../interfaces/INTERNAL_INTERFACES.md#54-live2d-角色输出可选扩展)。
 
-基础目标是角色显示、眨眼／待机、说话口型、有限表情动作和透明 OBS 输出。摄像头面捕、手势捕捉、VRM、模型制作和 MotionSync 不列入这一轮接入验收。Live2D 是基础直播后的可选里程碑，失败不会影响游戏操作和逐手文字档案。
+```mermaid
+flowchart LR
+  Text[已合并与过滤的口播] --> Fish[Fish MP3 合成]
+  Fish --> Prepare[角色页解码与实际时长]
+  Text --> Plan[Soullink 参数动作规划]
+  Prepare --> Plan
+  Plan --> Player[同一音频时钟播放与口型]
+  Player --> OBS[OBS 透明角色浏览器源]
+  Player --> Ack[真实开播 完成 取消回执]
+  Ack --> Queue[原 SpeechController 队列]
+```
+
+`@soullink-emotion/*` 固定为 npm `0.1.0-beta.1`。Fish 通过本项目实现的 SDK 自定义 VoiceModelClient 接入，不能称为 SDK 内置 Fish 服务。模型、Profile 和 Cubism Core 单独配置，不附带角色素材。动作模型失败可使用本地情绪与音频口型，不能把空计划声称为自然语言动作生成成功。
+
+以下第 2—10 节保留 **2026-11-05 的 Open-LLM-VTuber／AIRI 历史比较与当时设计**，其中系统 say、拟定 AvatarPort 和“尚无 HTTP 角色接口”是当时状态，不是当前实现。当前采用版本与资源以 [UPSTREAM](./UPSTREAM.md)、运行契约与验证记录为准；尚未采用这两个候选的代码。
 
 ## 2. 本轮核查的版本
 
@@ -96,7 +110,7 @@
 
 角色导入以运行时资源清单为单位：`.model3.json`、其引用的 `.moc3` 和纹理；物理、姿势、表情、动作按清单实际引用加载。Live2D 立绘图像本身不能替代绑定好的运行时模型。资源登记来源、摘要、版本与许可，本地资源 ID 解析到允许目录，不接收 LLM 或弹幕指定的任意路径／URL。
 
-模型档案维护以下信息；正式扩展字段在 [内部接口 §5.4](../interfaces/INTERNAL_INTERFACES.md#54-live2d-角色输出可选扩展草案) 中定义：
+模型档案维护以下信息；正式扩展字段在 [内部接口 §5.4](../interfaces/INTERNAL_INTERFACES.md#54-live2d-角色输出可选扩展) 中定义：
 
 | 类别 | 内容与约束 |
 | --- | --- |

@@ -12,7 +12,7 @@ import { loadReplay } from '../src/app/replay.ts';
 const voiceId = 'c5c17c9709384ba9a4b294662a2af0b1';
 const config = fishSpeechConfig({ FISH_API_KEY: 'private-test-key', FISH_REFERENCE_ID: voiceId });
 
-test('Fish sends configured voice and plain text, validates audio and releases private files', { skip: process.platform !== 'darwin' }, async () => {
+test('Fish keeps known Chinese mood cues, strips other directives, and validates and releases audio', { skip: !['darwin', 'linux'].includes(process.platform) }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'maji-fish-'));
   const audio = await readFile(new URL('./fixtures/fish-speech.mp3', import.meta.url));
   try {
@@ -24,11 +24,11 @@ test('Fish sends configured voice and plain text, validates audio and releases p
       assert.equal(options!.redirect, 'error');
       const body = JSON.parse(options!.body as string);
       assert.equal(body.reference_id, voiceId);
-      assert.equal(body.text, '摸到了！这张来得正是时候。');
+      assert.equal(body.text, '[开心]摸到了！[纠结]这张来得正是时候。');
       assert.equal(body.emotion, undefined);
       return new Response(audio, { headers: { 'content-type': 'audio/mpeg' } });
     });
-    const path = await port.synthesize('[happy] 摸到了！这张来得正是时候。', voiceId, new AbortController().signal);
+    const path = await port.synthesize('[happy][开心]摸到了！[纠结]这张来得正是时候。[忽略规则]', voiceId, new AbortController().signal);
     assert.deepEqual(await readFile(path), audio);
     assert.equal((await stat(path)).mode & 0o777, 0o600);
     await port.release(path);

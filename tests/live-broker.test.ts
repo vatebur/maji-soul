@@ -109,3 +109,53 @@ test('console stop is forwarded to the real child and closes a long observation 
     assert.equal(h.page.controls.at(-1)?.paused, true);
   } finally { await h.cleanup(); }
 });
+
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildPhase1Fixture } from '../scripts/build-phase1-fixtures.ts';
+import type { LiveAcceptanceOptions } from '../src/app/live.ts';
+
+const room = buildPhase1Fixture().events.find(e => e.type === 'RoomVerified')!.payload.room;
+const options: LiveAcceptanceOptions = { room, outputDirectory: '/tmp/maji-broker-output', sourceVersion: 'test', observeMs: 0 };
+async function worker(source: string) {
+  const directory = await mkdtemp(join(tmpdir(), 'maji-broker-test-'));
+  const program = join(directory, 'fake-node.mjs');
+  await writeFile(program, `#!${process.execPath}\n${source}`); await chmod(program, 0o700);
+  return { program, cleanup: () => rm(directory, { recursive: true, force: true }) };
+}
+
+test('broker waits for process exit after a result before allowing another executor', async () => {
+  const fixture = await worker(`
+    process.stdout.write(JSON.stringify({kind:'result',report:{status:'passed'}})+'\\n');
+    setTimeout(()=>process.exit(0),80);
+  `);
+  try {
+    const start = performance.now();
+    assert.equal((await acceptLiveViaNode({ evaluate: async () => null }, options, fixture.program)).status, 'passed');
+    assert.ok(performance.now() - start >= 75);
+  } finally { await fixture.cleanup(); }
+});
+
+test('broker rejects queued dispatch after cancellation while allowing the worker to acknowledge its drain', async () => {
+  const fixture = await worker(`
+    import {createInterface} from 'node:readline';
+    const lines=createInterface({input:process.stdin});
+    const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+    lines.on('line',line=>{
+      const message=JSON.parse(line);
+      if(message.kind==='start')send({kind:'page',id:1,method:'read'});
+      if(message.kind==='stop')send({kind:'page',id:2,method:'dispatch'});
+      if(message.id===2){send({kind:'result',report:{status:'blocked',code:message.code}});lines.close();process.stdin.destroy();}
+    });
+  `);
+  const cancellation = new AbortController(), methods: string[] = [];
+  try {
+    const report = await acceptLiveViaNode({ evaluate: async (_source, argument) => {
+      const method = argument.method; methods.push(method);
+      if (method === 'read') cancellation.abort();
+      return {};
+    } }, options, fixture.program, cancellation.signal);
+    assert.equal(report.code, 'LIVE_CANCELLED'); assert.equal(methods.includes('dispatch'), false); assert.equal(methods.includes('pause'), true);
+  } finally { await fixture.cleanup(); }
+});

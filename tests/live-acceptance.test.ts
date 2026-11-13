@@ -154,6 +154,25 @@ test('an event racing the sync barrier prevents preparation and leaves the page 
   } finally { await h.cleanup(); }
 });
 
+test('startup recollects stale sync proofs before preparing an action and bounds retries', async t => {
+  for (const alwaysStale of [false, true]) await t.test(String(alwaysStale), async () => {
+    const h = await scenario();
+    let acknowledgements = 0;
+    const evaluate = h.page.evaluate.bind(h.page);
+    h.page.evaluate = async (source, argument) => {
+      if ((argument as {method?:string})?.method === 'ackSync' && (++acknowledgements === 1 || alwaysStale)) throw Error('SYNC_STALE');
+      return evaluate(source, argument);
+    };
+    try {
+      const report = await acceptLivePage(h.page, { ...h.options, discardOnce: true });
+      assert.equal(report.status, alwaysStale ? 'blocked' : 'passed');
+      assert.equal(acknowledgements, alwaysStale ? 5 : 2);
+      assert.equal(h.page.sends, alwaysStale ? 0 : 1);
+      assert.equal(h.page.controls.at(-1)?.paused, true);
+    } finally { await h.cleanup(); }
+  });
+});
+
 test('a refused or uncertain final send remains blocked without a retry or invented confirmation', async t => {
   for (const delivery of ['not-sent', 'unknown'] as const) await t.test(delivery, async () => {
     const h = await scenario();

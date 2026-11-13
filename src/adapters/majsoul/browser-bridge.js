@@ -10,7 +10,9 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
   if (phase2ActionsEnabled && !operationRules?.mapActionToRequest) throw Error('ACTION_RULES_REQUIRED');
   const OriginalSocket = window.WebSocket, originalSend = OriginalSocket.prototype.send;
   const flows = new Map(), replayed = new WeakSet(), records = [], tokens = new Map();
+  let lobbyAccountId = null;
   let lobbySocket, nextMatchStarted = false, startedFromGame = null;
+  let terminatingGame = null;
   let gameSocket, pageEpoch = 1, generation = 0, lastStep = null, paused = true;
   let reason = null, overflow = false, controlEpoch = 0, processInstanceId = null, lastSync = null;
   let actionStream = 0, operation = null, restored = false, gameUuid = null, authSummary = null;
@@ -23,7 +25,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
   let lastClientWin = null, lastOwnWin = null;
   const stats = { clientRequests: 0, bridgeSyncRequests: 0, bridgeActionSends: 0, clientWinRequests: 0, authoritativeOwnWins: 0 };
   const nativeLifecycleTrace = [];
-  let nativeRestoreRevision = 0;
+  let nativeRestoreRevision = 0, nativeRestorePending = false, syncPending = false;
   const lifecycleMethods = ['authGame','enterGame','syncGame','finishSyncGame'];
   const seen = new Map();
   const iso = () => new Date().toISOString();
@@ -52,7 +54,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     if (flow.retired || socket !== gameSocket || !lifecycleMethods.some(name => method === `.lq.FastTest.${name}`)) return unknown;
     try {
       const response = body(rpcMap[method].resp, data), accepted = !response.error;
-      return {accepted,hasRestore:accepted ? response.game_restore !== null && response.game_restore !== undefined : 'unknown'};
+      return {accepted,hasRestore:accepted ? response.game_restore !== null && response.game_restore !== undefined : 'unknown', isEnd:accepted && response.is_end === true};
     } catch { return unknown; }
   }
   const endsHand = name => ['ActionHule','ActionNoTile','ActionLiuJu'].includes(name);
@@ -246,8 +248,27 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       if (!request) { if (flow.fresh && !flow.retired) fail('UNEXPECTED_RPC_RESPONSE'); return; }
       flow.pending.delete(packet.id);
       if (request.timer) clearTimeout(request.timer);
+      if (request.method.startsWith('.lq.Lobby.') && !flow.retired) {
+        try {
+          const value = body(rpcMap[request.method].resp, packet.data);
+          const account = ['.lq.Lobby.login','.lq.Lobby.oauth2Login'].includes(request.method)
+            ? value.account_id || value.account?.account_id : request.method === '.lq.Lobby.createRoom' ? value.room?.owner_id : null;
+          // prepareLogin can run on a second, unauthenticated socket while the
+          // active lobby remains logged in. Only a successful native login or
+          // room creation proves a connection can own subsequent room RPCs.
+          if (!request.bridge && !value.error && Number.isSafeInteger(account) && account > 0) {
+            lobbyAccountId = account; lobbySocket = socket;
+          }
+        } catch { /* Unknown lobby responses never authorize room control. */ }
+      }
       const lifecycleResult = lifecycleOutcome(socket, flow, request.method, packet.data);
       traceLifecycle(socket, flow, request.method, request.bridge ? 'bridge' : 'client', 'response', request.lifecyclePageEpoch, lifecycleResult);
+      // Native restore includes Unity replay between the restore response and
+      // finishSyncGame. Do not let a bridge poll finish that client-owned cycle.
+      if (!request.bridge && socket === gameSocket && !flow.retired &&
+          request.nativeRestoreRevision === nativeRestoreRevision && lifecycleResult.accepted === true &&
+          (request.method === '.lq.FastTest.finishSyncGame' || lifecycleResult.isEnd === true ||
+           request.method === '.lq.FastTest.enterGame' && lifecycleResult.hasRestore === false)) nativeRestorePending = false;
       if (request.method === '.lq.FastTest.authGame' && socket === gameSocket && !flow.retired) {
         try {
           const decoded = body(rpcMap[request.method].resp, packet.data);
@@ -257,7 +278,8 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
           const seats = decoded.seat_list;
           const otherSeatsAreRobots = Array.isArray(seats) && seats.length === 4 && ownSeat >= 0 &&
             seats.every((id, seat) => seat === ownSeat || id === 0 || (decoded.robots || []).some(robot => robot.account_id === id));
-          authSummary = { ownSeat, ...(akagiEnabled ? { otherSeatsAreRobots } : {}), gameConfig: { category: decoded.game_config?.category,
+          authSummary = { ownSeat, ...(decoded.game_config?.meta?.room_id ? {roomId:String(decoded.game_config.meta.room_id)} : {}),
+            ...(akagiEnabled && Array.isArray(seats) && seats.length===4 ? {robotSeatCount:seats.filter((id,seat)=>seat!==ownSeat && (id===0 || (decoded.robots || []).some(robot=>robot.account_id===id))).length} : {}), ...(akagiEnabled ? { otherSeatsAreRobots } : {}), gameConfig: { category: decoded.game_config?.category,
             mode: mode ? { ...pick(mode, ['mode','ai']), detail_rule: pick(mode.detail_rule || {}, [
               'time_fixed','time_add','dora_count','shiduan','init_point','fandian','can_jifei','liqibang_value','changbang_value',
               'have_liujumanguan','have_qieshangmanguan','have_biao_dora','have_gang_biao_dora','have_li_dora',
@@ -290,6 +312,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       traceLifecycle(socket, flow, request.method, 'client', 'response-forwarded', request.lifecyclePageEpoch, lifecycleResult);
     };
     flow.close = () => {
+      if (socket === lobbySocket) { lobbySocket = null; lobbyAccountId = null; }
       if (socket === gameSocket) { pageEpoch++; fail('DISCONNECTED'); operation = null; push({ kind: 'disconnected', receivedAt: iso() }); }
       for (const pending of flow.pending.values()) if (pending.bridge) pending.reject(Error('RPC_CONNECTION_CLOSED'));
       for (const pending of flow.pending.values()) if (pending.timer) clearTimeout(pending.timer);
@@ -336,7 +359,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       // Native recovery can replace Unity controls and the current operation in
       // this same epoch. Revoke existing evidence before it starts; a recovery
       // already waiting without evidence may still advance its native trace.
-      nativeRestoreRevision++;
+      nativeRestoreRevision++; nativeRestorePending = true;
       if (tokens.size || autoWin || operationTiming || lastAutoWinReadback || winningOffer) generation++;
       tokens.clear(); autoWin=null; operationTiming=null; lastAutoWinReadback=null; winningOffer=null;
     }
@@ -355,7 +378,6 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
         if (packet.name === '.lq.FastTest.inputOperation') fail('CLIENT_OPERATION_DECODE_FAILED');
       }
     }
-    if (packet.name.startsWith('.lq.Lobby.')) lobbySocket = this;
     if (packet.name === '.lq.Lobby.startRoom') { nextMatchStarted = true; startedFromGame = gameUuid; }
     const id = allocate(flow), rewritten = packet.bytes.slice(); rewritten[1] = id & 255; rewritten[2] = id >> 8;
     if (clientWinType !== null) {
@@ -369,7 +391,7 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       lastClientWin = winRecord;
     }
     const lifecyclePageEpoch = pageEpoch;
-    flow.pending.set(id, { method: packet.name, bridge: false, clientId: packet.id, winRecord, lifecyclePageEpoch });
+    flow.pending.set(id, { method: packet.name, bridge: false, clientId: packet.id, winRecord, lifecyclePageEpoch, nativeRestoreRevision });
     try { const result = originalSend.call(this, rewritten); stats.clientRequests++;
       traceLifecycle(this, flow, packet.name, 'client', 'request', lifecyclePageEpoch); return result; }
     catch (error) { if (winRecord) winRecord.delivery='unknown'; flow.pending.delete(id); fail('CLIENT_SEND_FAILED'); throw error; }
@@ -439,16 +461,78 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
     return request;
   }
   const api = {
-    read: () => ({ schemaVersion: 1, pageEpoch, generation, nativeRestoreRevision, lastStep, sourceStream: actionStream, ownSeat,
-      connected:gameSocket?.readyState===1,handSha256,handEnded,matchEnded,matchResult:matchResult?clone(matchResult):null,
-      paused, controlEpoch, reason, overflow, queued: records.length, freshConnection: !!flows.get(gameSocket)?.fresh,
+    read: () => ({ schemaVersion: 1, pageEpoch, generation, nativeRestoreRevision, nativeRestorePending, lastStep, sourceStream: actionStream, ownSeat,
+      connected:gameSocket?.readyState===1,lobbyAuthenticated:!!(lobbySocket?.readyState===1 && lobbyAccountId),
+      handSha256,handEnded,matchEnded,matchResult:matchResult?clone(matchResult):null,
+      paused, controlEpoch, executorActive:!!processInstanceId, reason, overflow, queued: records.length, freshConnection: !!flows.get(gameSocket)?.fresh,
       pendingRpcCount: [...flows.values()].reduce((count, flow) => count + flow.pending.size, 0),
       operation: operation ? clone(operation) : null, authSummary: authSummary ? clone(authSummary) : null,
       autoWin: autoWin ? { state: autoWin.state, pageEpoch: autoWin.pageEpoch, generation: autoWin.generation, step: autoWin.step,
         nativeRestoreRevision:autoWin.nativeRestoreRevision, observedAt: autoWin.observedAt, rgbaSha256: autoWin.rgbaSha256, expiresInMs: Math.max(0, autoWin.expiresMonoMs-performance.now()) } : null,
       lastClientWin:lastClientWin?clone(lastClientWin):null,lastOwnWin:lastOwnWin?clone(lastOwnWin):null,
       lastAutoWinReadback:lastAutoWinReadback?pick(lastAutoWinReadback,['state','pageEpoch','sourceStream','step','generation','nativeRestoreRevision','observedAt','rgbaSha256']):null,
-      gameUuid, phase2ActionsEnabled, akagiEnabled, stats: { ...stats }, nativeLifecycleTrace: clone(nativeLifecycleTrace), allocator: 'wire-multiplexer-v1' }),
+      gameUuid, phase2ActionsEnabled, akagiEnabled, audienceRoomsVersion:6, stats: { ...stats }, nativeLifecycleTrace: clone(nativeLifecycleTrace), allocator: 'wire-multiplexer-v1' }),
+    async inspectRoom() {
+      requireThat(akagiEnabled && paused, 'AUTO_START_DISABLED');
+      requireThat(lobbySocket?.readyState === 1, 'LOBBY_NOT_READY');
+      const { response } = await rpc('.lq.Lobby.fetchRoom', {}, null, lobbySocket).work;
+      requireThat(!response.error && response.room, 'ROOM_NOT_READY');
+      const room = response.room;
+      const humanIds = new Set([room.owner_id, ...(room.persons || []).map(person => person.account_id)]);
+      const robotIds = [...new Set([...(room.robots || []).map(robot => robot.account_id), ...(room.positions || [])]
+        .filter(id => Number.isInteger(id) && id > 0 && !humanIds.has(id)))];
+      return { roomId: String(room.room_id), owned: room.owner_id === lobbyAccountId,
+        playing: !!room.is_playing, humans: room.persons?.length || 0,
+        robots: room.robots?.length || room.robot_count || 0, robotIds, mode: clone(room.mode || {}),
+        emptyPositions: (room.positions || []).flatMap((value,index) => value === 0 ? [index] : []),
+        maxPlayers: room.max_player_count, ready: (room.persons || []).every(person => person.account_id === room.owner_id || (room.ready_list || []).includes(person.account_id)),
+        expected: {pageEpoch,generation,gameUuid} };
+    },
+    async abandonOwnedRoom(input) {
+      requireThat(akagiEnabled && paused && !processInstanceId && controlEpoch === 0, 'ROOM_RECOVERY_EXECUTOR_ACTIVE');
+      const room = await api.inspectRoom();
+      const scope = { pageEpoch, generation, gameUuid };
+      const check = () => requireThat(paused && !processInstanceId && controlEpoch === 0 &&
+        pageEpoch === scope.pageEpoch && generation === scope.generation && gameUuid === scope.gameUuid, 'ROOM_SCOPE_CHANGED');
+      requireThat(room.owned && room.roomId === input.roomId && room.maxPlayers === 4, 'ROOM_OWNER_REQUIRED');
+      if (room.playing) {
+        requireThat(authSummary?.roomId === room.roomId && gameSocket?.readyState === 1 && gameUuid, 'ROOM_RECOVERY_GAME_UNVERIFIED');
+        // An uncertain terminate receipt must not submit the same termination twice.
+        if (terminatingGame !== gameUuid) {
+          terminatingGame = gameUuid;
+          const { response } = await rpc('.lq.FastTest.terminateGame', {}, check, gameSocket).work;
+          requireThat(!response.error, 'ROOM_TERMINATE_REJECTED');
+        }
+        throw Error('ROOM_RECOVERY_NOT_FINISHED');
+      }
+      check();
+      const { response } = await rpc('.lq.Lobby.leaveRoom', {}, check, lobbySocket).work;
+      requireThat(!response.error, 'ROOM_LEAVE_REJECTED');
+      return { left: true, roomId: room.roomId };
+    },
+    async clearRoomRobots(input) {
+      const room = await api.inspectRoom();
+      requireThat(room.roomId === input.roomId && room.owned && !room.playing && room.maxPlayers === 4, 'ROOM_SCOPE_CHANGED');
+      if (room.robots === 0) return room;
+      // Never accept a caller-selected kick target or infer a robot from its seat index.
+      requireThat(room.robotIds.length === room.robots, 'ROOM_ROBOTS_UNVERIFIED');
+      await rpc('.lq.Lobby.roomKickPlayer', {id:room.robotIds[0]}, () => requireThat(paused, 'AUTO_START_DISABLED'), lobbySocket).work;
+      const current = await api.inspectRoom();
+      requireThat(current.roomId === input.roomId && current.owned && !current.playing && current.maxPlayers === 4, 'ROOM_SCOPE_CHANGED');
+      requireThat(current.robots < room.robots, 'ROOM_ROBOT_REMOVE_REJECTED');
+      return current;
+    },
+    async fillRoom(input) {
+      const room = await api.inspectRoom();
+      requireThat(room.roomId === input.roomId && room.owned && !room.playing && room.maxPlayers === 4, 'ROOM_SCOPE_CHANGED');
+      if (room.humans + room.robots >= 4) return room;
+      // Ask for one robot only. Re-fetch after its receipt before filling another slot.
+      requireThat(room.emptyPositions.length > 0, 'ROOM_POSITIONS_UNAVAILABLE');
+      const { response } = await rpc('.lq.Lobby.addRoomRobot', {position:room.emptyPositions[0]}, () => requireThat(paused, 'AUTO_START_DISABLED'), lobbySocket).work;
+      const current = await api.inspectRoom();
+      requireThat(!response.error || current.humans + current.robots >= 4, 'ROOM_FILL_REJECTED');
+      return current;
+    },
     async startNextMatch(input) {
       if (matchEnded && startedFromGame !== gameUuid && !processInstanceId) nextMatchStarted = false;
       requireThat(akagiEnabled && paused && !nextMatchStarted, 'AUTO_START_DISABLED');
@@ -458,7 +542,11 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       requireThat(!fetched.response.error, 'ROOM_NOT_READY');
       requireThat(room, 'ROOM_NOT_READY');
       requireThat(String(room.room_id) === input.roomId, 'ROOM_MISMATCH');
-      requireThat(room.max_player_count === 4 && (room.robots?.length || room.robot_count) === 3 &&
+      if (input.allowViewers) {
+        requireThat(room.owner_id === lobbyAccountId && room.max_player_count === 4 &&
+          (room.persons?.length || 0) + (room.robots?.length || room.robot_count || 0) === 4, 'ROOM_SCOPE_CHANGED');
+        requireThat((room.persons || []).every(person => person.account_id === room.owner_id || (room.ready_list || []).includes(person.account_id)), 'ROOM_PLAYERS_NOT_READY');
+      } else requireThat(room.max_player_count === 4 && (room.robots?.length || room.robot_count) === 3 &&
         room.persons?.length === 1 && room.persons[0].account_id === room.owner_id, 'ROBOT_ROOM_REQUIRED');
       if (room.is_playing) return { started: false, playing: true, roomId: input.roomId };
       // The owner's client enters the new game from its native start callback.
@@ -516,43 +604,68 @@ export function installBrowserBridge({ proto, rpcMap, ownSeat, capacity = 256, o
       return { verified:true,pageEpoch,step:lastStep,remainingMs:deadlineMonoMs-performance.now() };
     },
     async sync() {
+      requireThat(!syncPending && ![...(flows.get(gameSocket)?.pending.values() ?? [])].some(request =>
+        request.bridge && ['.lq.FastTest.syncGame', '.lq.FastTest.finishSyncGame'].includes(request.method)), 'SYNC_IN_PROGRESS');
       paused = true; tokens.clear();
-      autoWin = null; operationTiming = null;
-      const socketAtRequest = gameSocket, epochAtRequest = pageEpoch, gameAtRequest = gameUuid;
-      const requestedMonoMs = performance.now(), startGeneration = generation;
-      const result = await rpc('.lq.FastTest.syncGame', { round_id: '', step: 0 }).work;
-      const receivedMonoMs = performance.now(), receivedAt = iso();
-      const response = result.response;
-      requireThat(socketAtRequest===gameSocket && epochAtRequest===pageEpoch && gameAtRequest===gameUuid, 'SYNC_CONNECTION_CHANGED');
-      requireThat(!response.error && (response.game_restore || response.is_end), 'SYNC_RESPONSE_INCOMPLETE');
-      if (response.is_end) { closeWindow(); matchEnded = true; }
-      const restore = response.game_restore;
-      if (!restore?.actions?.length) {
-        lastSync = null;
-        return {schemaVersion:1,pageEpoch,generation,startGeneration,requestedMonoMs,receivedMonoMs,receivedAt,
-          ownSeat,gameUuid,step:response.step,is_end:response.is_end,matchResult:matchResult?clone(matchResult):null,game_restore:restore?{actions:[]}:null};
-      }
-      const actions = restore.actions.map(a => decodedAction(a, false));
-      const firstHandIndex = actions.findIndex(a => a.name === 'ActionNewRound');
-      requireThat(actions.length > 0 && (firstHandIndex === 0 || firstHandIndex === 1 && actions[0].name === 'ActionMJStart'), 'SYNC_HISTORY_INCOMPLETE');
-      for (let i = 1; i < actions.length; i++) requireThat(actions[i].step === actions[i - 1].step + 1, 'SYNC_HISTORY_GAP');
-      requireThat(response.step === actions.at(-1).step + 1, 'SYNC_NEXT_STEP_MISMATCH');
-      const opening = actions[firstHandIndex], identity = opening.payload.sha256 || opening.fingerprint;
-      requireThat(identity===roundIdentity || !knownRounds.has(identity), 'STALE_HAND_HISTORY');
-      requireThat(identity!==roundIdentity || roundSignature===opening.fingerprint, 'SOURCE_DEDUP_CONFLICT');
-      if (identity===roundIdentity) {
-        requireThat(lastStep===null || response.step-1>=lastStep, 'SYNC_HISTORY_REGRESSION');
-        requireThat(!handEnded || endsHand(actions.at(-1).name), 'SYNC_TERMINAL_REGRESSION');
-      }
-      lastSync = { pageEpoch, generation, startGeneration, step: response.step - 1, actions, requestedMonoMs, receivedMonoMs, receivedAt,
-        identity,isEnd:response.is_end,matchResult:matchResult?clone(matchResult):null,
-        passedWaitingTime:restore.passed_waiting_time, gameState:restore.game_state,
-        lastPauseTimeMs:restore.last_pause_time_ms };
-      return { schemaVersion: 1, pageEpoch, generation, startGeneration, requestId: result.requestId, requestedMonoMs, receivedMonoMs, receivedAt,
-        ownSeat, gameUuid, authSummary: authSummary ? clone(authSummary) : null, step: response.step, is_end: response.is_end,
-        matchResult:matchResult?clone(matchResult):null,
-        game_restore: { actions, passed_waiting_time: restore.passed_waiting_time,
-          game_state:restore.game_state,last_pause_time_ms:restore.last_pause_time_ms } };
+      autoWin = null; operationTiming = null; lastSync = null;
+      requireThat(!nativeRestorePending, 'SYNC_NATIVE_RESTORE_PENDING');
+      syncPending = true;
+      try {
+        const socketAtRequest = gameSocket, epochAtRequest = pageEpoch, gameAtRequest = gameUuid;
+        const restoreRevisionAtRequest = nativeRestoreRevision;
+        const checkScope = () => {
+          requireThat(socketAtRequest === gameSocket && epochAtRequest === pageEpoch && gameAtRequest === gameUuid, 'SYNC_CONNECTION_CHANGED');
+          requireThat(nativeRestoreRevision === restoreRevisionAtRequest && !nativeRestorePending, 'SYNC_NATIVE_RESTORE_CHANGED');
+        };
+        const requestedMonoMs = performance.now(), startGeneration = generation;
+        const result = await rpc('.lq.FastTest.syncGame', { round_id: '', step: 0 }).work;
+        const receivedMonoMs = performance.now(), receivedAt = iso(), receivedGeneration = generation;
+        const response = result.response;
+        checkScope();
+        requireThat(!response.error && (response.game_restore || response.is_end), 'SYNC_RESPONSE_INCOMPLETE');
+        const finishSync = async () => {
+          if (response.is_end) return;
+          // syncGame enters the server's syncing lifecycle. Complete this own
+          // poll before exposing its snapshot, even when the history is empty.
+          // Keep the original response timestamp: completion latency is elapsed
+          // time, never extra countdown budget or a native Unity restore proof.
+          const finished = await rpc('.lq.FastTest.finishSyncGame', {}, checkScope, socketAtRequest).work;
+          checkScope();
+          requireThat(!finished.response.error, 'SYNC_FINISH_REJECTED');
+        };
+        if (response.is_end) { closeWindow(); matchEnded = true; }
+        const restore = response.game_restore;
+        if (!restore?.actions?.length) {
+          const snapshot = {schemaVersion:1,pageEpoch,generation:receivedGeneration,startGeneration,requestedMonoMs,receivedMonoMs,receivedAt,
+            ownSeat,gameUuid,step:response.step,is_end:response.is_end,matchResult:matchResult?clone(matchResult):null,game_restore:restore?{actions:[]}:null};
+          await finishSync();
+          return snapshot;
+        }
+        const actions = restore.actions.map(a => decodedAction(a, false));
+        const firstHandIndex = actions.findIndex(a => a.name === 'ActionNewRound');
+        requireThat(actions.length > 0 && (firstHandIndex === 0 || firstHandIndex === 1 && actions[0].name === 'ActionMJStart'), 'SYNC_HISTORY_INCOMPLETE');
+        for (let i = 1; i < actions.length; i++) requireThat(actions[i].step === actions[i - 1].step + 1, 'SYNC_HISTORY_GAP');
+        requireThat(response.step === actions.at(-1).step + 1, 'SYNC_NEXT_STEP_MISMATCH');
+        const opening = actions[firstHandIndex], identity = opening.payload.sha256 || opening.fingerprint;
+        requireThat(identity===roundIdentity || !knownRounds.has(identity), 'STALE_HAND_HISTORY');
+        requireThat(identity!==roundIdentity || roundSignature===opening.fingerprint, 'SOURCE_DEDUP_CONFLICT');
+        if (identity===roundIdentity) {
+          requireThat(lastStep===null || response.step-1>=lastStep, 'SYNC_HISTORY_REGRESSION');
+          requireThat(!handEnded || endsHand(actions.at(-1).name), 'SYNC_TERMINAL_REGRESSION');
+        }
+        const syncSnapshot = { pageEpoch, generation:receivedGeneration, startGeneration, step: response.step - 1, actions, requestedMonoMs, receivedMonoMs, receivedAt,
+          identity,isEnd:response.is_end,matchResult:matchResult?clone(matchResult):null,
+          passedWaitingTime:restore.passed_waiting_time, gameState:restore.game_state,
+          lastPauseTimeMs:restore.last_pause_time_ms };
+        const snapshot = { schemaVersion: 1, pageEpoch, generation:receivedGeneration, startGeneration, requestId: result.requestId, requestedMonoMs, receivedMonoMs, receivedAt,
+          ownSeat, gameUuid, authSummary: authSummary ? clone(authSummary) : null, step: response.step, is_end: response.is_end,
+          matchResult:matchResult?clone(matchResult):null,
+          game_restore: { actions, passed_waiting_time: restore.passed_waiting_time,
+            game_state:restore.game_state,last_pause_time_ms:restore.last_pause_time_ms } };
+        await finishSync();
+        lastSync = syncSnapshot;
+        return snapshot;
+      } finally { syncPending = false; }
     },
     ackSync(expected) {
       requireThat(lastSync && lastSync.pageEpoch === pageEpoch && expected.generation === generation && expected.generation === lastSync.generation && expected.step === lastSync.step, 'SYNC_STALE');

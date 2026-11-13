@@ -1550,6 +1550,738 @@
           }
         }
       }
+    },
+    "/api/avatar/config": {
+      "get": {
+        "operationId": "getAvatarConfig",
+        "summary": "读取角色公开配置与播放状态",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "专用角色响应，不使用控制台 v1 封套",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvatarConfig"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "来源不匹配"
+          },
+          "404": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "资源或实例不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "租约占用、过期或播放状态不匹配"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求或音频过大"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "无效字段、参数或音频时长"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色关闭、未构建或播放端不可用"
+          }
+        }
+      }
+    },
+    "/api/avatar/claim": {
+      "post": {
+        "operationId": "claimAvatarPlayback",
+        "summary": "为模型渲染器申请唯一播放租约",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "专用角色响应，不使用控制台 v1 封套",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvatarLease"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "来源不匹配"
+          },
+          "404": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "资源或实例不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "租约占用、过期或播放状态不匹配"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求或音频过大"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "无效字段、参数或音频时长"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色关闭、未构建或播放端不可用"
+          }
+        },
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "必须等于控制台实际 origin；原生客户端同样必须填写。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvatarClaimRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/avatar/poll": {
+      "post": {
+        "operationId": "pollAvatarPlayback",
+        "summary": "续约并读取当前播放指令",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "专用角色响应，不使用控制台 v1 封套",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvatarPollResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "来源不匹配"
+          },
+          "404": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "资源或实例不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "租约占用、过期或播放状态不匹配"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求或音频过大"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "无效字段、参数或音频时长"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色关闭、未构建或播放端不可用"
+          }
+        },
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "必须等于控制台实际 origin；原生客户端同样必须填写。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvatarIdentity"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/avatar/ack": {
+      "post": {
+        "operationId": "ackAvatarPlayback",
+        "summary": "回报当前语音的准备或实际播放结果",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "专用角色响应，不使用控制台 v1 封套",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvatarOk"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "来源不匹配"
+          },
+          "404": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "资源或实例不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "租约占用、过期或播放状态不匹配"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求或音频过大"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "无效字段、参数或音频时长"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色关闭、未构建或播放端不可用"
+          }
+        },
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "必须等于控制台实际 origin；原生客户端同样必须填写。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvatarAckRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/avatar/release": {
+      "post": {
+        "operationId": "releaseAvatarPlayback",
+        "summary": "释放当前页面的租约并结束其未完成播放",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "专用角色响应，不使用控制台 v1 封套",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvatarOk"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "来源不匹配"
+          },
+          "404": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "资源或实例不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "租约占用、过期或播放状态不匹配"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求或音频过大"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "无效字段、参数或音频时长"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色关闭、未构建或播放端不可用"
+          }
+        },
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "必须等于控制台实际 origin；原生客户端同样必须填写。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvatarIdentity"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/avatar": {
+      "get": {
+        "operationId": "getAvatarPage",
+        "summary": "透明 Live2D 角色浏览器源",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "name": "debug",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "显示设置、状态和音频权限操作。"
+          },
+          {
+            "name": "preview",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "只渲染角色，不申请音频播放租约。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "透明角色页面",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/avatar.bundle.js": {
+      "get": {
+        "operationId": "getAvatarBundle",
+        "summary": "读取本机构建的角色前端",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "运行 npm run build:avatar 生成的 JavaScript",
+            "content": {
+              "text/javascript": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "来源不匹配"
+          },
+          "404": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "资源或实例不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "租约占用、过期或播放状态不匹配"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求或音频过大"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "无效字段、参数或音频时长"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色关闭、未构建或播放端不可用"
+          }
+        }
+      }
+    },
+    "/api/avatar/audio/{audioId}": {
+      "get": {
+        "operationId": "getAvatarAudio",
+        "summary": "读取当前租约和语音实例的 MP3",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "当前获准播放音频；实例完成或取消后无法再读取",
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "来源不匹配"
+          },
+          "404": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "资源或实例不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "租约占用、过期或播放状态不匹配"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求或音频过大"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "无效字段、参数或音频时长"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色关闭、未构建或播放端不可用"
+          }
+        },
+        "parameters": [
+          {
+            "name": "audioId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-zA-Z0-9_-]+$"
+            }
+          },
+          {
+            "name": "rendererId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-zA-Z0-9_-]+$"
+            }
+          },
+          {
+            "name": "leaseId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-zA-Z0-9_-]+$"
+            }
+          }
+        ]
+      }
+    },
+    "/avatar-assets/model/{assetPath}": {
+      "get": {
+        "operationId": "getAvatarModelAsset",
+        "summary": "读取本机显式登记的角色资源",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "实际 Content-Type 依据文件扩展名；模型只开放清单中的引用",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "audio/wav": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "来源不匹配"
+          },
+          "404": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "资源或实例不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "租约占用、过期或播放状态不匹配"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求或音频过大"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "无效字段、参数或音频时长"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色关闭、未构建或播放端不可用"
+          }
+        },
+        "parameters": [
+          {
+            "name": "assetPath",
+            "in": "path",
+            "required": true,
+            "description": "模型清单或其显式引用的相对资源路径，可含子目录。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/avatar-assets/profile.json": {
+      "get": {
+        "operationId": "getAvatarProfile",
+        "summary": "读取本机显式登记的角色资源",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "实际 Content-Type 依据文件扩展名；模型只开放清单中的引用",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "来源不匹配"
+          },
+          "404": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "资源或实例不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "租约占用、过期或播放状态不匹配"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求或音频过大"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "无效字段、参数或音频时长"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色关闭、未构建或播放端不可用"
+          }
+        }
+      }
+    },
+    "/avatar-assets/live2dcubismcore.min.js": {
+      "get": {
+        "operationId": "getAvatarCore",
+        "summary": "读取本机显式登记的角色资源",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "实际 Content-Type 依据文件扩展名；模型只开放清单中的引用",
+            "content": {
+              "text/javascript": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "来源不匹配"
+          },
+          "404": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "资源或实例不存在"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "租约占用、过期或播放状态不匹配"
+          },
+          "413": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求或音频过大"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "无效字段、参数或音频时长"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色关闭、未构建或播放端不可用"
+          }
+        }
+      }
+    },
+    "/api/avatar/test": {
+      "post": {
+        "operationId": "testAvatarSpeech",
+        "summary": "通过现有播报队列试听固定角色台词",
+        "description": "要求当前渲染器已连接、语音空闲且未静音；每次成功请求后冷却30秒。成功仅表示入队，播放结果另从输出状态读取。",
+        "tags": [
+          "avatar"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "description": "必须等于控制台实际 origin；原生客户端同样必须填写。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AvatarTestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "已进入当前语音队列",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AvatarTestResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "Origin不匹配"
+          },
+          "409": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "渲染器未连接、语音忙或已静音"
+          },
+          "422": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "请求不是空对象"
+          },
+          "429": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "30秒试听冷却中"
+          },
+          "503": {
+            "$ref": "#/components/responses/AvatarError",
+            "description": "角色通道未启用"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2592,45 +3324,25 @@
         "properties": {
           "defaultMode": {
             "$ref": "#/components/schemas/DecisionMode"
-          },
-          "maxMatches": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100
-          },
-          "maxDurationMs": {
-            "type": "integer",
-            "minimum": 60000,
-            "maximum": 86400000
           }
         },
         "required": [
-          "defaultMode",
-          "maxMatches",
-          "maxDurationMs"
+          "defaultMode"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "默认决策模式；连续运行不设场数或时长上限。旧持久配置中的限额在启动时删除，API 不再接受限额字段。"
       },
       "RunConfigPatch": {
         "type": "object",
         "properties": {
           "defaultMode": {
             "$ref": "#/components/schemas/DecisionMode"
-          },
-          "maxMatches": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100
-          },
-          "maxDurationMs": {
-            "type": "integer",
-            "minimum": 60000,
-            "maximum": 86400000
           }
         },
         "required": [],
         "additionalProperties": false,
-        "minProperties": 1
+        "minProperties": 1,
+        "description": "默认决策模式；连续运行不设场数或时长上限。旧持久配置中的限额在启动时删除，API 不再接受限额字段。"
       },
       "PersonaConfig": {
         "type": "object",
@@ -5054,26 +5766,6 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
-          "limits": {
-            "type": "object",
-            "properties": {
-              "maxMatches": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 100
-              },
-              "maxDurationMs": {
-                "type": "integer",
-                "minimum": 60000,
-                "maximum": 86400000
-              }
-            },
-            "required": [
-              "maxMatches",
-              "maxDurationMs"
-            ],
-            "additionalProperties": false
-          },
           "stopAfterMatch": {
             "type": "boolean"
           },
@@ -5091,7 +5783,6 @@
           "pendingMode",
           "startedAt",
           "completedMatches",
-          "limits",
           "stopAfterMatch"
         ],
         "additionalProperties": false
@@ -5653,6 +6344,52 @@
               "dark",
               "light"
             ]
+          },
+          "automation": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "enabled",
+              "status",
+              "roomId",
+              "recruitUntil"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "idle",
+                  "starting",
+                  "creating",
+                  "recruiting",
+                  "recovering",
+                  "playing",
+                  "waiting",
+                  "stopping",
+                  "stopped",
+                  "faulted"
+                ]
+              },
+              "roomId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "recruitUntil": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              }
+            }
           }
         },
         "required": [
@@ -6102,6 +6839,9 @@
                   "mode"
                 ],
                 "additionalProperties": false
+              },
+              "avatar": {
+                "$ref": "#/components/schemas/AvatarStatus"
               }
             },
             "required": [
@@ -6201,6 +6941,9 @@
             "enum": [
               "idle",
               "starting",
+              "creating",
+              "recruiting",
+              "recovering",
               "playing",
               "waiting",
               "stopping",
@@ -6220,6 +6963,54 @@
           },
           "errorCode": {
             "type": "string"
+          },
+          "roomId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recruitUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "recoveryCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "本次启用以来累计恢复次数；不计入已完成场数。"
+          },
+          "lastErrorCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "最近一次故障码，恢复成功后仍保留。"
+          },
+          "lastErrorAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "nextRetryAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "heartbeatAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastProgressAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "最近一次权威对局进展时间。"
           }
         }
       },
@@ -6246,6 +7037,9 @@
             "enum": [
               "idle",
               "starting",
+              "creating",
+              "recruiting",
+              "recovering",
               "playing",
               "waiting",
               "stopping",
@@ -6265,6 +7059,54 @@
           },
           "errorCode": {
             "type": "string"
+          },
+          "roomId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recruitUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "recoveryCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "本次启用以来累计恢复次数；不计入已完成场数。"
+          },
+          "lastErrorCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "最近一次故障码，恢复成功后仍保留。"
+          },
+          "lastErrorAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "nextRetryAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "heartbeatAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastProgressAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "最近一次权威对局进展时间。"
           },
           "kind": {
             "const": "automation-control"
@@ -6309,7 +7151,8 @@
             "type": "boolean"
           },
           "enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "期望启用状态。自动恢复期间仍为 true；停止后为 false，不再自动重试。"
           },
           "status": {
             "type": "string",
@@ -6317,6 +7160,7 @@
               "idle",
               "starting",
               "live",
+              "recovering",
               "stopped",
               "faulted"
             ]
@@ -6367,6 +7211,17 @@
               "string",
               "null"
             ]
+          },
+          "recoveryCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "nextRetryAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         },
         "required": [
@@ -6388,7 +7243,8 @@
             "type": "boolean"
           },
           "enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "期望启用状态。自动恢复期间仍为 true；停止后为 false，不再自动重试。"
           },
           "status": {
             "type": "string",
@@ -6396,6 +7252,7 @@
               "idle",
               "starting",
               "live",
+              "recovering",
               "stopped",
               "faulted"
             ]
@@ -6446,6 +7303,17 @@
               "string",
               "null"
             ]
+          },
+          "recoveryCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "nextRetryAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "kind": {
             "const": "relay-control"
@@ -6506,6 +7374,465 @@
             "type": "null"
           }
         }
+      },
+      "AvatarParameter": {
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          },
+          "default": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "default"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarParameters": {
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": 1024,
+        "additionalProperties": {
+          "$ref": "#/components/schemas/AvatarParameter"
+        }
+      },
+      "AvatarFrame": {
+        "type": "object",
+        "properties": {
+          "time": {
+            "type": "number",
+            "minimum": 0
+          },
+          "duration": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "time",
+          "duration",
+          "parameters"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarCommand": {
+        "type": "object",
+        "properties": {
+          "speechId": {
+            "type": "string"
+          },
+          "playbackEpoch": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "phase": {
+            "enum": [
+              "prepare",
+              "play",
+              "stop"
+            ]
+          },
+          "audioUrl": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "moods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "parameterPlan": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AvatarFrame"
+            }
+          },
+          "durationSec": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 120
+          }
+        },
+        "required": [
+          "speechId",
+          "playbackEpoch",
+          "phase",
+          "audioUrl",
+          "text",
+          "moods",
+          "parameterPlan"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarLastResult": {
+        "type": "object",
+        "properties": {
+          "speechId": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "speechId",
+          "outcome"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarConfig": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "modelConfigured": {
+            "type": "boolean"
+          },
+          "modelUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profileUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "coreUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "characterName": {
+            "type": "string"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "plannerAvailable": {
+            "type": "boolean"
+          },
+          "phase": {
+            "enum": [
+              "idle",
+              "prepare",
+              "play",
+              "stop"
+            ]
+          },
+          "speaking": {
+            "type": "boolean"
+          },
+          "last": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AvatarLastResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "enabled",
+          "modelConfigured",
+          "modelUrl",
+          "profileUrl",
+          "coreUrl",
+          "characterName"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarIdentity": {
+        "type": "object",
+        "properties": {
+          "rendererId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          },
+          "leaseId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          }
+        },
+        "required": [
+          "rendererId",
+          "leaseId"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarClaimRequest": {
+        "type": "object",
+        "properties": {
+          "rendererId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/AvatarParameters"
+          }
+        },
+        "required": [
+          "rendererId",
+          "parameters"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarLease": {
+        "type": "object",
+        "properties": {
+          "leaseId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          },
+          "leaseMs": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "serverNow": {
+            "type": "number"
+          },
+          "expiresAt": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "leaseId",
+          "leaseMs",
+          "serverNow",
+          "expiresAt"
+        ],
+        "additionalProperties": false,
+        "description": "服务器时间为 Unix 毫秒。客户端扣除完整请求往返时间后，以单调时钟设置失联停播期限。"
+      },
+      "AvatarPollResponse": {
+        "type": "object",
+        "properties": {
+          "leaseId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          },
+          "leaseMs": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "serverNow": {
+            "type": "number"
+          },
+          "expiresAt": {
+            "type": "number"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AvatarCommand"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "leaseId",
+          "leaseMs",
+          "serverNow",
+          "expiresAt",
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarAckRequest": {
+        "type": "object",
+        "properties": {
+          "rendererId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          },
+          "leaseId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          },
+          "speechId": {
+            "type": "string"
+          },
+          "playbackEpoch": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "started",
+              "ended",
+              "cancelled",
+              "failed"
+            ]
+          },
+          "durationSec": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 120
+          }
+        },
+        "required": [
+          "rendererId",
+          "leaseId",
+          "speechId",
+          "playbackEpoch",
+          "status"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "ready"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "durationSec"
+              ]
+            }
+          }
+        ]
+      },
+      "AvatarOk": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarStatus": {
+        "type": "object",
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "plannerAvailable": {
+            "type": "boolean"
+          },
+          "phase": {
+            "enum": [
+              "idle",
+              "prepare",
+              "play",
+              "stop"
+            ]
+          },
+          "speaking": {
+            "type": "boolean"
+          },
+          "last": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AvatarLastResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "connected",
+          "plannerAvailable",
+          "phase",
+          "speaking",
+          "last"
+        ],
+        "additionalProperties": false
+      },
+      "AvatarTestRequest": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+        "description": "空对象；试听使用服务端固定台词，不能提交任意文本。"
+      },
+      "AvatarTestResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "contentId": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "ok",
+          "contentId"
+        ],
+        "additionalProperties": false
       }
     },
     "responses": {
@@ -6524,6 +7851,23 @@
             "schema": {
               "type": "integer",
               "minimum": 1
+            }
+          }
+        }
+      },
+      "AvatarError": {
+        "description": "角色通道错误；角色业务错误为直接 error 字符串，通用请求解析或服务错误可使用 ErrorEnvelope。",
+        "content": {
+          "application/json": {
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AvatarError"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              ]
             }
           }
         }

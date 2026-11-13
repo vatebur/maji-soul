@@ -1,0 +1,14 @@
+:root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent !important; }
+#avatar { width: 100%; height: 100%; position: fixed; inset: 0; }
+#avatar canvas { display: block; width: 100%; height: 100%; }
+[hidden] { display: none !important; }
+#diagnostics { position: fixed; left: 24px; bottom: 24px; width: min(420px, calc(100vw - 48px)); padding: 22px 24px; color: #f3f5f4; background: rgba(18, 28, 27, .93); border: 1px solid #3c5350; border-radius: 16px; box-shadow: 0 16px 48px #0004; }
+p { margin: 0; line-height: 1.6; }
+.eyebrow { font-size: 11px; font-weight: 650; letter-spacing: .12em; color: #89c5b4; }
+h1 { font-size: 18px; font-weight: 600; margin: 8px 0 10px; }
+#detail { font-size: 13px; color: #c4d1cc; overflow-wrap: anywhere; }
+.hint { margin-top: 16px; font-size: 11px; color: #8d9f98; }
+button { appearance: none; border: 1px solid #87bba9; border-radius: 8px; background: #9dd7bf; color: #142d25; font: inherit; font-size: 13px; padding: 9px 14px; margin-top: 16px; cursor: pointer; }
+button:focus-visible { outline: 2px solid white; outline-offset: 3px; }

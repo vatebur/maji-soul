@@ -13,6 +13,7 @@
     "spike": "npm start -- spike",
     "spike:engine": "node scripts/spike-engine.ts",
     "spike:protocol": "node scripts/inspect-protocol.ts",
+    "build:avatar": "node scripts/build-avatar.mjs",
     "engine:build": "cargo build --locked --release --manifest-path native/engine-runner/Cargo.toml",
     "engine:test": "cargo test --locked --release --manifest-path native/engine-runner/Cargo.toml && node --test scripts/test-runner.ts",
     "check": "tsc --noEmit",
@@ -23,9 +24,17 @@
   },
   "devDependencies": {
     "@types/node": "24.10.1",
+    "esbuild": "0.28.2",
     "typescript": "5.9.3"
   },
   "dependencies": {
+    "@pixi/unsafe-eval": "7.4.3",
+    "@soullink-emotion/engine": "0.1.0-beta.1",
+    "@soullink-emotion/live2d-pixi": "0.1.0-beta.1",
+    "@soullink-emotion/planner-openai": "0.1.0-beta.1",
+    "@soullink-emotion/runtime-core": "0.1.0-beta.1",
+    "pixi-live2d-display": "0.5.0-beta",
+    "pixi.js": "7.4.3",
     "protobufjs": "7.5.4"
   }
 }

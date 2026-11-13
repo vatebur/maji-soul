@@ -1,0 +1,18 @@
+{
+  "databasePath": "/opt/maji-soul/data/live/state.sqlite",
+  "outputDirectory": "/opt/maji-soul/data/live/continuous",
+  "room": {
+    "autoWin": "unknown",
+    "roomId": "pending",
+    "rules": {
+      "computerSeats": 3,
+      "displayTimeSetting": "5+20",
+      "length": "east",
+      "players": 4,
+      "protocolVersion": "4.0.51",
+      "verifiedOptions": { "doraRule": "standard-riichi", "redFives": 3 }
+    }
+  },
+  "sourceVersion": "majsoul-4.0.51/proto-1c332959d97f",
+  "observeMs": 1800000
+}

@@ -1,9 +1,11 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { SpeechPort } from '../../application/live/speech.ts';
+import { runAudioProcess } from './system-audio.ts';
+export { runAudioProcess } from './system-audio.ts';
 
 const exec = promisify(execFile);
 export async function installedChineseVoices() {
@@ -19,29 +21,6 @@ export async function installedChineseVoices() {
     if (!voices.has(id)) voices.set(id, { id, label, language: entry[2]!, installed: true });
   }
   return [...voices.values()];
-}
-
-export function runAudioProcess(program: string, args: string[], signal: AbortSignal, maxMs: number) {
-  signal.throwIfAborted();
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn(program, args, { stdio: 'ignore' });
-    let force: NodeJS.Timeout | undefined, cancelled = false;
-    const stop = () => {
-      if (cancelled) return;
-      cancelled = true;
-      child.kill('SIGTERM');
-      force = setTimeout(() => child.kill('SIGKILL'), 750);
-    };
-    const deadline = setTimeout(stop, maxMs);
-    signal.addEventListener('abort', stop, { once: true });
-    child.on('error', () => {}); // close follows exit or spawn failure.
-    child.once('close', code => {
-      clearTimeout(deadline); clearTimeout(force);
-      signal.removeEventListener('abort', stop);
-      if (code === 0 && !cancelled) resolve();
-      else reject(Error('SPEECH_PROCESS_FAILED'));
-    });
-  });
 }
 
 export function macSpeech(directory: string, voices: ReadonlySet<string>): SpeechPort {

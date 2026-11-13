@@ -1,0 +1,14 @@
+[Unit]
+Description=Maji Soul virtual display
+After=network.target
+
+[Service]
+User=maji-soul
+Group=maji-soul
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -noreset
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

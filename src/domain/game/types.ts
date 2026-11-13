@@ -47,7 +47,7 @@ export interface GameState extends HandInitialView {
 }
 export interface FriendRoom {
   roomId: string;
-  rules: { players: 4; length: 'east'; displayTimeSetting: '300+0' | '5+20'; computerSeats: 3;
+  rules: { players: 4; length: 'east' | 'south'; displayTimeSetting: '300+0' | '5+20'; computerSeats: 0 | 1 | 2 | 3;
     verifiedOptions: Record<string, string | number | boolean>; protocolVersion: string };
   autoWin: 'verified-on' | 'verified-off' | 'unknown';
 }

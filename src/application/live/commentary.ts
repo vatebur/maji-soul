@@ -4,6 +4,7 @@ import { digest, requireThat } from '../../domain/game/value.ts';
 import { moderate, type LiveConfig } from './config.ts';
 import { historicalAnswer, locateHistoricalDiscard, type DiscardArchive } from './explanation.ts';
 import { renderCommentary, validateCommentary, type CommentaryContext, type CommentaryRecord } from './commentary-contract.ts';
+import { SPOKEN_SENTENCE_MAX_CHARS, validSpokenText } from './spoken-text.ts';
 
 export interface CommentaryRequest {
   purpose: 'explanation' | 'viewer-answer';
@@ -101,8 +102,9 @@ export class CommentaryService {
         ]), 'COMMENTARY_CANCELLED');
         requireThat(raw !== null && typeof raw === 'object' && !Array.isArray(raw) &&
           Object.keys(raw).length === 1 && 'reply' in raw && typeof raw.reply === 'string' &&
-          [...raw.reply].length > 0 && [...raw.reply].length <= 20, 'INVALID_COMMENTARY_CHAT');
-        return moderate((raw as { reply: string }).reply, config.moderation.rules, 20);
+          [...raw.reply].length > 0 && [...raw.reply].length <= SPOKEN_SENTENCE_MAX_CHARS, 'INVALID_COMMENTARY_CHAT');
+        const text = moderate((raw as { reply: string }).reply, config.moderation.rules, SPOKEN_SENTENCE_MAX_CHARS);
+        return text && validSpokenText(text, 1) ? text : null;
       } catch {
         return null;
       }
